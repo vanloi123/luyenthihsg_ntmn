@@ -601,7 +601,7 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
   const [filter, setFilter] = useState("all");
   const [active, setActive] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", isPython: false });
+  const [form, setForm] = useState({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", isPython: false });
 
   const filtered = problems.filter((p) => {
     if (filter === "python") return p.isPython;
@@ -615,9 +615,9 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
     addProblem({
       id: "PX" + Date.now(), title: form.title, topic: form.topic, difficulty: form.difficulty,
       points: Number(form.points) || 100, isPython: form.isPython, statement: form.statement,
-      sample: { input: "—", output: "—" },
+      sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
     });
-    setForm({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", isPython: false });
+    setForm({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", isPython: false });
     setShowForm(false);
   }
 
@@ -653,6 +653,12 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
           </div>
           <textarea className="nb-input" placeholder="Đề bài" rows={2} value={form.statement}
             onChange={(e) => setForm({ ...form, statement: e.target.value })} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input className="nb-input" placeholder="Input mẫu (vd: 1 3 -1 -3 5 | k=3)" value={form.sampleInput}
+              onChange={(e) => setForm({ ...form, sampleInput: e.target.value })} />
+            <input className="nb-input" placeholder="Output mẫu (vd: 3 3 5)" value={form.sampleOutput}
+              onChange={(e) => setForm({ ...form, sampleOutput: e.target.value })} />
+          </div>
           <label className="nb-checkbox-label">
             <input type="checkbox" checked={form.isPython} onChange={(e) => setForm({ ...form, isPython: e.target.checked })} />
             Gắn nhãn "Python cơ bản"
@@ -1511,7 +1517,7 @@ function App() {
           <aside className="nb-sidebar nb-only-desktop">
             <div className="nb-brand">
               <div className="nb-brand-mark"><GraduationCap size={18} /></div>
-              <div className="nb-brand-text"><b>Trường nội trú Mường Nhé</b><span>ÔN THI HSG · TIN 11</span></div>
+              <div className="nb-brand-text"><b>Đội tuyển Tin học</b><span>ÔN THI HSG · 11 TIN</span></div>
             </div>
             <nav className="nb-nav">
               {navItems.map((n) => (
