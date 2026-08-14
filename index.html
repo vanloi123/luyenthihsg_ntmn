@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Đội tuyển Tin học — Ôn thi HSG</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body, #root { height: 100%; margin: 0; padding: 0; background: #10151C; }
+  body { -webkit-tap-highlight-color: transparent; }
+</style>
+
+<!-- Import map: cho phép app.jsx dùng "import ... from 'react'" ngay trên trình duyệt,
+     không cần Node.js / bước build nào. Tất cả thư viện được tải qua CDN esm.sh. -->
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
+    "lucide-react": "https://esm.sh/lucide-react@0.383.0?deps=react@18.3.1&external=react",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
+  }
+}
+</script>
+
+<!-- Babel Standalone: chuyển JSX trong app.jsx thành JS ngay trên trình duyệt -->
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+</head>
+<body>
+<div id="root">
+  <div style="min-height:100%;display:flex;align-items:center;justify-content:center;color:#8D97A8;font-family:sans-serif;font-size:14px;">
+    Đang tải…
+  </div>
+</div>
+
+<!-- Babel transform app.jsx (chỉ transform JSX, giữ nguyên cú pháp import/export) rồi chạy như ES module -->
+<script type="text/babel" data-type="module" data-presets="react" src="./app.jsx"></script>
+</body>
+</html>
