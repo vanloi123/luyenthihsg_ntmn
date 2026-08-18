@@ -24,6 +24,37 @@ function hashPassword(pw) {
   return hashStr("ntsalt_v1::" + pw).toString(36);
 }
 
+function normalizeTestCases(raw) {
+  let value = raw;
+  if (typeof value === "string") {
+    try { value = JSON.parse(value); } catch (e) { value = []; }
+  }
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((test, index) => ({
+      id: test?.id || `test-${index + 1}`,
+      input: String(test?.input ?? ""),
+      output: String(test?.output ?? ""),
+    }))
+    .filter((test) => test.output.trim() && test.output.trim() !== "—");
+}
+
+function parseTestCasesJson(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return { tests: [], error: "" };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return { tests: [], error: "Test case phải là một mảng JSON." };
+    const tests = normalizeTestCases(parsed);
+    if (tests.length !== parsed.length) {
+      return { tests: [], error: "Mỗi test case phải có cả input và output khác rỗng." };
+    }
+    return { tests, error: "" };
+  } catch (error) {
+    return { tests: [], error: "JSON test case không hợp lệ. Hãy kiểm tra dấu ngoặc kép và dấu phẩy." };
+  }
+}
+
 function mapAccount(row) {
   return {
     id: row.id, name: row.name, role: row.role, username: row.username,
@@ -39,13 +70,24 @@ function mapProblem(row) {
     id: row.id, title: row.title, topic: row.topic, difficulty: row.difficulty, points: row.points,
     isPython: row.is_python, statement: row.statement,
     sample: { input: row.sample_input, output: row.sample_output },
+    testCases: normalizeTestCases(row.test_cases),
   };
 }
 function mapContest(row) {
   return { id: row.id, title: row.title, status: row.status, date: row.date, duration: row.duration, problemIds: row.problem_ids || [] };
 }
 function mapSubmission(row) {
-  return { id: row.id, studentId: row.student_id, problemId: row.problem_id, verdict: row.verdict, problemTitle: row.problem_title, problemPoints: row.problem_points };
+  return {
+    id: row.id,
+    studentId: row.student_id,
+    problemId: row.problem_id,
+    verdict: row.verdict,
+    score: Number(row.score ?? (row.verdict === "AC" ? row.problem_points : 0)),
+    passedTests: row.passed_tests ?? null,
+    totalTests: row.total_tests ?? null,
+    problemTitle: row.problem_title,
+    problemPoints: row.problem_points,
+  };
 }
 
 async function fetchAll() {
@@ -90,6 +132,7 @@ async function dbAddProblem(p) {
   const { error } = await supabase.from("problems").insert({
     id: p.id, title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
     is_python: p.isPython, statement: p.statement, sample_input: p.sample.input, sample_output: p.sample.output,
+    test_cases: normalizeTestCases(p.testCases),
   });
   if (error) throw error;
 }
@@ -104,6 +147,7 @@ async function dbSetContestStatus(id, status) {
 async function dbAddSubmission(sub) {
   const { error } = await supabase.from("submissions").insert({
     id: sub.id, student_id: sub.studentId, problem_id: sub.problemId, verdict: sub.verdict,
+    score: sub.score, passed_tests: sub.passedTests, total_tests: sub.totalTests,
     problem_title: sub.problemTitle, problem_points: sub.problemPoints,
   });
   if (error) throw error;
@@ -226,13 +270,8 @@ async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
 }
 
 function getProblemTestCases(problem) {
-  const configured = Array.isArray(problem.testCases) ? problem.testCases : [];
-  if (configured.length > 0) {
-    return configured.map((test) => ({
-      input: String(test.input ?? ""),
-      output: String(test.output ?? ""),
-    }));
-  }
+  const configured = normalizeTestCases(problem.testCases);
+  if (configured.length > 0) return configured;
 
   const sampleInput = String(problem.sample?.input ?? "");
   const sampleOutput = String(problem.sample?.output ?? "");
@@ -254,6 +293,9 @@ async function judgeSourceCode(problem, code) {
     return {
       verdict: "SE",
       tests: [],
+      passedTests: 0,
+      totalTests: testCases.length,
+      score: 0,
       message: "Bài này chưa có output mẫu hoặc test case hợp lệ để chấm.",
     };
   }
@@ -271,15 +313,22 @@ async function judgeSourceCode(problem, code) {
   }
 
   const verdicts = results.map((result) => JUDGE_STATUS_TO_VERDICT[result.status?.id] || "SE");
+  const tests = verdicts.map((verdict) => verdict === "AC");
+  const passedTests = tests.filter(Boolean).length;
+  const totalTests = testCases.length;
   const firstNonAccepted = verdicts.find((verdict) => verdict !== "AC");
   const firstResult = results[verdicts.indexOf(firstNonAccepted || verdicts[0])];
   const output = firstResult?.compile_output || firstResult?.stderr || firstResult?.message || firstResult?.stdout || "";
   const statusDescription = firstResult?.status?.description || "Đã có kết quả.";
+  const score = Math.round((Number(problem.points) || 0) * passedTests / totalTests);
 
   return {
     verdict: firstNonAccepted || "AC",
-    tests: verdicts.map((verdict) => verdict === "AC"),
-    message: statusDescription,
+    tests,
+    passedTests,
+    totalTests,
+    score,
+    message: firstNonAccepted ? `${statusDescription} · ${passedTests}/${totalTests} test đạt.` : `Accepted · ${passedTests}/${totalTests} test đạt.`,
     output: output.trim(),
   };
 }
@@ -474,7 +523,7 @@ function ChangePasswordModal({ currentUser, onClose, onChange }) {
 /*  PROBLEM SOLVER MODAL                                                    */
 /* ---------------------------------------------------------------------- */
 
-function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved }) {
+function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0 }) {
   const [code, setCode] = useState(
     problem.isPython ? "# Viết code Python của bạn tại đây\n\n" : "// Viết code của bạn tại đây\n\n"
   );
@@ -522,6 +571,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
               <div className="nb-sample-row"><span>Input mẫu</span><code>{problem.sample.input}</code></div>
               <div className="nb-sample-row"><span>Output mẫu</span><code>{problem.sample.output}</code></div>
             </div>
+            {!readOnly && <div className="nb-solver-meta"><span>Điểm tốt nhất: <strong>{bestScore}/{problem.points}</strong></span><span>Đã nộp: <strong>{attemptCount}</strong> lần</span><span>{getProblemTestCases(problem).length} test case</span></div>}
           </div>
 
           <div className="nb-modal-col">
@@ -544,7 +594,10 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 
             {result && (
               <div className="nb-result">
-                <VerdictPill verdict={result.verdict} />
+                <div className="nb-result-head">
+                  <VerdictPill verdict={result.verdict} />
+                  {typeof result.score === "number" && <strong className="nb-result-score">+{result.score}/{problem.points} điểm</strong>}
+                </div>
                 {result.tests.length > 0 && (
                   <div className="nb-testrow">
                     {result.tests.map((ok, i) => (
@@ -731,11 +784,12 @@ function LessonsView({ isTeacher, topics, addTopic }) {
   );
 }
 
-function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerdict, topics }) {
+function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, solvedByCurrent, onVerdict, topics }) {
   const [filter, setFilter] = useState("all");
   const [active, setActive] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", isPython: false });
+  const [formError, setFormError] = useState("");
+  const [form, setForm] = useState({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", testCasesJson: "", isPython: false });
 
   const filtered = problems.filter((p) => {
     if (filter === "python") return p.isPython;
@@ -743,22 +797,52 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
     return true;
   });
 
+  const completedCount = problems.filter((p) => solvedByCurrent(p.id)).length;
+  const currentSubmissions = submissions.filter((s) => s.studentId === currentUser?.id);
+  const attemptsCount = currentSubmissions.length;
+
+  function problemStats(problemId) {
+    const attempts = currentSubmissions.filter((s) => s.problemId === problemId);
+    return {
+      attempts: attempts.length,
+      bestScore: attempts.reduce((best, s) => Math.max(best, Number(s.score ?? (s.verdict === "AC" ? s.problemPoints : 0))), 0),
+    };
+  }
+
   function submit(e) {
     e.preventDefault();
-    if (!form.title.trim() || !form.statement.trim()) return;
+    setFormError("");
+    if (!form.title.trim() || !form.statement.trim()) {
+      setFormError("Cần nhập tên bài và đề bài.");
+      return;
+    }
+    const parsedTests = parseTestCasesJson(form.testCasesJson);
+    if (parsedTests.error) {
+      setFormError(parsedTests.error);
+      return;
+    }
     addProblem({
-      id: "PX" + Date.now(), title: form.title, topic: form.topic, difficulty: form.difficulty,
-      points: Number(form.points) || 100, isPython: form.isPython, statement: form.statement,
+      id: "PX" + Date.now(), title: form.title.trim(), topic: form.topic, difficulty: form.difficulty,
+      points: Math.max(1, Number(form.points) || 100), isPython: form.isPython, statement: form.statement.trim(),
       sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
+      testCases: parsedTests.tests,
     });
-    setForm({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", isPython: false });
+    setForm({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", testCasesJson: "", isPython: false });
     setShowForm(false);
   }
 
   return (
     <div>
       <SectionHeading eyebrow="Ngân hàng bài tập" title="Luyện tập & Python"
-        sub="Chấm tự động ngay khi nộp bài — theo dõi kết quả từng test case." />
+        sub="Mỗi lần nộp được chấm qua test case; điểm tổng chỉ giữ thành tích tốt nhất của từng bài." />
+
+      {!isTeacher && (
+        <div className="nb-practice-summary">
+          <div className="nb-practice-summary-card"><Code2 size={17} /><strong>{completedCount}/{problems.length}</strong><span>Bài đã hoàn thành</span></div>
+          <div className="nb-practice-summary-card"><Award size={17} /><strong>{points(currentUser.id)}</strong><span>Điểm tích lũy</span></div>
+          <div className="nb-practice-summary-card"><TrendingUp size={17} /><strong>{attemptsCount}</strong><span>Lượt nộp</span></div>
+        </div>
+      )}
 
       <div className="nb-filter-row">
         {[["all", "Tất cả"], ["algo", "Thuật toán"], ["python", "Python cơ bản"]].map(([k, l]) => (
@@ -785,7 +869,7 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
             <input className="nb-input" type="number" placeholder="Điểm" value={form.points}
               onChange={(e) => setForm({ ...form, points: e.target.value })} />
           </div>
-          <textarea className="nb-input" placeholder="Đề bài" rows={2} value={form.statement}
+          <textarea className="nb-input" placeholder="Đề bài" rows={3} value={form.statement}
             onChange={(e) => setForm({ ...form, statement: e.target.value })} />
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
             <input className="nb-input" placeholder="Input mẫu (vd: 1 3 -1 -3 5 | k=3)" value={form.sampleInput}
@@ -793,6 +877,10 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
             <input className="nb-input" placeholder="Output mẫu (vd: 3 3 5)" value={form.sampleOutput}
               onChange={(e) => setForm({ ...form, sampleOutput: e.target.value })} />
           </div>
+          <textarea className="nb-input nb-mono" placeholder={'Test case chấm dạng JSON, ví dụ: [{"input":"1 2\\n","output":"3\\n"},{"input":"10 20\\n","output":"30\\n"}]'} rows={5} value={form.testCasesJson}
+            onChange={(e) => setForm({ ...form, testCasesJson: e.target.value })} />
+          <p className="nb-sub">Nếu bỏ trống, hệ thống dùng input/output mẫu. Trong kiến trúc frontend hiện tại, test case vẫn có thể bị xem qua Network; muốn ẩn tuyệt đối cần đưa bộ chấm về server.</p>
+          {formError && <div className="nb-login-error"><AlertCircle size={14} /> {formError}</div>}
           <label className="nb-checkbox-label">
             <input type="checkbox" checked={form.isPython} onChange={(e) => setForm({ ...form, isPython: e.target.checked })} />
             Gắn nhãn "Python cơ bản"
@@ -804,6 +892,7 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
       <div className="nb-problem-grid">
         {filtered.map((p) => {
           const solved = solvedByCurrent(p.id);
+          const stats = problemStats(p.id);
           return (
             <button key={p.id} className="nb-problem-card" onClick={() => setActive(p)}>
               <div className="nb-problem-top">
@@ -813,7 +902,11 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
               <div className="nb-problem-title">{p.title}</div>
               <div className="nb-problem-bottom">
                 <DifficultyTag level={p.difficulty} />
-                <span className="nb-sub">{p.points}đ</span>
+                <span className="nb-sub">{p.points}đ · {getProblemTestCases(p).length} test</span>
+              </div>
+              <div className="nb-problem-meta">
+                <span>{stats.attempts} lượt nộp</span>
+                <strong>{stats.bestScore}/{p.points}đ</strong>
               </div>
             </button>
           );
@@ -828,7 +921,9 @@ function ProblemsView({ isTeacher, problems, addProblem, solvedByCurrent, onVerd
           readOnly={isTeacher}
           disabledLabel={isTeacher ? "Chỉ xem trước (GV)" : undefined}
           alreadySolved={solvedByCurrent(active.id)}
-          onVerdict={(problemId, verdict) => onVerdict(problemId, verdict)}
+          bestScore={problemStats(active.id).bestScore}
+          attemptCount={problemStats(active.id).attempts}
+          onVerdict={(problemId, result) => onVerdict(problemId, result)}
         />
       )}
     </div>
@@ -1342,13 +1437,16 @@ function App() {
     lsSet("session-user", null);
   }
 
-  const points = (studentId) =>
+  const points = (studentId) => {
+    const bestByProblem = new Map();
     submissions
-      .filter((s) => s.studentId === studentId && s.verdict === "AC")
-      .reduce((sum, s) => {
-        const p = problems.find((pp) => pp.id === s.problemId);
-        return sum + (p ? p.points : 0);
-      }, 0);
+      .filter((s) => s.studentId === studentId)
+      .forEach((s) => {
+        const score = Math.max(0, Number(s.score ?? (s.verdict === "AC" ? s.problemPoints : 0)));
+        bestByProblem.set(s.problemId, Math.max(bestByProblem.get(s.problemId) || 0, score));
+      });
+    return [...bestByProblem.values()].reduce((sum, score) => sum + score, 0);
+  };
 
   const solvedCount = (studentId) =>
     new Set(submissions.filter((s) => s.studentId === studentId && s.verdict === "AC").map((s) => s.problemId)).size;
@@ -1356,13 +1454,24 @@ function App() {
   const solvedByCurrent = (problemId) =>
     !!currentUser && !isTeacher && submissions.some((s) => s.studentId === currentUser.id && s.problemId === problemId && s.verdict === "AC");
 
-  function registerVerdict(problemId, verdict) {
+  function registerVerdict(problemId, result) {
     if (!currentUser || isTeacher) return;
     const p = problems.find((pp) => pp.id === problemId);
+    const verdict = typeof result === "string" ? result : result?.verdict;
+    if (!verdict) return;
+    const score = typeof result === "object"
+      ? Math.max(0, Math.min(Number(p?.points) || 0, Number(result.score) || 0))
+      : (verdict === "AC" ? (p?.points || 0) : 0);
     const sub = {
       id: "sub" + Date.now() + Math.random().toString(36).slice(2, 6),
-      studentId: currentUser.id, problemId, verdict,
-      problemTitle: p ? p.title : problemId, problemPoints: p ? p.points : 0,
+      studentId: currentUser.id,
+      problemId,
+      verdict,
+      score,
+      passedTests: typeof result === "object" ? result.passedTests ?? null : null,
+      totalTests: typeof result === "object" ? result.totalTests ?? null : null,
+      problemTitle: p ? p.title : problemId,
+      problemPoints: p ? p.points : 0,
     };
     setSubmissions((prev) => [...prev, sub]);
     dbAddSubmission(sub).catch(() => setStorageError(true));
@@ -1513,6 +1622,10 @@ function App() {
         }
 
         .nb-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+        .nb-practice-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+        .nb-practice-summary-card { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--paper-line); border-radius: 9px; padding: 12px 14px; color: var(--pen-blue); }
+        .nb-practice-summary-card strong { color: var(--ink); font: 700 18px 'JetBrains Mono', monospace; margin-left: auto; }
+        .nb-practice-summary-card span { color: var(--slate); font-size: 11px; }
         .nb-stat-card { background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; padding: 16px; color: var(--pen-blue); }
         .nb-stat-num { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; color: var(--ink); margin-top: 8px; }
         .nb-stat-label { font-size: 12px; color: var(--slate); margin-top: 2px; }
@@ -1545,6 +1658,8 @@ function App() {
         .nb-problem-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
         .nb-problem-card { background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; padding: 14px; text-align: left; cursor: pointer; font-family: inherit; display: flex; flex-direction: column; gap: 10px; transition: transform .12s, box-shadow .12s; }
         .nb-problem-card:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(16,21,28,0.08); }
+        .nb-problem-meta { display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--paper-line); padding-top: 8px; color: var(--slate); font-size: 11px; }
+        .nb-problem-meta strong { color: var(--pen-blue); font-family: 'JetBrains Mono', monospace; }
         .nb-problem-top { display: flex; justify-content: space-between; align-items: center; }
         .nb-problem-title { font-weight: 600; font-size: 13.5px; line-height: 1.4; }
         .nb-problem-bottom { display: flex; justify-content: space-between; align-items: center; }
@@ -1570,7 +1685,11 @@ function App() {
         .nb-sample-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; font-family: 'JetBrains Mono', monospace; gap: 8px; }
         .nb-code-editor { width: 100%; min-height: 200px; background: var(--ink); color: #D8DEE9; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; border-radius: 8px; border: none; padding: 14px; resize: vertical; box-sizing: border-box; }
         .nb-modal-actions { margin-top: 10px; display: flex; }
+        .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
+        .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
         .nb-result { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+        .nb-result-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .nb-result-score { color: var(--pen-blue); font: 700 12px 'JetBrains Mono', monospace; }
         .nb-result-output { margin: 0; padding: 10px; border-radius: 7px; background: var(--ink); color: #D8DEE9; font: 12px/1.5 'JetBrains Mono', monospace; white-space: pre-wrap; overflow-x: auto; }
         .nb-testrow { display: flex; gap: 6px; }
         .nb-testdot { display: inline-flex; padding: 4px; border-radius: 6px; }
@@ -1631,6 +1750,7 @@ function App() {
           .nb-content { padding: 16px 14px 92px 14px; }
           .nb-storage-banner { margin: -8px -14px 16px -14px; padding-left: 14px; }
           .nb-stat-grid { grid-template-columns: repeat(2, 1fr); }
+          .nb-practice-summary { grid-template-columns: 1fr; }
           .nb-two-col, .nb-modal-body { grid-template-columns: 1fr; }
           .nb-modal { max-height: 94vh; }
           .nb-modal-body { padding: 16px; }
@@ -1710,7 +1830,8 @@ function App() {
               {tab === "lessons" && <LessonsView isTeacher={isTeacher} topics={topics} addTopic={addTopic} />}
               {tab === "problems" && (
                 <ProblemsView
-                  isTeacher={isTeacher} problems={problems} addProblem={addProblem} topics={topics}
+                  isTeacher={isTeacher} currentUser={currentUser} problems={problems} submissions={submissions}
+                  points={points} addProblem={addProblem} topics={topics}
                   solvedByCurrent={solvedByCurrent} onVerdict={registerVerdict}
                 />
               )}
