@@ -146,21 +146,142 @@ function lsSet(key, val) {
 
 const DIFFICULTIES = ["Dễ", "Trung bình", "Khó"];
 
-function simulateJudge(code, testCount = 4) {
-  const trimmed = (code || "").trim();
-  if (trimmed.length < 8) {
+const JUDGE0_ENDPOINT = "https://ce.judge0.com";
+const JUDGE0_LANGUAGE_IDS = {
+  python: 71, // Python 3.8.1
+  cpp: 54, // GNU C++17
+};
+
+const JUDGE_STATUS_TO_VERDICT = {
+  3: "AC",
+  4: "WA",
+  5: "TLE",
+  6: "CE",
+  7: "RE",
+  8: "RE",
+  9: "RE",
+  10: "RE",
+  11: "RE",
+  12: "RE",
+  13: "SE",
+  14: "SE",
+};
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
+  const createResponse = await fetchWithTimeout(
+    `${JUDGE0_ENDPOINT}/submissions?base64_encoded=false&wait=false`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_code: sourceCode,
+        language_id: languageId,
+        stdin: input,
+        expected_output: expectedOutput,
+        cpu_time_limit: 2,
+        wall_time_limit: 5,
+        memory_limit: 128000,
+      }),
+    }
+  );
+
+  if (!createResponse.ok) {
+    throw new Error(`Không thể tạo lượt chấm (HTTP ${createResponse.status}).`);
+  }
+
+  const created = await createResponse.json();
+  if (!created.token) throw new Error("Dịch vụ chấm không trả về mã lượt chấm.");
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await wait(500);
+    const resultResponse = await fetchWithTimeout(
+      `${JUDGE0_ENDPOINT}/submissions/${encodeURIComponent(created.token)}?base64_encoded=false`,
+      {},
+      10000
+    );
+    if (!resultResponse.ok) {
+      throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}).`);
+    }
+
+    const result = await resultResponse.json();
+    const statusId = result.status?.id;
+    if (statusId !== 1 && statusId !== 2) return result;
+  }
+
+  throw new Error("Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
+}
+
+function getProblemTestCases(problem) {
+  const configured = Array.isArray(problem.testCases) ? problem.testCases : [];
+  if (configured.length > 0) {
+    return configured.map((test) => ({
+      input: String(test.input ?? ""),
+      output: String(test.output ?? ""),
+    }));
+  }
+
+  const sampleInput = String(problem.sample?.input ?? "");
+  const sampleOutput = String(problem.sample?.output ?? "");
+  return [{
+    input: sampleInput.trim() === "—" ? "" : sampleInput,
+    output: sampleOutput,
+  }];
+}
+
+async function judgeSourceCode(problem, code) {
+  const sourceCode = String(code || "").trim();
+  if (sourceCode.length < 8) {
     return { verdict: "CE", tests: [], message: "Chưa có code hợp lệ để biên dịch." };
   }
-  const h = hashStr(trimmed);
-  const lengthBonus = Math.min(trimmed.length / 300, 0.25);
-  const tests = [];
-  for (let i = 0; i < testCount; i++) {
-    const roll = (h + i * 977) % 100;
-    const threshold = 42 + lengthBonus * 100 - i * 2;
-    tests.push(roll < threshold);
+
+  const testCases = getProblemTestCases(problem);
+  const incompleteCase = testCases.find((test) => !test.output.trim() || test.output.trim() === "—");
+  if (incompleteCase) {
+    return {
+      verdict: "SE",
+      tests: [],
+      message: "Bài này chưa có output mẫu hoặc test case hợp lệ để chấm.",
+    };
   }
-  const allPass = tests.every(Boolean);
-  return { verdict: allPass ? "AC" : "WA", tests };
+
+  const languageId = problem.isPython ? JUDGE0_LANGUAGE_IDS.python : JUDGE0_LANGUAGE_IDS.cpp;
+  const results = [];
+  for (const test of testCases) {
+    // Chấm tuần tự để không tạo nhiều tiến trình chạy đồng thời cho cùng một bài.
+    results.push(await judgeOneTest({
+      sourceCode,
+      languageId,
+      input: test.input,
+      expectedOutput: test.output,
+    }));
+  }
+
+  const verdicts = results.map((result) => JUDGE_STATUS_TO_VERDICT[result.status?.id] || "SE");
+  const firstNonAccepted = verdicts.find((verdict) => verdict !== "AC");
+  const firstResult = results[verdicts.indexOf(firstNonAccepted || verdicts[0])];
+  const output = firstResult?.compile_output || firstResult?.stderr || firstResult?.message || firstResult?.stdout || "";
+  const statusDescription = firstResult?.status?.description || "Đã có kết quả.";
+
+  return {
+    verdict: firstNonAccepted || "AC",
+    tests: verdicts.map((verdict) => verdict === "AC"),
+    message: statusDescription,
+    output: output.trim(),
+  };
 }
 
 const DIFF_COLOR = { "Dễ": "var(--ac-green)", "Trung bình": "var(--gold)", "Khó": "var(--red-pen)" };
@@ -179,6 +300,9 @@ function VerdictPill({ verdict }) {
     AC: { label: "AC · Chấp nhận", cls: "nb-pill-ac" },
     WA: { label: "WA · Sai kết quả", cls: "nb-pill-wa" },
     CE: { label: "CE · Lỗi biên dịch", cls: "nb-pill-wa" },
+    TLE: { label: "TLE · Quá thời gian", cls: "nb-pill-wa" },
+    RE: { label: "RE · Lỗi khi chạy", cls: "nb-pill-wa" },
+    SE: { label: "SE · Lỗi dịch vụ chấm", cls: "nb-pill-wa" },
     PENDING: { label: "Đang chấm…", cls: "nb-pill-pending" },
   };
   const m = map[verdict] || map.PENDING;
@@ -357,16 +481,25 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [judging, setJudging] = useState(false);
   const [result, setResult] = useState(null);
 
-  function handleSubmit() {
-    if (readOnly) return;
+  async function handleSubmit() {
+    if (readOnly || judging) return;
     setJudging(true);
     setResult(null);
-    setTimeout(() => {
-      const r = simulateJudge(code);
+    try {
+      const r = await judgeSourceCode(problem, code);
       setResult(r);
-      setJudging(false);
       onVerdict && onVerdict(problem.id, r.verdict);
-    }, 1100);
+    } catch (error) {
+      setResult({
+        verdict: "SE",
+        tests: [],
+        message: error?.name === "AbortError"
+          ? "Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây."
+          : (error?.message || "Không kết nối được dịch vụ chấm."),
+      });
+    } finally {
+      setJudging(false);
+    }
   }
 
   return (
@@ -400,7 +533,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
               readOnly={readOnly}
             />
             <p className="nb-sub" style={{ marginTop: 6 }}>
-              Bộ chấm là bản mô phỏng minh hoạ (chưa thực sự biên dịch/chạy code) — dùng để luyện thao tác nộp bài.
+              Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
             </p>
             <div className="nb-modal-actions">
               <button className="nb-btn nb-btn-primary" onClick={handleSubmit} disabled={judging || readOnly}>
@@ -422,6 +555,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
                   </div>
                 )}
                 {result.message && <p className="nb-sub" style={{ marginTop: 6 }}>{result.message}</p>}
+                {result.output && <pre className="nb-result-output">{result.output}</pre>}
               </div>
             )}
           </div>
@@ -1437,6 +1571,7 @@ function App() {
         .nb-code-editor { width: 100%; min-height: 200px; background: var(--ink); color: #D8DEE9; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; border-radius: 8px; border: none; padding: 14px; resize: vertical; box-sizing: border-box; }
         .nb-modal-actions { margin-top: 10px; display: flex; }
         .nb-result { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+        .nb-result-output { margin: 0; padding: 10px; border-radius: 7px; background: var(--ink); color: #D8DEE9; font: 12px/1.5 'JetBrains Mono', monospace; white-space: pre-wrap; overflow-x: auto; }
         .nb-testrow { display: flex; gap: 6px; }
         .nb-testdot { display: inline-flex; padding: 4px; border-radius: 6px; }
         .nb-testdot.ok { color: var(--ac-green); background: rgba(46,158,109,0.12); }
