@@ -4,7 +4,7 @@ import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
-  RefreshCw, Eye, EyeOff, LogOut,
+  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
@@ -37,6 +37,17 @@ function normalizeTestCases(raw) {
       output: String(test?.output ?? ""),
     }))
     .filter((test) => test.output.trim() && test.output.trim() !== "—");
+}
+
+function createEmptyTestCase() {
+  return { id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, input: "", output: "" };
+}
+
+function createProblemForm(topicId) {
+  return {
+    title: "", topic: topicId, difficulty: "Dễ", points: 100, statement: "",
+    sampleInput: "", sampleOutput: "", testCases: [createEmptyTestCase()], isPython: false,
+  };
 }
 
 function parseTestCasesJson(text) {
@@ -134,6 +145,18 @@ async function dbAddProblem(p) {
     is_python: p.isPython, statement: p.statement, sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
   });
+  if (error) throw error;
+}
+async function dbUpdateProblem(p) {
+  const { error } = await supabase.from("problems").update({
+    title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
+    is_python: p.isPython, statement: p.statement, sample_input: p.sample.input, sample_output: p.sample.output,
+    test_cases: normalizeTestCases(p.testCases),
+  }).eq("id", p.id);
+  if (error) throw error;
+}
+async function dbRemoveProblem(id) {
+  const { error } = await supabase.from("problems").delete().eq("id", id);
   if (error) throw error;
 }
 async function dbAddContest(c) {
@@ -784,12 +807,13 @@ function LessonsView({ isTeacher, topics, addTopic }) {
   );
 }
 
-function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, solvedByCurrent, onVerdict, topics }) {
+function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics }) {
   const [filter, setFilter] = useState("all");
   const [active, setActive] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [formError, setFormError] = useState("");
-  const [form, setForm] = useState({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", testCasesJson: "", isPython: false });
+  const [form, setForm] = useState(() => createProblemForm(topics[0]?.id));
 
   const filtered = problems.filter((p) => {
     if (filter === "python") return p.isPython;
@@ -809,6 +833,52 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     };
   }
 
+  function resetForm() {
+    setForm(createProblemForm(topics[0]?.id));
+    setEditingId(null);
+    setFormError("");
+  }
+
+  function beginAdd() {
+    resetForm();
+    setShowForm(true);
+  }
+
+  function beginEdit(problem) {
+    setEditingId(problem.id);
+    setForm({
+      title: problem.title || "",
+      topic: problem.topic || topics[0]?.id,
+      difficulty: problem.difficulty || "Dễ",
+      points: problem.points || 100,
+      statement: problem.statement || "",
+      sampleInput: problem.sample?.input === "—" ? "" : (problem.sample?.input || ""),
+      sampleOutput: problem.sample?.output === "—" ? "" : (problem.sample?.output || ""),
+      testCases: normalizeTestCases(problem.testCases).length > 0 ? normalizeTestCases(problem.testCases) : [createEmptyTestCase()],
+      isPython: Boolean(problem.isPython),
+    });
+    setFormError("");
+    setShowForm(true);
+  }
+
+  function updateTestCase(id, field, value) {
+    setForm((current) => ({
+      ...current,
+      testCases: current.testCases.map((test) => test.id === id ? { ...test, [field]: value } : test),
+    }));
+  }
+
+  function addTestCase() {
+    setForm((current) => ({ ...current, testCases: [...current.testCases, createEmptyTestCase()] }));
+  }
+
+  function removeTestCase(id) {
+    setForm((current) => ({
+      ...current,
+      testCases: current.testCases.length > 1 ? current.testCases.filter((test) => test.id !== id) : [createEmptyTestCase()],
+    }));
+  }
+
   function submit(e) {
     e.preventDefault();
     setFormError("");
@@ -816,19 +886,44 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       setFormError("Cần nhập tên bài và đề bài.");
       return;
     }
-    const parsedTests = parseTestCasesJson(form.testCasesJson);
-    if (parsedTests.error) {
-      setFormError(parsedTests.error);
+    const pointsValue = Math.max(1, Number(form.points) || 100);
+    const testCases = form.testCases
+      .map((test) => ({ ...test, input: String(test.input || ""), output: String(test.output || "") }))
+      .filter((test) => test.input.trim() || test.output.trim());
+    if (testCases.some((test) => !test.output.trim())) {
+      setFormError("Mỗi test case đã nhập phải có output kỳ vọng. Nếu bài không cần test đó, hãy xóa dòng.");
       return;
     }
-    addProblem({
-      id: "PX" + Date.now(), title: form.title.trim(), topic: form.topic, difficulty: form.difficulty,
-      points: Math.max(1, Number(form.points) || 100), isPython: form.isPython, statement: form.statement.trim(),
+    if (testCases.length === 0 && !form.sampleOutput.trim()) {
+      setFormError("Hãy thêm ít nhất một test case hoặc nhập output mẫu.");
+      return;
+    }
+
+    const problem = {
+      id: editingId || ("PX" + Date.now()),
+      title: form.title.trim(),
+      topic: form.topic || topics[0]?.id || "",
+      difficulty: form.difficulty,
+      points: pointsValue,
+      isPython: form.isPython,
+      statement: form.statement.trim(),
       sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
-      testCases: parsedTests.tests,
-    });
-    setForm({ title: "", topic: topics[0]?.id, difficulty: "Dễ", points: 100, statement: "", sampleInput: "", sampleOutput: "", testCasesJson: "", isPython: false });
+      testCases,
+    };
+    if (editingId) updateProblem(problem);
+    else addProblem(problem);
+    resetForm();
     setShowForm(false);
+  }
+
+  function handleDelete(problem) {
+    if (!window.confirm(`Xóa bài “${problem.title}”? Các submission cũ có thể không còn hiển thị đúng.`)) return;
+    removeProblem(problem.id);
+    if (active?.id === problem.id) setActive(null);
+    if (editingId === problem.id) {
+      resetForm();
+      setShowForm(false);
+    }
   }
 
   return (
@@ -845,47 +940,104 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       )}
 
       <div className="nb-filter-row">
-        {[["all", "Tất cả"], ["algo", "Thuật toán"], ["python", "Python cơ bản"]].map(([k, l]) => (
-          <button key={k} className={"nb-chip " + (filter === k ? "active" : "")} onClick={() => setFilter(k)}>{l}</button>
+        {[['all', 'Tất cả'], ['algo', 'Thuật toán'], ['python', 'Python cơ bản']].map(([key, label]) => (
+          <button key={key} className={"nb-chip " + (filter === key ? "active" : "")} onClick={() => setFilter(key)}>{label}</button>
         ))}
         {isTeacher && (
-          <button className="nb-btn nb-btn-ghost" style={{ marginLeft: "auto" }} onClick={() => setShowForm((v) => !v)}>
+          <button className="nb-btn nb-btn-primary" style={{ marginLeft: "auto" }} onClick={beginAdd}>
             <Plus size={16} /> Thêm bài tập
           </button>
         )}
       </div>
 
+      {isTeacher && (
+        <div className="nb-panel nb-management-panel">
+          <div className="nb-management-head">
+            <div>
+              <div className="nb-eyebrow">Khu vực giáo viên</div>
+              <h3 className="nb-h3">Quản lý bài tập</h3>
+            </div>
+            <span className="nb-sub">{problems.length} bài · {problems.reduce((sum, p) => sum + getProblemTestCases(p).length, 0)} test case</span>
+          </div>
+          <div className="nb-management-list">
+            {problems.map((problem) => (
+              <div key={problem.id} className="nb-management-row">
+                <div className="nb-management-info">
+                  <span className="nb-eyebrow">{problem.id}</span>
+                  <strong>{problem.title}</strong>
+                  <span className="nb-sub">{problem.isPython ? "Python" : "Thuật toán"} · {problem.points} điểm · {getProblemTestCases(problem).length} test</span>
+                </div>
+                <div className="nb-management-actions">
+                  <button type="button" className="nb-btn nb-btn-ghost" onClick={() => beginEdit(problem)}><Pencil size={14} /> Sửa</button>
+                  <button type="button" className="nb-btn nb-btn-danger" onClick={() => handleDelete(problem)}><Trash2 size={14} /> Xóa</button>
+                </div>
+              </div>
+            ))}
+            {problems.length === 0 && <p className="nb-sub">Chưa có bài tập nào.</p>}
+          </div>
+        </div>
+      )}
+
       {isTeacher && showForm && (
-        <form onSubmit={submit} className="nb-form nb-panel" style={{ marginBottom: 16 }}>
+        <form onSubmit={submit} className="nb-form nb-panel nb-problem-editor" style={{ marginBottom: 16 }}>
+          <div className="nb-editor-head">
+            <div>
+              <div className="nb-eyebrow">{editingId ? "Chỉnh sửa" : "Tạo mới"}</div>
+              <h3 className="nb-h3">{editingId ? "Cập nhật bài tập" : "Thêm bài tập"}</h3>
+            </div>
+            <button type="button" className="nb-icon-btn" onClick={() => { resetForm(); setShowForm(false); }} aria-label="Đóng"><X size={18} /></button>
+          </div>
           <input className="nb-input" placeholder="Tên bài tập" value={form.title}
             onChange={(e) => setForm({ ...form, title: e.target.value })} />
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <select className="nb-input" value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })}>
+            <select className="nb-input" value={form.topic || ""} onChange={(e) => setForm({ ...form, topic: e.target.value })}>
+              <option value="">Chọn chuyên đề</option>
               {topics.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}
             </select>
             <select className="nb-input" value={form.difficulty} onChange={(e) => setForm({ ...form, difficulty: e.target.value })}>
               {DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}
             </select>
-            <input className="nb-input" type="number" placeholder="Điểm" value={form.points}
+            <input className="nb-input" type="number" min="1" placeholder="Điểm" value={form.points}
               onChange={(e) => setForm({ ...form, points: e.target.value })} />
           </div>
-          <textarea className="nb-input" placeholder="Đề bài" rows={3} value={form.statement}
+          <textarea className="nb-input" placeholder="Đề bài" rows={4} value={form.statement}
             onChange={(e) => setForm({ ...form, statement: e.target.value })} />
+          <div className="nb-form-section-label">Ví dụ hiển thị cho học sinh</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <input className="nb-input" placeholder="Input mẫu (vd: 1 3 -1 -3 5 | k=3)" value={form.sampleInput}
+            <textarea className="nb-input" rows={3} placeholder="Input mẫu" value={form.sampleInput}
               onChange={(e) => setForm({ ...form, sampleInput: e.target.value })} />
-            <input className="nb-input" placeholder="Output mẫu (vd: 3 3 5)" value={form.sampleOutput}
+            <textarea className="nb-input" rows={3} placeholder="Output mẫu" value={form.sampleOutput}
               onChange={(e) => setForm({ ...form, sampleOutput: e.target.value })} />
           </div>
-          <textarea className="nb-input nb-mono" placeholder={'Test case chấm dạng JSON, ví dụ: [{"input":"1 2\\n","output":"3\\n"},{"input":"10 20\\n","output":"30\\n"}]'} rows={5} value={form.testCasesJson}
-            onChange={(e) => setForm({ ...form, testCasesJson: e.target.value })} />
-          <p className="nb-sub">Nếu bỏ trống, hệ thống dùng input/output mẫu. Trong kiến trúc frontend hiện tại, test case vẫn có thể bị xem qua Network; muốn ẩn tuyệt đối cần đưa bộ chấm về server.</p>
+          <div className="nb-form-section-label">Test case chấm điểm</div>
+          <p className="nb-sub">Mỗi dòng là một test case. Input có thể để trống nếu bài không cần dữ liệu đầu vào. Output là kết quả kỳ vọng bắt buộc.</p>
+          <div className="nb-testcase-editor">
+            {form.testCases.map((test, index) => (
+              <div className="nb-testcase-card" key={test.id}>
+                <div className="nb-testcase-head">
+                  <strong>Test {index + 1}</strong>
+                  <button type="button" className="nb-icon-btn" onClick={() => removeTestCase(test.id)} title="Xóa test case" aria-label={`Xóa test ${index + 1}`}><Trash2 size={15} /></button>
+                </div>
+                <div className="nb-testcase-grid">
+                  <textarea className="nb-input nb-mono" rows={3} placeholder="Input chạy thử" value={test.input}
+                    onChange={(e) => updateTestCase(test.id, "input", e.target.value)} />
+                  <textarea className="nb-input nb-mono" rows={3} placeholder="Output kỳ vọng" value={test.output}
+                    onChange={(e) => updateTestCase(test.id, "output", e.target.value)} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="nb-btn nb-btn-ghost" onClick={addTestCase}><Plus size={15} /> Thêm test case</button>
+          <p className="nb-sub">Lưu ý: trong kiến trúc frontend hiện tại, test case có thể bị xem qua Network. Muốn ẩn tuyệt đối, cần chuyển bộ chấm sang server.</p>
           {formError && <div className="nb-login-error"><AlertCircle size={14} /> {formError}</div>}
           <label className="nb-checkbox-label">
             <input type="checkbox" checked={form.isPython} onChange={(e) => setForm({ ...form, isPython: e.target.checked })} />
-            Gắn nhãn "Python cơ bản"
+            Gắn nhãn “Python cơ bản”
           </label>
-          <button className="nb-btn nb-btn-primary" type="submit">Lưu bài tập</button>
+          <div className="nb-editor-actions">
+            <button className="nb-btn nb-btn-primary" type="submit"><Save size={15} /> {editingId ? "Lưu thay đổi" : "Tạo bài tập"}</button>
+            <button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowForm(false); }}>Hủy</button>
+          </div>
         </form>
       )}
 
@@ -1485,6 +1637,14 @@ function App() {
     setProblems((prev) => [...prev, p]);
     dbAddProblem(p).catch(() => setStorageError(true));
   }
+  function updateProblem(p) {
+    setProblems((prev) => prev.map((item) => item.id === p.id ? p : item));
+    dbUpdateProblem(p).catch(() => setStorageError(true));
+  }
+  function removeProblem(id) {
+    setProblems((prev) => prev.filter((item) => item.id !== id));
+    dbRemoveProblem(id).catch(() => setStorageError(true));
+  }
   function addContest(c) {
     setContests((prev) => [...prev, c]);
     dbAddContest(c).catch(() => setStorageError(true));
@@ -1626,6 +1786,22 @@ function App() {
         .nb-practice-summary-card { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--paper-line); border-radius: 9px; padding: 12px 14px; color: var(--pen-blue); }
         .nb-practice-summary-card strong { color: var(--ink); font: 700 18px 'JetBrains Mono', monospace; margin-left: auto; }
         .nb-practice-summary-card span { color: var(--slate); font-size: 11px; }
+        .nb-management-panel { margin-bottom: 16px; }
+        .nb-management-head, .nb-editor-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+        .nb-management-list { display: flex; flex-direction: column; margin-top: 12px; }
+        .nb-management-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--paper-line); }
+        .nb-management-info { min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .nb-management-info strong { font-size: 13.5px; }
+        .nb-management-info .nb-eyebrow { margin: 0; }
+        .nb-management-actions { display: flex; gap: 6px; flex-shrink: 0; }
+        .nb-btn-danger { background: rgba(178,58,58,0.08); color: var(--red-pen); border: 1px solid rgba(178,58,58,0.22); }
+        .nb-problem-editor { gap: 12px; }
+        .nb-form-section-label { color: var(--ink); font-size: 12px; font-weight: 700; margin-top: 3px; }
+        .nb-testcase-editor { display: flex; flex-direction: column; gap: 10px; }
+        .nb-testcase-card { border: 1px solid var(--paper-line); border-radius: 9px; padding: 10px; background: #FDFCF7; }
+        .nb-testcase-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--pen-blue); font-size: 12px; }
+        .nb-testcase-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .nb-editor-actions { display: flex; gap: 8px; }
         .nb-stat-card { background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; padding: 16px; color: var(--pen-blue); }
         .nb-stat-num { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; color: var(--ink); margin-top: 8px; }
         .nb-stat-label { font-size: 12px; color: var(--slate); margin-top: 2px; }
@@ -1751,6 +1927,10 @@ function App() {
           .nb-storage-banner { margin: -8px -14px 16px -14px; padding-left: 14px; }
           .nb-stat-grid { grid-template-columns: repeat(2, 1fr); }
           .nb-practice-summary { grid-template-columns: 1fr; }
+          .nb-management-row { align-items: flex-start; flex-direction: column; }
+          .nb-management-actions { width: 100%; }
+          .nb-management-actions .nb-btn { flex: 1; justify-content: center; }
+          .nb-testcase-grid { grid-template-columns: 1fr; }
           .nb-two-col, .nb-modal-body { grid-template-columns: 1fr; }
           .nb-modal { max-height: 94vh; }
           .nb-modal-body { padding: 16px; }
@@ -1831,7 +2011,7 @@ function App() {
               {tab === "problems" && (
                 <ProblemsView
                   isTeacher={isTeacher} currentUser={currentUser} problems={problems} submissions={submissions}
-                  points={points} addProblem={addProblem} topics={topics}
+                  points={points} addProblem={addProblem} updateProblem={updateProblem} removeProblem={removeProblem} topics={topics}
                   solvedByCurrent={solvedByCurrent} onVerdict={registerVerdict}
                 />
               )}
