@@ -139,6 +139,14 @@ async function dbAddTopic(t) {
   const { error } = await supabase.from("topics").insert({ id: t.id, code: t.code, title: t.title, weeks: t.weeks, summary: t.summary, content: t.content });
   if (error) throw error;
 }
+async function dbUpdateTopic(t) {
+  const { error } = await supabase.from("topics").update({ code: t.code, title: t.title, weeks: t.weeks, summary: t.summary, content: t.content }).eq("id", t.id);
+  if (error) throw error;
+}
+async function dbRemoveTopic(id) {
+  const { error } = await supabase.from("topics").delete().eq("id", id);
+  if (error) throw error;
+}
 async function dbAddProblem(p) {
   const { error } = await supabase.from("problems").insert({
     id: p.id, title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
@@ -741,67 +749,174 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
   );
 }
 
-function LessonsView({ isTeacher, topics, addTopic }) {
-  const [openId, setOpenId] = useState(topics[0]?.id);
+function LessonsView({ isTeacher, currentUser, topics, addTopic, updateTopic, removeTopic }) {
+  const progressKey = `lesson-progress:${currentUser?.id || "anonymous"}`;
+  const [selectedId, setSelectedId] = useState(topics[0]?.id || null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ title: "", weeks: "", summary: "", content: "" });
+  const [editingId, setEditingId] = useState(null);
+  const [formError, setFormError] = useState("");
+  const [completed, setCompleted] = useState(() => lsGet(progressKey) || {});
+  const [form, setForm] = useState({ code: "", title: "", weeks: "", summary: "", content: "" });
+
+  useEffect(() => {
+    if (!topics.some((topic) => topic.id === selectedId)) setSelectedId(topics[0]?.id || null);
+  }, [topics, selectedId]);
+
+  const filteredTopics = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return topics.filter((topic) => {
+      const matchesSearch = !query || [topic.code, topic.title, topic.summary, topic.content]
+        .some((value) => String(value || "").toLowerCase().includes(query));
+      const isCompleted = Boolean(completed[topic.id]);
+      const matchesStatus = statusFilter === "all" || (statusFilter === "completed" ? isCompleted : !isCompleted);
+      return matchesSearch && matchesStatus;
+    });
+  }, [topics, search, statusFilter, completed]);
+
+  const selectedTopic = topics.find((topic) => topic.id === selectedId) || filteredTopics[0] || topics[0] || null;
+  const completedCount = topics.filter((topic) => completed[topic.id]).length;
+  const progressPercent = topics.length ? Math.round((completedCount / topics.length) * 100) : 0;
+
+  function resetForm() {
+    setForm({ code: "", title: "", weeks: "", summary: "", content: "" });
+    setEditingId(null);
+    setFormError("");
+  }
+
+  function beginAdd() {
+    resetForm();
+    setShowForm(true);
+  }
+
+  function beginEdit(topic) {
+    setEditingId(topic.id);
+    setForm({
+      code: topic.code || "",
+      title: topic.title || "",
+      weeks: topic.weeks || "",
+      summary: topic.summary || "",
+      content: topic.content || "",
+    });
+    setFormError("");
+    setShowForm(true);
+  }
+
+  function toggleCompleted(topicId) {
+    setCompleted((current) => {
+      const next = { ...current, [topicId]: !current[topicId] };
+      if (!next[topicId]) delete next[topicId];
+      lsSet(progressKey, next);
+      return next;
+    });
+  }
 
   function submit(e) {
     e.preventDefault();
-    if (!form.title.trim()) return;
-    addTopic({
-      id: "t" + Date.now(), code: "CD" + (topics.length + 1),
-      title: form.title, weeks: form.weeks || "Chưa xếp lịch",
-      summary: form.summary || "Chưa có mô tả.", content: form.content || "Nội dung đang được biên soạn.",
-    });
-    setForm({ title: "", weeks: "", summary: "", content: "" });
+    setFormError("");
+    if (!form.title.trim() || !form.content.trim()) {
+      setFormError("Cần nhập tên bài giảng và nội dung bài học.");
+      return;
+    }
+    const topic = {
+      id: editingId || `t${Date.now()}`,
+      code: form.code.trim() || `CD${topics.length + (editingId ? 0 : 1)}`,
+      title: form.title.trim(),
+      weeks: form.weeks.trim() || "Tự học",
+      summary: form.summary.trim() || "Chưa có mô tả ngắn.",
+      content: form.content.trim(),
+    };
+    if (editingId) updateTopic(topic);
+    else addTopic(topic);
+    setSelectedId(topic.id);
+    resetForm();
     setShowForm(false);
+  }
+
+  function handleDelete(topic) {
+    if (!window.confirm(`Xóa bài giảng “${topic.title}”? Không thể hoàn tác.`)) return;
+    removeTopic(topic.id);
+    if (selectedId === topic.id) setSelectedId(topics.find((item) => item.id !== topic.id)?.id || null);
   }
 
   return (
     <div>
-      <SectionHeading eyebrow="Tài liệu ôn tập" title="Bài giảng theo chuyên đề"
-        sub="Các chuyên đề trọng tâm cho kỳ thi học sinh giỏi Tin học." />
+      <SectionHeading eyebrow="Không gian học tập" title="Bài giảng & tài liệu"
+        sub="Học theo lộ trình, đọc tài liệu tập trung và lưu lại tiến độ ôn luyện của em." />
 
-      {isTeacher && (
-        <div className="nb-panel" style={{ marginBottom: 18 }}>
-          <button className="nb-btn nb-btn-ghost" onClick={() => setShowForm((v) => !v)}>
-            <Plus size={16} /> {showForm ? "Đóng biểu mẫu" : "Thêm chuyên đề mới"}
-          </button>
-          {showForm && (
-            <form onSubmit={submit} className="nb-form">
-              <input className="nb-input" placeholder="Tên chuyên đề" value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })} />
-              <input className="nb-input" placeholder="Thời lượng (vd: Tuần 13)" value={form.weeks}
-                onChange={(e) => setForm({ ...form, weeks: e.target.value })} />
-              <textarea className="nb-input" placeholder="Mô tả ngắn" rows={2} value={form.summary}
-                onChange={(e) => setForm({ ...form, summary: e.target.value })} />
-              <textarea className="nb-input" placeholder="Nội dung chi tiết" rows={3} value={form.content}
-                onChange={(e) => setForm({ ...form, content: e.target.value })} />
-              <button className="nb-btn nb-btn-primary" type="submit">Lưu chuyên đề</button>
-            </form>
-          )}
+      <div className="nb-lesson-overview">
+        <div className="nb-lesson-progress-card">
+          <div className="nb-lesson-progress-head"><span>Tiến độ học tập</span><strong>{progressPercent}%</strong></div>
+          <div className="nb-progress-track"><div className="nb-progress-fill" style={{ width: `${progressPercent}%` }} /></div>
+          <p className="nb-sub">Đã hoàn thành {completedCount}/{topics.length} chuyên đề</p>
         </div>
+        <div className="nb-lesson-stat-card"><BookOpen size={18} /><strong>{topics.length}</strong><span>Chuyên đề</span></div>
+        <div className="nb-lesson-stat-card"><CheckCircle2 size={18} /><strong>{completedCount}</strong><span>Đã hoàn thành</span></div>
+      </div>
+
+      <div className="nb-lesson-toolbar">
+        <div className="nb-lesson-search">
+          <input className="nb-input" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm bài giảng, chuyên đề hoặc nội dung…" />
+        </div>
+        <div className="nb-filter-row" style={{ margin: 0 }}>
+          {[['all', 'Tất cả'], ['todo', 'Chưa học'], ['completed', 'Đã học']].map(([key, label]) => (
+            <button key={key} className={"nb-chip " + (statusFilter === key ? "active" : "")} onClick={() => setStatusFilter(key)}>{label}</button>
+          ))}
+        </div>
+        {isTeacher && <button className="nb-btn nb-btn-primary" onClick={beginAdd}><Plus size={16} /> Thêm bài giảng</button>}
+      </div>
+
+      {isTeacher && showForm && (
+        <form onSubmit={submit} className="nb-panel nb-form nb-lesson-editor" style={{ marginBottom: 18 }}>
+          <div className="nb-editor-head">
+            <div><div className="nb-eyebrow">{editingId ? "Chỉnh sửa" : "Tạo mới"}</div><h3 className="nb-h3">{editingId ? "Cập nhật bài giảng" : "Thêm bài giảng"}</h3></div>
+            <button type="button" className="nb-icon-btn" onClick={() => { resetForm(); setShowForm(false); }} aria-label="Đóng"><X size={18} /></button>
+          </div>
+          <div className="nb-lesson-form-grid">
+            <input className="nb-input" placeholder="Mã chuyên đề (vd: CD01)" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+            <input className="nb-input" placeholder="Tên bài giảng" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+            <input className="nb-input" placeholder="Lịch học (vd: Tuần 1–2)" value={form.weeks} onChange={(e) => setForm({ ...form, weeks: e.target.value })} />
+          </div>
+          <input className="nb-input" placeholder="Mô tả ngắn / mục tiêu bài học" value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} />
+          <textarea className="nb-input" rows={10} placeholder="Nội dung bài giảng. Có thể dùng nhiều đoạn văn, tiêu đề và ví dụ code." value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
+          {formError && <div className="nb-login-error"><AlertCircle size={14} /> {formError}</div>}
+          <div className="nb-editor-actions">
+            <button className="nb-btn nb-btn-primary" type="submit"><Save size={15} /> {editingId ? "Lưu thay đổi" : "Tạo bài giảng"}</button>
+            <button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowForm(false); }}>Hủy</button>
+          </div>
+        </form>
       )}
 
-      <div className="nb-lesson-list">
-        {topics.map((t) => (
-          <div key={t.id} className={"nb-lesson-item " + (openId === t.id ? "open" : "")}>
-            <button className="nb-lesson-head" onClick={() => setOpenId(openId === t.id ? null : t.id)}>
-              <span className="nb-eyebrow">{t.code}</span>
-              <span className="nb-lesson-title">{t.title}</span>
-              <span className="nb-sub">{t.weeks}</span>
-              <ChevronRight size={16} className="nb-chevron" />
-            </button>
-            {openId === t.id && (
-              <div className="nb-lesson-body">
-                <p className="nb-sub" style={{ marginBottom: 8 }}>{t.summary}</p>
-                <p className="nb-para">{t.content}</p>
+      <div className="nb-lesson-layout">
+        <aside className="nb-lesson-catalog">
+          <div className="nb-lesson-catalog-head"><div><div className="nb-eyebrow">Lộ trình</div><h3 className="nb-h3">Danh mục bài học</h3></div><span className="nb-sub">{filteredTopics.length}/{topics.length}</span></div>
+          <div className="nb-lesson-catalog-list">
+            {filteredTopics.map((topic, index) => (
+              <div key={topic.id} className={"nb-lesson-catalog-item " + (selectedTopic?.id === topic.id ? "active" : "")}>
+                <button className="nb-lesson-catalog-main" onClick={() => setSelectedId(topic.id)}>
+                  <span className="nb-lesson-index">{String(index + 1).padStart(2, "0")}</span>
+                  <span className="nb-lesson-catalog-text"><strong>{topic.title}</strong><small>{topic.code} · {topic.weeks}</small></span>
+                  {completed[topic.id] && <CheckCircle2 size={15} style={{ color: "var(--ac-green)" }} />}
+                </button>
+                {isTeacher && <div className="nb-lesson-item-actions"><button className="nb-icon-btn" onClick={() => beginEdit(topic)} title="Sửa bài giảng" aria-label="Sửa bài giảng"><Pencil size={14} /></button><button className="nb-icon-btn" onClick={() => handleDelete(topic)} title="Xóa bài giảng" aria-label="Xóa bài giảng"><Trash2 size={14} /></button></div>}
               </div>
-            )}
+            ))}
+            {filteredTopics.length === 0 && <p className="nb-sub" style={{ padding: 14 }}>Không tìm thấy bài giảng phù hợp.</p>}
           </div>
-        ))}
-        {topics.length === 0 && <p className="nb-sub">Chưa có chuyên đề nào.</p>}
+        </aside>
+
+        <article className="nb-lesson-reader">
+          {selectedTopic ? (
+            <>
+              <div className="nb-lesson-reader-top"><span className="nb-eyebrow">{selectedTopic.code} · {selectedTopic.weeks}</span>{completed[selectedTopic.id] && <span className="nb-pill nb-pill-ac"><CheckCircle2 size={12} style={{ verticalAlign: "-2px" }} /> Đã hoàn thành</span>}</div>
+              <h1 className="nb-lesson-reader-title">{selectedTopic.title}</h1>
+              <div className="nb-lesson-callout"><BookOpen size={17} /><p>{selectedTopic.summary}</p></div>
+              <div className="nb-lesson-content">{String(selectedTopic.content || "").split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
+              {!isTeacher && <button className={"nb-btn " + (completed[selectedTopic.id] ? "nb-btn-ghost" : "nb-btn-primary")} onClick={() => toggleCompleted(selectedTopic.id)}>{completed[selectedTopic.id] ? <><RefreshCw size={15} /> Đánh dấu chưa hoàn thành</> : <><CheckCircle2 size={15} /> Đánh dấu đã học xong</>}</button>}
+            </>
+          ) : <div className="nb-lesson-empty"><BookOpen size={30} /><h3 className="nb-h3">Chưa có bài giảng</h3><p className="nb-sub">Hãy chọn một bài trong danh mục hoặc tạo bài giảng mới.</p></div>}
+        </article>
       </div>
     </div>
   );
@@ -1633,6 +1748,14 @@ function App() {
     setTopics((prev) => [...prev, t]);
     dbAddTopic(t).catch(() => setStorageError(true));
   }
+  function updateTopic(t) {
+    setTopics((prev) => prev.map((item) => item.id === t.id ? t : item));
+    dbUpdateTopic(t).catch(() => setStorageError(true));
+  }
+  function removeTopic(id) {
+    setTopics((prev) => prev.filter((item) => item.id !== id));
+    dbRemoveTopic(id).catch(() => setStorageError(true));
+  }
   function addProblem(p) {
     setProblems((prev) => [...prev, p]);
     dbAddProblem(p).catch(() => setStorageError(true));
@@ -1826,6 +1949,41 @@ function App() {
         .nb-chevron { transition: transform .15s; color: var(--slate); }
         .nb-lesson-item.open .nb-chevron { transform: rotate(90deg); }
         .nb-lesson-body { padding: 0 16px 16px 76px; }
+        .nb-lesson-overview { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+        .nb-lesson-progress-card, .nb-lesson-stat-card { background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; padding: 15px; }
+        .nb-lesson-progress-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; margin-bottom: 10px; }
+        .nb-lesson-progress-head strong { color: var(--pen-blue); font: 700 18px 'JetBrains Mono', monospace; }
+        .nb-progress-track { height: 8px; background: var(--paper-line); border-radius: 99px; overflow: hidden; margin-bottom: 8px; }
+        .nb-progress-fill { height: 100%; background: var(--ac-green); border-radius: inherit; transition: width .25s ease; }
+        .nb-lesson-stat-card { display: flex; align-items: center; gap: 9px; color: var(--pen-blue); }
+        .nb-lesson-stat-card strong { color: var(--ink); font: 700 22px 'JetBrains Mono', monospace; margin-left: auto; }
+        .nb-lesson-stat-card span { color: var(--slate); font-size: 11px; }
+        .nb-lesson-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+        .nb-lesson-search { flex: 1 1 260px; }
+        .nb-lesson-layout { display: grid; grid-template-columns: minmax(260px, 0.85fr) minmax(0, 1.7fr); gap: 16px; align-items: start; }
+        .nb-lesson-catalog, .nb-lesson-reader { background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; }
+        .nb-lesson-catalog { overflow: hidden; }
+        .nb-lesson-catalog-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 16px; border-bottom: 1px solid var(--paper-line); }
+        .nb-lesson-catalog-list { display: flex; flex-direction: column; }
+        .nb-lesson-catalog-item { display: flex; align-items: stretch; border-bottom: 1px solid var(--paper-line); }
+        .nb-lesson-catalog-item:last-child { border-bottom: none; }
+        .nb-lesson-catalog-item.active { background: rgba(44,74,140,0.07); box-shadow: inset 3px 0 var(--pen-blue); }
+        .nb-lesson-catalog-main { min-width: 0; flex: 1; display: flex; align-items: center; gap: 10px; padding: 13px 12px 13px 16px; border: none; background: transparent; text-align: left; cursor: pointer; font-family: inherit; }
+        .nb-lesson-index { width: 28px; color: var(--slate); font: 600 11px 'JetBrains Mono', monospace; }
+        .nb-lesson-catalog-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+        .nb-lesson-catalog-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+        .nb-lesson-catalog-text small { color: var(--slate); font-size: 11px; }
+        .nb-lesson-item-actions { display: flex; align-items: center; gap: 2px; padding-right: 7px; }
+        .nb-lesson-reader { min-height: 520px; padding: 26px 30px 30px; }
+        .nb-lesson-reader-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+        .nb-lesson-reader-title { font-size: 30px; line-height: 1.2; margin: 10px 0 18px; max-width: 760px; }
+        .nb-lesson-callout { display: flex; gap: 10px; align-items: flex-start; padding: 13px 15px; border-left: 3px solid var(--pen-blue); background: rgba(44,74,140,0.07); color: var(--pen-blue); border-radius: 0 8px 8px 0; margin-bottom: 22px; }
+        .nb-lesson-callout p { margin: 0; color: var(--ink); font-size: 13.5px; line-height: 1.6; }
+        .nb-lesson-content { color: #2B2F36; font-size: 14px; line-height: 1.8; margin-bottom: 24px; }
+        .nb-lesson-content p { margin: 0 0 16px; white-space: pre-wrap; }
+        .nb-lesson-form-grid { display: grid; grid-template-columns: 0.8fr 2fr 1fr; gap: 10px; }
+        .nb-lesson-editor { gap: 12px; }
+        .nb-lesson-empty { min-height: 460px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--slate); text-align: center; }
 
         .nb-filter-row { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
         .nb-chip { font-size: 12.5px; font-weight: 600; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--paper-line); background: #fff; cursor: pointer; font-family: inherit; color: var(--slate); }
@@ -1926,6 +2084,12 @@ function App() {
           .nb-content { padding: 16px 14px 92px 14px; }
           .nb-storage-banner { margin: -8px -14px 16px -14px; padding-left: 14px; }
           .nb-stat-grid { grid-template-columns: repeat(2, 1fr); }
+          .nb-lesson-overview { grid-template-columns: 1fr 1fr; }
+          .nb-lesson-progress-card { grid-column: 1 / -1; }
+          .nb-lesson-layout { grid-template-columns: 1fr; }
+          .nb-lesson-reader { min-height: 0; padding: 20px 16px 24px; }
+          .nb-lesson-reader-title { font-size: 24px; }
+          .nb-lesson-form-grid { grid-template-columns: 1fr; }
           .nb-practice-summary { grid-template-columns: 1fr; }
           .nb-management-row { align-items: flex-start; flex-direction: column; }
           .nb-management-actions { width: 100%; }
@@ -2007,7 +2171,12 @@ function App() {
                   problemsCount={problems.length}
                 />
               )}
-              {tab === "lessons" && <LessonsView isTeacher={isTeacher} topics={topics} addTopic={addTopic} />}
+              {tab === "lessons" && (
+                <LessonsView
+                  isTeacher={isTeacher} currentUser={currentUser} topics={topics}
+                  addTopic={addTopic} updateTopic={updateTopic} removeTopic={removeTopic}
+                />
+              )}
               {tab === "problems" && (
                 <ProblemsView
                   isTeacher={isTeacher} currentUser={currentUser} problems={problems} submissions={submissions}
