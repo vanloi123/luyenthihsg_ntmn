@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from "react"
 import { createRoot } from "react-dom/client";
 import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
-  Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft,
+  Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
   RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud,
 } from "lucide-react";
@@ -1496,33 +1496,64 @@ function ContestsView({ contests, isTeacher, students, points, problems, addCont
 }
 
 function LeaderboardView({ students, points, solvedCount, currentUser, problemsCount }) {
-  const sorted = useMemo(() => [...students].sort((a, b) => points(b.id) - points(a.id)), [students, points]);
-  const chartData = sorted.slice(0, 10).map((s) => ({ name: s.name.split(" ").slice(-1)[0], full: s.name, pts: points(s.id) }));
+  const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState("score");
+  const [scope, setScope] = useState("all");
+
+  const ranked = useMemo(() => {
+    const rows = students.map((student) => {
+      const score = Number(points(student.id)) || 0;
+      const solved = Number(solvedCount(student.id)) || 0;
+      return { ...student, score, solved, progress: problemsCount ? Math.round((solved / problemsCount) * 100) : 0 };
+    });
+    rows.sort((a, b) => {
+      const primary = sortBy === "solved" ? b.solved - a.solved : b.score - a.score;
+      return primary || (b.score - a.score) || (b.solved - a.solved) || a.name.localeCompare(b.name, "vi");
+    });
+    return rows.map((row, index) => ({ ...row, rank: index + 1 }));
+  }, [students, points, solvedCount, problemsCount, sortBy]);
+
+  const filtered = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return ranked.filter((row) => {
+      const matchesName = !normalizedQuery || row.name.toLowerCase().includes(normalizedQuery) || String(row.username || "").toLowerCase().includes(normalizedQuery);
+      const matchesScope = scope === "all" || (scope === "top" ? row.rank <= 10 : row.id === currentUser.id);
+      return matchesName && matchesScope;
+    });
+  }, [ranked, query, scope, currentUser.id]);
+
+  const currentRank = ranked.find((row) => row.id === currentUser.id);
+  const topThree = [ranked[1], ranked[0], ranked[2]].filter(Boolean);
+  const chartData = ranked.slice(0, 10).map((row) => ({ name: row.name.split(" ").slice(-1)[0], full: row.name, pts: row.score }));
+  const averageScore = ranked.length ? Math.round(ranked.reduce((sum, row) => sum + row.score, 0) / ranked.length) : 0;
+  const completedCount = ranked.filter((row) => row.solved > 0).length;
 
   return (
-    <div>
-      <SectionHeading eyebrow="Thi đua" title="Bảng xếp hạng đội tuyển" sub="Cập nhật theo thời gian thực dựa trên số bài đã giải." />
-      <div className="nb-panel" style={{ marginBottom: 20 }}>
-        <SimpleBarChart data={chartData} highlightName={currentUser.name} />
+    <div className="nb-ranking-page">
+      <div className="nb-ranking-hero">
+        <div><div className="nb-eyebrow">Thi đua · Thành tích học tập</div><h2 className="nb-ranking-title">Bảng xếp hạng đội tuyển</h2><p className="nb-ranking-sub">Ghi nhận nỗ lực luyện tập dựa trên điểm tốt nhất của từng bài.</p></div>
+        <div className="nb-ranking-hero-badge"><Trophy size={22} /><span><strong>{ranked.length}</strong><small>thành viên</small></span></div>
       </div>
 
-      <div className="nb-panel nb-table-wrap">
-        <table className="nb-table">
-          <thead>
-            <tr><th>#</th><th>Học sinh</th><th>Bài đã giải</th><th>Điểm</th></tr>
-          </thead>
-          <tbody>
-            {sorted.map((s, i) => (
-              <tr key={s.id} className={s.id === currentUser.id ? "me" : ""}>
-                <td className="nb-eyebrow">{i + 1}</td>
-                <td><div style={{ display: "flex", alignItems: "center", gap: 8 }}><Avatar name={s.name} size={24} />{s.name}</div></td>
-                <td>{solvedCount(s.id)}/{problemsCount}</td>
-                <td><strong>{points(s.id)}</strong></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="nb-ranking-stat-grid">
+        <div className="nb-ranking-stat"><span className="nb-ranking-stat-icon blue"><TrendingUp size={17} /></span><div><strong>{currentRank?.score || 0}</strong><small>Điểm của bạn</small></div></div>
+        <div className="nb-ranking-stat"><span className="nb-ranking-stat-icon gold"><Award size={17} /></span><div><strong>{currentRank ? `#${currentRank.rank}` : "—"}</strong><small>Vị trí hiện tại</small></div></div>
+        <div className="nb-ranking-stat"><span className="nb-ranking-stat-icon green"><ListChecks size={17} /></span><div><strong>{currentRank?.solved || 0}/{problemsCount}</strong><small>Bài đã giải</small></div></div>
+        <div className="nb-ranking-stat"><span className="nb-ranking-stat-icon ink"><Users size={17} /></span><div><strong>{averageScore}</strong><small>Điểm trung bình</small></div></div>
       </div>
+
+      {ranked.length > 0 && <div className="nb-ranking-podium">
+        {topThree.map((row) => <div key={row.id} className={`nb-podium-card rank-${row.rank} ${row.id === currentUser.id ? "is-me" : ""}`}><div className="nb-podium-rank">{row.rank === 1 ? <Trophy size={19} /> : <Award size={18} />}<span>#{row.rank}</span></div><Avatar name={row.name} size={row.rank === 1 ? 54 : 44} /><strong>{row.name}</strong><span className="nb-sub">{row.solved} bài · {row.progress}% tiến độ</span><b>{row.score}<small> điểm</small></b>{row.id === currentUser.id && <span className="nb-podium-me">Bạn</span>}</div>)}
+      </div>}
+
+      <div className="nb-ranking-insight-grid">
+        <div className="nb-panel nb-ranking-chart-panel"><div className="nb-ranking-section-head"><div><div className="nb-eyebrow">Top 10</div><h3 className="nb-h3">Đường đua điểm số</h3></div><TrendingUp size={18} style={{ color: "var(--pen-blue)" }} /></div><SimpleBarChart data={chartData} highlightName={currentUser.name} /></div>
+        <div className="nb-panel nb-ranking-me-panel"><div className="nb-eyebrow">Hồ sơ thành tích</div><h3 className="nb-h3">{currentRank ? `Bạn đang ở vị trí #${currentRank.rank}` : "Chưa có thứ hạng"}</h3><div className="nb-ranking-me-score"><strong>{currentRank?.score || 0}</strong><span>điểm tích lũy</span></div><div className="nb-ranking-progress-head"><span>Tiến độ giải bài</span><strong>{currentRank?.progress || 0}%</strong></div><div className="nb-ranking-progress"><span style={{ width: `${currentRank?.progress || 0}%` }} /></div><p className="nb-sub">{completedCount}/{ranked.length} thành viên đã bắt đầu luyện tập.</p></div>
+      </div>
+
+      <div className="nb-ranking-toolbar"><div className="nb-ranking-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm tên học sinh…" /></div><div className="nb-ranking-controls"><select className="nb-input" value={sortBy} onChange={(event) => setSortBy(event.target.value)}><option value="score">Xếp theo điểm</option><option value="solved">Xếp theo bài giải</option></select><div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả"], ["top", "Top 10"], ["me", "Của tôi"]].map(([key, label]) => <button key={key} className={`nb-chip ${scope === key ? "active" : ""}`} onClick={() => setScope(key)}>{label}</button>)}</div></div></div>
+
+      <div className="nb-panel nb-table-wrap nb-ranking-table-panel"><div className="nb-ranking-table-title"><div><div className="nb-eyebrow">Bảng thành tích</div><h3 className="nb-h3">Xếp hạng chi tiết</h3></div><span className="nb-sub">{filtered.length}/{ranked.length} học sinh</span></div><table className="nb-table nb-ranking-table"><thead><tr><th>Hạng</th><th>Học sinh</th><th>Bài đã giải</th><th>Tiến độ</th><th className="nb-ranking-score-col">Điểm</th></tr></thead><tbody>{filtered.map((row) => <tr key={row.id} className={row.id === currentUser.id ? "me" : ""}><td><span className={`nb-rank-number rank-${row.rank}`}>{row.rank <= 3 ? (row.rank === 1 ? "01" : row.rank === 2 ? "02" : "03") : row.rank}</span></td><td><div className="nb-ranking-student"><Avatar name={row.name} size={30} /><span><strong>{row.name}</strong>{row.id === currentUser.id && <small>Bạn</small>}</span></div></td><td><strong>{row.solved}</strong><span className="nb-table-muted">/{problemsCount}</span></td><td><div className="nb-row-progress"><div><span style={{ width: `${row.progress}%` }} /></div><small>{row.progress}%</small></div></td><td className="nb-ranking-score-col"><strong>{row.score}</strong><span className="nb-table-muted">đ</span></td></tr>)}</tbody></table>{filtered.length === 0 && <div className="nb-ranking-empty"><Search size={22} /><strong>Không tìm thấy học sinh</strong><span>Thử đổi từ khóa hoặc bộ lọc.</span></div>}</div>
     </div>
   );
 }
@@ -2311,6 +2342,79 @@ function App() {
         .nb-contest-timer { font-family: 'JetBrains Mono', monospace; font-weight: 700; display: flex; align-items: center; gap: 6px; color: var(--red-pen); }
         .nb-locked-banner { display: flex; align-items: center; gap: 8px; background: rgba(178,58,58,0.08); color: var(--red-pen); font-size: 12.5px; padding: 10px 14px; border-radius: 8px; margin-bottom: 14px; }
 
+        .nb-ranking-page { display: flex; flex-direction: column; gap: 18px; }
+        .nb-ranking-hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 24px 26px; border-radius: 14px; color: #fff; background: linear-gradient(120deg, #183A5A 0%, #2C4A8C 58%, #5C78B8 100%); box-shadow: 0 10px 24px rgba(44,74,140,0.18); }
+        .nb-ranking-title { margin: 6px 0 7px; font-size: 30px; line-height: 1.15; letter-spacing: -0.02em; }
+        .nb-ranking-sub { margin: 0; color: rgba(255,255,255,0.72); font-size: 13px; line-height: 1.5; }
+        .nb-ranking-hero .nb-eyebrow { color: #C8D7EC; }
+        .nb-ranking-hero-badge { display: flex; align-items: center; gap: 10px; padding: 10px 13px; border: 1px solid rgba(255,255,255,0.22); border-radius: 10px; background: rgba(255,255,255,0.1); }
+        .nb-ranking-hero-badge span { display: flex; flex-direction: column; gap: 2px; }
+        .nb-ranking-hero-badge strong { font: 700 18px 'JetBrains Mono', monospace; }
+        .nb-ranking-hero-badge small { color: rgba(255,255,255,0.68); font-size: 10px; }
+        .nb-ranking-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .nb-ranking-stat { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 14px; background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; }
+        .nb-ranking-stat-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; }
+        .nb-ranking-stat-icon.blue { color: var(--pen-blue); background: rgba(44,74,140,0.11); }
+        .nb-ranking-stat-icon.gold { color: var(--gold); background: rgba(185,130,47,0.13); }
+        .nb-ranking-stat-icon.green { color: var(--ac-green); background: rgba(46,158,109,0.12); }
+        .nb-ranking-stat-icon.ink { color: var(--ink); background: rgba(16,21,28,0.08); }
+        .nb-ranking-stat div { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .nb-ranking-stat strong { color: var(--ink); font: 700 20px 'JetBrains Mono', monospace; }
+        .nb-ranking-stat small { color: var(--slate); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .nb-ranking-podium { display: grid; grid-template-columns: 1fr 1.1fr 1fr; align-items: end; gap: 12px; min-height: 220px; }
+        .nb-podium-card { position: relative; display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 20px 14px 17px; background: #fff; border: 1px solid var(--paper-line); border-radius: 12px; text-align: center; box-shadow: 0 5px 14px rgba(16,21,28,0.05); }
+        .nb-podium-card.rank-1 { min-height: 220px; padding-top: 24px; border-color: rgba(185,130,47,0.55); box-shadow: 0 10px 22px rgba(185,130,47,0.14); }
+        .nb-podium-card.rank-2, .nb-podium-card.rank-3 { min-height: 184px; }
+        .nb-podium-card.is-me { outline: 2px solid var(--red-pen); outline-offset: 2px; }
+        .nb-podium-rank { display: flex; align-items: center; gap: 5px; color: var(--gold); font: 700 13px 'JetBrains Mono', monospace; }
+        .nb-podium-card.rank-2 .nb-podium-rank { color: #738299; }
+        .nb-podium-card.rank-3 .nb-podium-rank { color: #A86E4B; }
+        .nb-podium-card > strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+        .nb-podium-card > b { color: var(--pen-blue); font: 700 19px 'JetBrains Mono', monospace; }
+        .nb-podium-card > b small { color: var(--slate); font: 500 10px inherit; }
+        .nb-podium-me { position: absolute; top: 9px; right: 9px; color: var(--red-pen); font: 700 9px 'JetBrains Mono', monospace; text-transform: uppercase; }
+        .nb-ranking-insight-grid { display: grid; grid-template-columns: 1.35fr 0.65fr; gap: 16px; }
+        .nb-ranking-chart-panel, .nb-ranking-me-panel { min-width: 0; }
+        .nb-ranking-section-head, .nb-ranking-table-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+        .nb-ranking-me-panel { display: flex; flex-direction: column; }
+        .nb-ranking-me-score { display: flex; align-items: baseline; gap: 8px; margin: 18px 0 22px; }
+        .nb-ranking-me-score strong { color: var(--pen-blue); font: 700 32px 'JetBrains Mono', monospace; }
+        .nb-ranking-me-score span { color: var(--slate); font-size: 12px; }
+        .nb-ranking-progress-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 7px; color: var(--slate); font-size: 12px; }
+        .nb-ranking-progress-head strong { color: var(--ink); font: 700 12px 'JetBrains Mono', monospace; }
+        .nb-ranking-progress, .nb-row-progress > div { height: 7px; border-radius: 99px; overflow: hidden; background: var(--paper-line); }
+        .nb-ranking-progress span, .nb-row-progress > div span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pen-blue), #6A91D1); }
+        .nb-ranking-me-panel .nb-sub { margin-top: auto; padding-top: 18px; }
+        .nb-ranking-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .nb-ranking-search { display: flex; align-items: center; gap: 8px; flex: 1 1 220px; padding: 0 11px; height: 40px; background: #fff; border: 1px solid var(--paper-line); border-radius: 8px; color: var(--slate); }
+        .nb-ranking-search input { min-width: 0; flex: 1; border: none; outline: none; background: transparent; color: var(--ink); font: 13px inherit; }
+        .nb-ranking-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .nb-ranking-controls .nb-input { width: auto; min-width: 150px; height: 36px; padding-top: 5px; padding-bottom: 5px; }
+        .nb-ranking-table-panel { padding: 18px 18px 8px; }
+        .nb-ranking-table-title { margin-bottom: 12px; }
+        .nb-ranking-table { min-width: 650px; }
+        .nb-ranking-table th { padding-top: 8px; padding-bottom: 10px; }
+        .nb-ranking-table td { height: 52px; }
+        .nb-ranking-table tr.me { background: rgba(44,74,140,0.07); }
+        .nb-ranking-table tr.me td:first-child { box-shadow: inset 3px 0 var(--red-pen); }
+        .nb-ranking-score-col { text-align: right !important; }
+        .nb-rank-number { display: inline-flex; align-items: center; justify-content: center; min-width: 27px; height: 27px; color: var(--slate); font: 600 11px 'JetBrains Mono', monospace; }
+        .nb-rank-number.rank-1, .nb-rank-number.rank-2, .nb-rank-number.rank-3 { border-radius: 7px; }
+        .nb-rank-number.rank-1 { color: #8A6417; background: rgba(185,130,47,0.18); }
+        .nb-rank-number.rank-2 { color: #5F6D80; background: rgba(95,109,128,0.13); }
+        .nb-rank-number.rank-3 { color: #8E5C40; background: rgba(168,110,75,0.14); }
+        .nb-ranking-student { display: flex; align-items: center; gap: 9px; }
+        .nb-ranking-student > span { display: flex; flex-direction: column; gap: 2px; }
+        .nb-ranking-student strong { font-size: 13px; }
+        .nb-ranking-student small { color: var(--red-pen); font: 600 10px 'JetBrains Mono', monospace; }
+        .nb-table-muted { color: var(--slate); font-size: 11px; margin-left: 2px; }
+        .nb-row-progress { display: flex; align-items: center; gap: 8px; min-width: 130px; }
+        .nb-row-progress > div { flex: 1; height: 6px; }
+        .nb-row-progress small { width: 32px; color: var(--slate); font: 10px 'JetBrains Mono', monospace; }
+        .nb-ranking-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 36px 12px 28px; color: var(--slate); }
+        .nb-ranking-empty strong { color: var(--ink); font-size: 13px; }
+        .nb-ranking-empty span { font-size: 11px; }
+
         .nb-barchart { display: flex; align-items: flex-end; gap: 10px; height: 220px; padding: 10px 6px 0; }
         .nb-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
         .nb-bar-track { flex: 1; width: 100%; max-width: 34px; display: flex; align-items: flex-end; }
@@ -2361,6 +2465,10 @@ function App() {
           .nb-exam-room-layout { grid-template-columns: 1fr; }
           .nb-exam-navigator { order: 2; }
           .nb-exam-room-main { order: 1; }
+          .nb-ranking-stat-grid { grid-template-columns: repeat(2, 1fr); }
+          .nb-ranking-insight-grid { grid-template-columns: 1fr; }
+          .nb-ranking-podium { gap: 8px; }
+          .nb-podium-card { padding-left: 8px; padding-right: 8px; }
           .nb-lesson-overview { grid-template-columns: 1fr 1fr; }
           .nb-lesson-progress-card { grid-column: 1 / -1; }
           .nb-lesson-layout { grid-template-columns: 1fr; }
@@ -2384,6 +2492,12 @@ function App() {
           .nb-exam-search { flex-basis: 100%; }
           .nb-exam-room-head { grid-template-columns: 1fr auto; gap: 10px; }
           .nb-exam-room-head > .nb-btn { grid-column: 1 / -1; }
+          .nb-ranking-hero { align-items: flex-start; padding: 20px; }
+          .nb-ranking-title { font-size: 24px; }
+          .nb-ranking-toolbar { align-items: stretch; }
+          .nb-ranking-search { flex-basis: 100%; }
+          .nb-ranking-controls { width: 100%; justify-content: space-between; }
+          .nb-ranking-controls .nb-input { flex: 1; }
           .nb-modal { max-height: 94vh; }
           .nb-exam-stat-grid { gap: 8px; }
           .nb-exam-stat { padding: 11px; }
@@ -2396,8 +2510,27 @@ function App() {
           .nb-exam-card-actions .nb-btn { flex: 1; justify-content: center; }
           .nb-exam-room-meta { gap: 8px; }
           .nb-exam-room-meta > .nb-exam-progress { flex-basis: 100%; max-width: none; }
+          .nb-ranking-podium { grid-template-columns: 1fr 1fr 1fr; min-height: 180px; }
+          .nb-podium-card.rank-1 { min-height: 188px; }
+          .nb-podium-card.rank-2, .nb-podium-card.rank-3 { min-height: 160px; }
+          .nb-podium-card > strong { font-size: 11px; }
+          .nb-podium-card > b { font-size: 15px; }
           .nb-modal-body { padding: 16px; }
           .nb-code-editor { min-height: 160px; }
+          .nb-ranking-stat-grid { gap: 8px; }
+          .nb-ranking-stat { padding: 11px; }
+          .nb-ranking-stat strong { font-size: 16px; }
+          .nb-ranking-hero-badge { display: none; }
+          .nb-ranking-controls { flex-direction: column; align-items: stretch; }
+          .nb-ranking-controls .nb-input { width: 100%; }
+          .nb-ranking-controls .nb-filter-row { justify-content: stretch; }
+          .nb-ranking-controls .nb-chip { flex: 1; }
+          .nb-ranking-podium { gap: 5px; }
+          .nb-podium-card { border-radius: 9px; }
+          .nb-podium-card.rank-1 { min-height: 172px; }
+          .nb-podium-card.rank-2, .nb-podium-card.rank-3 { min-height: 145px; }
+          .nb-podium-card .nb-sub { font-size: 9px; }
+          .nb-ranking-table-panel { padding-left: 10px; padding-right: 10px; }
           .nb-editor-workspace { min-height: 250px; }
           .nb-editor-toolbar, .nb-editor-status { font-size: 9px; }
           .nb-code-highlight, .nb-code-input { font-size: 12px; padding-left: 12px; padding-right: 12px; }
