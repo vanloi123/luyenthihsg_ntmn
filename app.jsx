@@ -100,6 +100,8 @@ function mapSubmission(row) {
     totalTests: row.total_tests ?? null,
     problemTitle: row.problem_title,
     problemPoints: row.problem_points,
+    sourceCode: row.source_code || "",
+    createdAt: row.created_at || null,
   };
 }
 
@@ -221,6 +223,7 @@ async function dbAddSubmission(sub) {
     id: sub.id, student_id: sub.studentId, problem_id: sub.problemId, verdict: sub.verdict,
     score: sub.score, passed_tests: sub.passedTests, total_tests: sub.totalTests,
     problem_title: sub.problemTitle, problem_points: sub.problemPoints,
+    source_code: sub.sourceCode || null,
   });
   if (error) throw error;
 }
@@ -297,48 +300,73 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   }
 }
 
+async function readJudgeResponse(response) {
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try { return JSON.parse(text); }
+  catch (error) { throw new Error(`Dịch vụ chấm trả về dữ liệu không hợp lệ (HTTP ${response.status}).`); }
+}
+
+function judgeResponseMessage(payload, fallback = "Không có thông tin chi tiết.") {
+  if (!payload) return fallback;
+  if (typeof payload === "string") return payload;
+  return payload.error || payload.message || payload.detail || payload.status?.description || fallback;
+}
+
 async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
+  const payload = {
+    source_code: String(sourceCode || ""),
+    language_id: Number(languageId),
+    stdin: String(input ?? ""),
+    expected_output: String(expectedOutput ?? ""),
+    cpu_time_limit: 2,
+    wall_time_limit: 5,
+    memory_limit: 128000,
+  };
   const createResponse = await fetchWithTimeout(
     `${JUDGE0_ENDPOINT}/submissions?base64_encoded=false&wait=false`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source_code: sourceCode,
-        language_id: languageId,
-        stdin: input,
-        expected_output: expectedOutput,
-        cpu_time_limit: 2,
-        wall_time_limit: 5,
-        memory_limit: 128000,
-      }),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
     }
   );
-
+  const created = await readJudgeResponse(createResponse);
   if (!createResponse.ok) {
-    throw new Error(`Không thể tạo lượt chấm (HTTP ${createResponse.status}).`);
+    throw new Error(`Không thể tạo lượt chấm (HTTP ${createResponse.status}): ${judgeResponseMessage(created)}.`);
   }
+  if (!created?.token) throw new Error("Dịch vụ chấm không trả về mã lượt chấm.");
 
-  const created = await createResponse.json();
-  if (!created.token) throw new Error("Dịch vụ chấm không trả về mã lượt chấm.");
-
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    await wait(500);
+  let lastPollError = "";
+  for (let attempt = 0; attempt < 36; attempt += 1) {
+    await wait(attempt < 4 ? 500 : 800);
     const resultResponse = await fetchWithTimeout(
       `${JUDGE0_ENDPOINT}/submissions/${encodeURIComponent(created.token)}?base64_encoded=false`,
-      {},
+      { headers: { Accept: "application/json" } },
       10000
     );
-    if (!resultResponse.ok) {
-      throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}).`);
-    }
+    const result = await readJudgeResponse(resultResponse);
 
-    const result = await resultResponse.json();
+    // Judge0 đôi khi trả HTTP 400/429 hoặc body rỗng trong lúc hàng đợi chưa ổn định.
+    // Retry polling giúp tránh biến lỗi tạm thời thành SE giả.
+    if ([400, 408, 425, 429, 500, 502, 503, 504].includes(resultResponse.status)) {
+      lastPollError = `HTTP ${resultResponse.status}: ${judgeResponseMessage(result, "phản hồi tạm thời không có nội dung")}`;
+      if (attempt < 10) continue;
+      throw new Error(`Không thể lấy kết quả chấm sau nhiều lần thử (${lastPollError}).`);
+    }
+    if (!resultResponse.ok) {
+      throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}): ${judgeResponseMessage(result)}.`);
+    }
+    if (!result) continue;
+
     const statusId = result.status?.id;
+    if (result.error && !result.status) {
+      throw new Error(`Judge0 từ chối lượt chấm: ${judgeResponseMessage(result)}.`);
+    }
     if (statusId !== 1 && statusId !== 2) return result;
   }
 
-  throw new Error("Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
+  throw new Error(lastPollError || "Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
 }
 
 function getProblemTestCases(problem) {
@@ -614,12 +642,22 @@ function MultilineCodeBlock({ label, value }) {
   );
 }
 
-function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0 }) {
+function formatSubmissionDate(value) {
+  if (!value) return "Thời gian chưa có";
+  try { return new Intl.DateTimeFormat("vi-VN", { dateStyle: "short", timeStyle: "short" }).format(new Date(value)); }
+  catch (e) { return "Thời gian chưa có"; }
+}
+
+function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0, submissionHistory = [] }) {
   const [code, setCode] = useState(
     problem.isPython ? "# Viết code Python của bạn tại đây\n\n" : "// Viết code của bạn tại đây\n\n"
   );
   const [judging, setJudging] = useState(false);
   const [result, setResult] = useState(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [selectedHistoryId, setSelectedHistoryId] = useState(null);
+  const orderedHistory = [...submissionHistory].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
   async function handleSubmit() {
     if (readOnly || judging) return;
@@ -628,7 +666,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
     try {
       const r = await judgeSourceCode(problem, code);
       setResult(r);
-      onVerdict && onVerdict(problem.id, r);
+      onVerdict && onVerdict(problem.id, r, code);
     } catch (error) {
       setResult({
         verdict: "SE",
@@ -666,6 +704,13 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
               </div>
             </div>
             {!readOnly && <div className="nb-solver-meta"><span>Điểm tốt nhất: <strong>{bestScore}/{problem.points}</strong></span><span>Đã nộp: <strong>{attemptCount}</strong> lần</span><span>{getProblemTestCases(problem).length} test case</span></div>}
+            {!readOnly && submissionHistory.length > 0 && <div className="nb-history-panel">
+              <button type="button" className="nb-history-toggle" onClick={() => setHistoryOpen((open) => !open)}><RefreshCw size={14} /> Lịch sử code đã nộp ({submissionHistory.length})<ChevronRight size={14} className={historyOpen ? "nb-history-chevron open" : "nb-history-chevron"} /></button>
+              {historyOpen && <div className="nb-history-body">
+                <div className="nb-history-list">{orderedHistory.map((submission) => <button type="button" key={submission.id} className={"nb-history-item " + (selectedHistory?.id === submission.id ? "active" : "")} onClick={() => setSelectedHistoryId(submission.id)}><div><VerdictPill verdict={submission.verdict} /><span className="nb-history-date">{formatSubmissionDate(submission.createdAt)}</span></div><strong>{submission.score ?? 0}/{submission.problemPoints ?? problem.points}đ</strong><small>{submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test đạt` : "Bản nộp cũ"}</small></button>)}</div>
+                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" disabled={!selectedHistory.sourceCode} onClick={() => { setCode(selectedHistory.sourceCode); setResult(null); setHistoryOpen(false); }}><Code2 size={14} /> Khôi phục vào editor</button></div>{selectedHistory.sourceCode ? <pre className="nb-history-code">{selectedHistory.sourceCode}</pre> : <p className="nb-sub">Lượt nộp này được tạo trước khi hệ thống lưu source code.</p>}</div>}
+              </div>}
+            </div>}
           </div>
 
           <div className="nb-modal-col">
@@ -1283,7 +1328,8 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           alreadySolved={solvedByCurrent(active.id)}
           bestScore={problemStats(active.id).bestScore}
           attemptCount={problemStats(active.id).attempts}
-          onVerdict={(problemId, result) => onVerdict(problemId, result)}
+          submissionHistory={currentSubmissions}
+          onVerdict={(problemId, result, sourceCode) => onVerdict(problemId, result, sourceCode)}
         />
       )}
     </div>
@@ -1366,7 +1412,7 @@ function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict,
           readOnly={isTeacher || locked}
           disabledLabel={isTeacher ? "Chỉ xem trước (GV)" : locked ? "Đã hết giờ" : undefined}
           alreadySolved={solvedByCurrent(active.id)}
-          onVerdict={(problemId, verdict) => onVerdict(problemId, verdict)}
+          onVerdict={(problemId, result, sourceCode) => onVerdict(problemId, result, sourceCode)}
         />
       )}
     </div>
@@ -1827,7 +1873,7 @@ function App() {
   const solvedByCurrent = (problemId) =>
     !!currentUser && !isTeacher && submissions.some((s) => s.studentId === currentUser.id && s.problemId === problemId && s.verdict === "AC");
 
-  function registerVerdict(problemId, result) {
+  function registerVerdict(problemId, result, sourceCode = "") {
     if (!currentUser || isTeacher) return;
     const p = problems.find((pp) => pp.id === problemId);
     const verdict = typeof result === "string" ? result : result?.verdict;
@@ -1845,6 +1891,8 @@ function App() {
       totalTests: typeof result === "object" ? result.totalTests ?? null : null,
       problemTitle: p ? p.title : problemId,
       problemPoints: p ? p.points : 0,
+      sourceCode: String(sourceCode || ""),
+      createdAt: new Date().toISOString(),
     };
     setSubmissions((prev) => [...prev, sub]);
     dbAddSubmission(sub).catch(() => setStorageError(true));
@@ -2156,6 +2204,22 @@ function App() {
         .nb-modal-actions { margin-top: 10px; display: flex; }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
         .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
+        .nb-history-panel { margin-top: 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; overflow: hidden; }
+        .nb-history-toggle { width: 100%; display: flex; align-items: center; gap: 7px; padding: 10px 11px; background: transparent; border: none; color: var(--pen-blue); font: 600 12px inherit; cursor: pointer; text-align: left; }
+        .nb-history-chevron { margin-left: auto; transition: transform .15s; }
+        .nb-history-chevron.open { transform: rotate(90deg); }
+        .nb-history-body { border-top: 1px solid var(--paper-line); padding: 9px; }
+        .nb-history-list { display: flex; flex-direction: column; gap: 6px; max-height: 220px; overflow-y: auto; }
+        .nb-history-item { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; padding: 8px; border: 1px solid transparent; border-radius: 6px; background: #F8F8F4; text-align: left; cursor: pointer; font-family: inherit; }
+        .nb-history-item:hover, .nb-history-item.active { border-color: var(--pen-blue); background: rgba(44,74,140,0.06); }
+        .nb-history-item > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .nb-history-item strong { color: var(--ink); font: 700 11px 'JetBrains Mono', monospace; }
+        .nb-history-item small { grid-column: 1 / -1; color: var(--slate); font-size: 10px; }
+        .nb-history-date { color: var(--slate); font-size: 10px; }
+        .nb-history-viewer { margin-top: 9px; border-top: 1px dashed var(--paper-line); padding-top: 9px; }
+        .nb-history-viewer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; font-size: 11px; }
+        .nb-history-viewer-head .nb-btn { padding: 5px 8px; font-size: 10px; }
+        .nb-history-code { max-height: 260px; overflow: auto; margin: 0; padding: 10px; border-radius: 6px; background: var(--ink); color: #D8DEE9; white-space: pre-wrap; word-break: break-word; font: 11px/1.5 'JetBrains Mono', monospace; }
         .nb-result { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
         .nb-result-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
         .nb-result-score { color: var(--pen-blue); font: 700 12px 'JetBrains Mono', monospace; }
