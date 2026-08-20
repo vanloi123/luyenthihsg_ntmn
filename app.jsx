@@ -816,99 +816,42 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 /*  VIEWS                                                                   */
 /* ---------------------------------------------------------------------- */
 
-function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount }) {
+function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, onNavigate }) {
   const isTeacher = currentUser.role === "teacher";
+  const firstName = currentUser.name.split(" ").slice(-1)[0];
 
   if (!isTeacher) {
-    const rankSorted = [...students].sort((a, b) => points(b.id) - points(a.id));
-    const rank = rankSorted.findIndex((s) => s.id === currentUser.id) + 1;
-    const activeContest = contests.find((c) => c.status === "active");
-    const recentAC = submissions.filter((s) => s.studentId === currentUser.id && s.verdict === "AC").slice(-4).reverse();
+    const rankSorted = [...students].sort((a, b) => (points(b.id) - points(a.id)) || (solvedCount(b.id) - solvedCount(a.id)));
+    const rank = rankSorted.findIndex((student) => student.id === currentUser.id) + 1;
+    const activeContest = contests.find((contest) => contest.status === "active");
+    const recentActivity = submissions.filter((submission) => submission.studentId === currentUser.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 5);
+    const solved = solvedCount(currentUser.id);
+    const progress = problemsCount ? Math.round((solved / problemsCount) * 100) : 0;
+    const bestRecent = recentActivity.find((submission) => submission.verdict === "AC");
 
     return (
-      <div>
-        <SectionHeading eyebrow="Trang cá nhân" title={"Chào " + currentUser.name.split(" ").slice(-1)[0] + " 👋"}
-          sub="Đây là tiến độ ôn luyện của em trong đội tuyển Tin học." />
-        <div className="nb-stat-grid">
-          <div className="nb-stat-card"><TrendingUp size={18} /><div className="nb-stat-num">{points(currentUser.id)}</div><div className="nb-stat-label">Tổng điểm</div></div>
-          <div className="nb-stat-card"><Award size={18} /><div className="nb-stat-num">#{rank}</div><div className="nb-stat-label">Xếp hạng lớp</div></div>
-          <div className="nb-stat-card"><ListChecks size={18} /><div className="nb-stat-num">{solvedCount(currentUser.id)}/{problemsCount}</div><div className="nb-stat-label">Bài đã giải</div></div>
-          <div className="nb-stat-card"><Flame size={18} /><div className="nb-stat-num">{currentUser.streak || 0}</div><div className="nb-stat-label">Ngày luyện liên tục</div></div>
-        </div>
+      <div className="nb-home-page">
+        <div className="nb-home-hero student"><div><div className="nb-eyebrow">Bảng điều khiển cá nhân · Đội tuyển Tin học</div><h1>Chào {firstName}</h1><p>Tiếp tục nhịp học hôm nay và tiến gần hơn đến mục tiêu của em.</p></div><div className="nb-home-hero-rank"><Award size={21} /><span><strong>#{rank > 0 ? rank : "—"}</strong><small>thứ hạng hiện tại</small></span></div></div>
+        <div className="nb-home-stat-grid"><div className="nb-home-stat"><span className="blue"><TrendingUp size={17} /></span><div><strong>{points(currentUser.id)}</strong><small>Tổng điểm</small></div></div><div className="nb-home-stat"><span className="gold"><Award size={17} /></span><div><strong>#{rank > 0 ? rank : "—"}</strong><small>Xếp hạng lớp</small></div></div><div className="nb-home-stat"><span className="green"><ListChecks size={17} /></span><div><strong>{solved}/{problemsCount}</strong><small>Bài đã giải</small></div></div><div className="nb-home-stat"><span className="red"><Flame size={17} /></span><div><strong>{currentUser.streak || 0}</strong><small>Ngày liên tục</small></div></div></div>
 
-        <div className="nb-two-col">
-          <div className="nb-panel">
-            <h3 className="nb-h3" style={{ marginBottom: 10 }}>Hoạt động gần đây</h3>
-            {recentAC.length === 0 ? (
-              <p className="nb-sub">Chưa có bài nào được giải — bắt đầu từ tab "Luyện tập &amp; Python" nhé.</p>
-            ) : (
-              <ul className="nb-activity-list">
-                {recentAC.map((s, i) => (
-                  <li key={i}>
-                    <CheckCircle2 size={15} style={{ color: "var(--ac-green)" }} />
-                    <span>Đã giải <strong>{s.problemTitle}</strong></span>
-                    <span className="nb-sub" style={{ marginLeft: "auto" }}>+{s.problemPoints}đ</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+        <div className="nb-home-main-grid"><section className="nb-home-progress-card"><div className="nb-home-card-head"><div><div className="nb-eyebrow">Mục tiêu học tập</div><h2>Tiến độ luyện tập</h2></div><span className="nb-home-percent">{progress}%</span></div><p className="nb-sub">Em đã hoàn thành {solved} trên tổng số {problemsCount} bài tập trong ngân hàng.</p><div className="nb-home-progress"><span style={{ width: `${progress}%` }} /></div><div className="nb-home-progress-foot"><span>Tiếp tục duy trì nhịp học đều đặn</span><strong>{problemsCount - solved > 0 ? `${problemsCount - solved} bài còn lại` : "Đã hoàn thành tất cả"}</strong></div><div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Luyện tập ngay</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("lessons")}><BookOpen size={15} /> Xem bài giảng</button></div></section><section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}><div className="nb-home-card-head"><div><div className="nb-eyebrow">Đề thi thử</div><h2>{activeContest ? "Kỳ thi đang mở" : "Sẵn sàng cho thử thách?"}</h2></div><span className={activeContest ? "nb-home-live-dot" : "nb-home-clock-icon"}>{activeContest ? <span /> : <Clock size={19} />}</span></div>{activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemIds.length} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Play size={15} /> Vào thi thử</button></> : <><p className="nb-sub">Hiện chưa có đề đang mở. Em có thể xem lịch và chuẩn bị trước cho kỳ thi tiếp theo.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Clock size={15} /> Xem lịch đề thi</button></>}</section></div>
 
-          <div className="nb-panel">
-            <h3 className="nb-h3" style={{ marginBottom: 10 }}>Đề thi thử</h3>
-            {activeContest ? (
-              <div>
-                <p className="nb-para">Đang mở: <strong>{activeContest.title}</strong></p>
-                <p className="nb-sub">Thời gian làm bài {activeContest.duration} phút — vào tab "Đề thi thử" để bắt đầu.</p>
-              </div>
-            ) : (
-              <p className="nb-sub">Hiện không có đề thi nào đang mở. Xem lịch ở tab "Đề thi thử".</p>
-            )}
-          </div>
-        </div>
+        <div className="nb-home-lower-grid"><section className="nb-panel nb-home-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Nhật ký học tập</div><h2>Hoạt động gần đây</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("problems")}>Xem tất cả <ChevronRight size={14} /></button></div>{recentActivity.length === 0 ? <div className="nb-home-empty"><Code2 size={22} /><strong>Chưa có hoạt động</strong><span>Bắt đầu giải bài đầu tiên để theo dõi tiến độ.</span></div> : <div className="nb-home-activity-list">{recentActivity.map((submission, index) => <div className="nb-home-activity-item" key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><div><strong>{submission.verdict === "AC" ? "Đã giải thành công" : "Đã nộp bài"}</strong><small>{submission.problemTitle || submission.problemId} · {submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test` : submission.verdict}</small></div><span className="nb-home-activity-score">{submission.score ?? 0}đ</span></div>)}</div>}</section><section className="nb-panel nb-home-next"><div className="nb-eyebrow">Gợi ý tiếp theo</div><h2>{bestRecent ? "Duy trì đà tiến bộ" : "Bắt đầu hành trình"}</h2><p className="nb-sub">{bestRecent ? `Bài gần nhất em giải tốt là ${bestRecent.problemTitle || bestRecent.problemId}. Hãy thử một bài khó hơn.` : "Hãy chọn một bài giảng hoặc bài tập để bắt đầu xây dựng thành tích."}</p><div className="nb-home-next-links"><button onClick={() => onNavigate?.("problems")}><span><Code2 size={15} /> Bài tập đề xuất</span><ChevronRight size={15} /></button><button onClick={() => onNavigate?.("lessons")}><span><BookOpen size={15} /> Học lý thuyết</span><ChevronRight size={15} /></button><button onClick={() => onNavigate?.("leaderboard")}><span><Trophy size={15} /> Xem bảng xếp hạng</span><ChevronRight size={15} /></button></div></section></div>
       </div>
     );
   }
 
-  const avgPoints = students.length ? Math.round(students.reduce((sum, s) => sum + points(s.id), 0) / students.length) : 0;
-  const topThree = [...students].sort((a, b) => points(b.id) - points(a.id)).slice(0, 3);
-  const behind = [...students].sort((a, b) => solvedCount(a.id) - solvedCount(b.id)).slice(0, 3);
-  const openThreads = discussions.filter((d) => d.replies.length === 0);
+  const avgPoints = students.length ? Math.round(students.reduce((sum, student) => sum + points(student.id), 0) / students.length) : 0;
+  const topThree = [...students].sort((a, b) => (points(b.id) - points(a.id)) || (solvedCount(b.id) - solvedCount(a.id))).slice(0, 3);
+  const behind = [...students].sort((a, b) => solvedCount(a.id) - solvedCount(b.id)).slice(0, 4);
+  const openThreads = discussions.filter((discussion) => discussion.replies.length === 0);
+  const activeContest = contests.find((contest) => contest.status === "active");
+  const activeStudents = students.filter((student) => solvedCount(student.id) > 0).length;
+  const totalSolved = students.reduce((sum, student) => sum + solvedCount(student.id), 0);
+  const recentClassActivity = submissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 4);
 
   return (
-    <div>
-      <SectionHeading eyebrow="Bảng điều khiển giáo viên" title="Tổng quan đội tuyển"
-        sub={"Theo dõi tiến độ ôn luyện của " + students.length + " học sinh."} />
-      <div className="nb-stat-grid">
-        <div className="nb-stat-card"><Users size={18} /><div className="nb-stat-num">{students.length}</div><div className="nb-stat-label">Học sinh</div></div>
-        <div className="nb-stat-card"><TrendingUp size={18} /><div className="nb-stat-num">{avgPoints}</div><div className="nb-stat-label">Điểm trung bình</div></div>
-        <div className="nb-stat-card"><Code2 size={18} /><div className="nb-stat-num">{problemsCount}</div><div className="nb-stat-label">Bài tập trong ngân hàng</div></div>
-        <div className="nb-stat-card"><AlertCircle size={18} /><div className="nb-stat-num">{openThreads.length}</div><div className="nb-stat-label">Câu hỏi chưa trả lời</div></div>
-      </div>
-
-      <div className="nb-two-col">
-        <div className="nb-panel">
-          <h3 className="nb-h3" style={{ marginBottom: 10 }}>Học sinh nổi bật</h3>
-          <ul className="nb-activity-list">
-            {topThree.map((s) => (
-              <li key={s.id}><Avatar name={s.name} size={26} /><span>{s.name}</span>
-                <span className="nb-sub" style={{ marginLeft: "auto" }}>{points(s.id)}đ</span></li>
-            ))}
-            {topThree.length === 0 && <p className="nb-sub">Chưa có dữ liệu.</p>}
-          </ul>
-        </div>
-        <div className="nb-panel">
-          <h3 className="nb-h3" style={{ marginBottom: 10 }}>Cần quan tâm thêm</h3>
-          <ul className="nb-activity-list">
-            {behind.map((s) => (
-              <li key={s.id}><Avatar name={s.name} size={26} /><span>{s.name}</span>
-                <span className="nb-sub" style={{ marginLeft: "auto" }}>{solvedCount(s.id)} bài đã giải</span></li>
-            ))}
-            {behind.length === 0 && <p className="nb-sub">Chưa có dữ liệu.</p>}
-          </ul>
-        </div>
-      </div>
-    </div>
+    <div className="nb-home-page"><div className="nb-home-hero teacher"><div><div className="nb-eyebrow">Bảng điều khiển giáo viên · Đội tuyển Tin học</div><h1>Tổng quan đội tuyển</h1><p>Theo dõi nhịp học, kết quả và những điểm cần hỗ trợ của lớp.</p></div><div className="nb-home-hero-rank"><Users size={21} /><span><strong>{students.length}</strong><small>học sinh trong lớp</small></span></div></div><div className="nb-home-stat-grid"><div className="nb-home-stat"><span className="blue"><Users size={17} /></span><div><strong>{students.length}</strong><small>Học sinh</small></div></div><div className="nb-home-stat"><span className="green"><TrendingUp size={17} /></span><div><strong>{avgPoints}</strong><small>Điểm trung bình</small></div></div><div className="nb-home-stat"><span className="gold"><Code2 size={17} /></span><div><strong>{problemsCount}</strong><small>Bài trong ngân hàng</small></div></div><div className="nb-home-stat"><span className="red"><MessageSquare size={17} /></span><div><strong>{openThreads.length}</strong><small>Câu hỏi cần trả lời</small></div></div></div><div className="nb-home-main-grid"><section className="nb-home-class-card"><div className="nb-home-card-head"><div><div className="nb-eyebrow">Sức khỏe lớp học</div><h2>Nhịp luyện tập</h2></div><span className="nb-home-percent">{students.length ? Math.round((activeStudents / students.length) * 100) : 0}%</span></div><p className="nb-sub">{activeStudents}/{students.length} học sinh đã bắt đầu giải bài.</p><div className="nb-home-progress"><span style={{ width: `${students.length ? (activeStudents / students.length) * 100 : 0}%` }} /></div><div className="nb-home-progress-foot"><span>{totalSolved} lượt bài đã được giải</span><strong>{activeStudents} học sinh đang hoạt động</strong></div><div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("leaderboard")}><Trophy size={15} /> Xem bảng xếp hạng</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Quản lý bài tập</button></div></section><section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}><div className="nb-home-card-head"><div><div className="nb-eyebrow">Trạng thái kỳ thi</div><h2>{activeContest ? "Đang có đề mở" : "Chưa có đề đang mở"}</h2></div><Clock size={19} /></div>{activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemIds.length} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Eye size={15} /> Quản lý kỳ thi</button></> : <><p className="nb-sub">Tạo hoặc mở một kỳ thi để học sinh bắt đầu thử sức.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Plus size={15} /> Mở khu vực đề thi</button></>}</section></div><div className="nb-home-lower-grid"><section className="nb-panel nb-home-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Thành tích lớp</div><h2>Học sinh nổi bật</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("leaderboard")}>Xem bảng đầy đủ <ChevronRight size={14} /></button></div>{topThree.length === 0 ? <div className="nb-home-empty"><Users size={22} /><strong>Chưa có dữ liệu</strong><span>Thành tích sẽ xuất hiện khi học sinh bắt đầu nộp bài.</span></div> : <div className="nb-home-student-list">{topThree.map((student, index) => <div className="nb-home-student-row" key={student.id}><span className={`nb-home-rank rank-${index + 1}`}>{index + 1}</span><Avatar name={student.name} size={32} /><div><strong>{student.name}</strong><small>{solvedCount(student.id)} bài đã giải</small></div><b>{points(student.id)}<small>đ</small></b></div>)}</div>}</section><section className="nb-panel nb-home-attention"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo dõi hỗ trợ</div><h2>Cần quan tâm thêm</h2></div><AlertCircle size={18} style={{ color: "var(--gold)" }} /></div>{behind.length === 0 ? <p className="nb-sub">Chưa có dữ liệu để phân tích.</p> : <div className="nb-home-support-list">{behind.map((student) => <div key={student.id}><Avatar name={student.name} size={28} /><span><strong>{student.name}</strong><small>{solvedCount(student.id)} bài đã giải</small></span><button onClick={() => onNavigate?.("problems")} aria-label={`Xem bài tập của ${student.name}`}><ChevronRight size={15} /></button></div>)}</div>}</section></div><section className="nb-panel nb-home-class-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo thời gian thực</div><h2>Hoạt động gần đây của lớp</h2></div><span className="nb-pill nb-pill-ac">{recentClassActivity.length} cập nhật</span></div>{recentClassActivity.length === 0 ? <p className="nb-sub">Chưa có lượt nộp bài gần đây.</p> : <div className="nb-home-class-feed">{recentClassActivity.map((submission, index) => <div key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><span><strong>{submission.studentId}</strong> đã nộp <b>{submission.problemTitle || submission.problemId}</b><small>{submission.verdict} · {submission.score ?? 0} điểm</small></span></div>)}</div>}</section></div>
   );
 }
 
@@ -1401,7 +1344,10 @@ function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict,
     if (isTeacher) return;
     const key = "contest-start:" + contest.id;
     let startTs = lsGet(key);
-    if (!startTs) { startTs = Date.now(); lsSet(key, startTs); }
+    if (!startTs) {
+      startTs = Date.now();
+      lsSet(key, startTs);
+    }
     const elapsed = Math.floor((Date.now() - startTs) / 1000);
     const left = Math.max(0, contest.duration * 60 - elapsed);
     setRemaining(left);
@@ -1411,36 +1357,62 @@ function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict,
 
   useEffect(() => {
     if (isTeacher || !ready || locked) return;
-    const timerId = setInterval(() => {
-      setRemaining((value) => {
-        if (value <= 1) { setLocked(true); return 0; }
-        return value - 1;
+    const id = setInterval(() => {
+      setRemaining((r) => {
+        if (r <= 1) { setLocked(true); return 0; }
+        return r - 1;
       });
     }, 1000);
-    return () => clearInterval(timerId);
+    return () => clearInterval(id);
   }, [isTeacher, ready, locked]);
 
-  const contestProblems = problems.filter((problem) => contest.problemIds.includes(problem.id));
-  const doneCount = contestProblems.filter((problem) => solvedByCurrent(problem.id)).length;
-  const progress = contestProblems.length ? Math.round((doneCount / contestProblems.length) * 100) : 0;
   const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
   const ss = String(remaining % 60).padStart(2, "0");
-  const timerWarning = !isTeacher && remaining > 0 && remaining <= 300;
+  const contestProblems = problems.filter((p) => contest.problemIds.includes(p.id));
+  const doneCount = contestProblems.filter((p) => solvedByCurrent(p.id)).length;
 
   return (
-    <div className="nb-exam-room">
-      <div className="nb-exam-room-head">
-        <button className="nb-btn nb-btn-ghost" onClick={onExit}><ChevronLeft size={16} /> Danh sách đề thi</button>
-        <div className="nb-exam-room-title"><div className="nb-eyebrow">Phòng thi · {contest.id}</div><h2>{contest.title}</h2></div>
-        <div className={`nb-exam-timer ${timerWarning ? "warning" : ""}`}>{isTeacher ? <><Eye size={15} /> Xem trước</> : !ready ? "Đang tải…" : locked ? <><Lock size={15} /> Đã hết giờ</> : <><Clock size={15} /> {mm}:{ss}</>}</div>
+    <div>
+      <div className="nb-contest-bar">
+        <button className="nb-btn nb-btn-ghost" onClick={onExit}><ChevronLeft size={16} /> Rời khỏi đề thi</button>
+        <div className="nb-contest-timer">
+          {isTeacher ? "Chế độ xem trước (GV)" : !ready ? "Đang tải…" : locked ? "Đã hết giờ" : <><Clock size={15} /> {mm}:{ss}</>}
+        </div>
+        <div className="nb-sub">{doneCount}/{contestProblems.length} bài đã hoàn thành</div>
       </div>
-      <div className="nb-exam-room-meta"><span><Clock size={14} /> {contest.duration} phút</span><span><ListChecks size={14} /> {contestProblems.length} bài tập</span><span><CheckCircle2 size={14} /> {doneCount}/{contestProblems.length} đã hoàn thành</span><div className="nb-exam-progress"><span style={{ width: `${progress}%` }} /></div><strong>{progress}%</strong></div>
-      {locked && !isTeacher && <div className="nb-locked-banner"><AlertCircle size={15} /> Đã hết giờ làm bài. Em vẫn có thể xem lại đề nhưng không thể nộp bài mới.</div>}
-      <div className="nb-exam-room-layout">
-        <aside className="nb-exam-navigator"><div className="nb-exam-navigator-head"><div className="nb-eyebrow">Danh sách bài</div><strong>{doneCount}/{contestProblems.length}</strong></div><div className="nb-exam-navigator-list">{contestProblems.map((problem, index) => { const solved = solvedByCurrent(problem.id); const selected = active?.id === problem.id; return <button type="button" key={problem.id} className={`nb-exam-nav-item ${selected ? "active" : ""} ${solved ? "done" : ""}`} onClick={() => setActive(problem)}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{problem.title}</strong><small>{problem.points} điểm · {problem.isPython ? "Python" : "C++17"}</small></div>{solved ? <CheckCircle2 size={15} /> : <ChevronRight size={15} />}</button>; })}</div></aside>
-        <main className="nb-exam-room-main"><div className="nb-exam-room-intro"><div className="nb-eyebrow">{locked && !isTeacher ? "Đã khóa nộp bài" : "Sẵn sàng làm bài"}</div><h3>{active ? active.title : "Chọn một bài để bắt đầu"}</h3><p>{active ? "Đọc kỹ đề, kiểm tra input/output mẫu và nộp bài khi em đã sẵn sàng." : "Chọn bài trong danh sách bên trái. Em có thể quay lại bất kỳ bài nào trong thời gian còn lại."}</p></div><div className="nb-exam-problem-grid">{contestProblems.map((problem, index) => { const solved = solvedByCurrent(problem.id); return <button type="button" key={problem.id} className={`nb-exam-problem-card ${solved ? "done" : ""}`} onClick={() => setActive(problem)}><div className="nb-exam-problem-card-top"><span className="nb-exam-index">BÀI {String(index + 1).padStart(2, "0")}</span>{solved ? <span className="nb-exam-done"><CheckCircle2 size={14} /> Đã giải</span> : <span className="nb-sub">Chưa làm</span>}</div><h4>{problem.title}</h4><div className="nb-exam-problem-card-foot"><DifficultyTag level={problem.difficulty} /><span>{problem.points} điểm</span></div></button>; })}</div></main>
+      {locked && !isTeacher && (
+        <div className="nb-locked-banner">
+          <AlertCircle size={15} /> Đã hết giờ làm bài. Em vẫn có thể xem lại đề nhưng không thể nộp bài mới.
+        </div>
+      )}
+      <div className="nb-problem-grid">
+        {contestProblems.map((p) => {
+          const solved = solvedByCurrent(p.id);
+          return (
+            <button key={p.id} className="nb-problem-card" onClick={() => setActive(p)}>
+              <div className="nb-problem-top">
+                <span className="nb-eyebrow">{p.id}</span>
+                {solved && <CheckCircle2 size={16} style={{ color: "var(--ac-green)" }} />}
+              </div>
+              <div className="nb-problem-title">{p.title}</div>
+              <div className="nb-problem-bottom">
+                <DifficultyTag level={p.difficulty} />
+                <span className="nb-sub">{p.points}đ</span>
+              </div>
+            </button>
+          );
+        })}
       </div>
-      {active && <ProblemSolverModal problem={active} onClose={() => setActive(null)} readOnly={isTeacher || locked} disabledLabel={isTeacher ? "Chỉ xem trước (GV)" : locked ? "Đã hết giờ" : undefined} alreadySolved={solvedByCurrent(active.id)} onVerdict={(problemId, result, sourceCode) => onVerdict(problemId, result, sourceCode)} />}
+      {active && (
+        <ProblemSolverModal
+          problem={active}
+          onClose={() => setActive(null)}
+          readOnly={isTeacher || locked}
+          disabledLabel={isTeacher ? "Chỉ xem trước (GV)" : locked ? "Đã hết giờ" : undefined}
+          alreadySolved={solvedByCurrent(active.id)}
+          onVerdict={(problemId, result, sourceCode) => onVerdict(problemId, result, sourceCode)}
+        />
+      )}
     </div>
   );
 }
@@ -1448,49 +1420,119 @@ function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict,
 function ContestsView({ contests, isTeacher, students, points, problems, addContest, setContestStatus, solvedByCurrent, onVerdict }) {
   const [running, setRunning] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("all");
   const [form, setForm] = useState({ title: "", date: "", duration: 90, problemIds: [] });
 
   const statusMeta = {
-    active: { label: "Đang mở", cls: "nb-pill-ac", tone: "active" },
-    upcoming: { label: "Sắp diễn ra", cls: "nb-pill-pending", tone: "upcoming" },
-    completed: { label: "Đã kết thúc", cls: "nb-pill-wa", tone: "completed" },
+    active: { label: "Đang mở", cls: "nb-pill-ac" },
+    upcoming: { label: "Sắp diễn ra", cls: "nb-pill-pending" },
+    completed: { label: "Đã kết thúc", cls: "nb-pill-wa" },
   };
 
-  const visibleContests = useMemo(() => contests.filter((contest) => {
-    const normalized = query.trim().toLowerCase();
-    const matchesQuery = !normalized || contest.title.toLowerCase().includes(normalized) || String(contest.date || "").toLowerCase().includes(normalized);
-    return matchesQuery && (filter === "all" || contest.status === filter);
-  }), [contests, query, filter]);
-
-  const stats = useMemo(() => ({ total: contests.length, active: contests.filter((c) => c.status === "active").length, upcoming: contests.filter((c) => c.status === "upcoming").length, completed: contests.filter((c) => c.status === "completed").length }), [contests]);
-
   function toggleProblem(id) {
-    setForm((current) => ({ ...current, problemIds: current.problemIds.includes(id) ? current.problemIds.filter((value) => value !== id) : [...current.problemIds, id] }));
+    setForm((f) => ({ ...f, problemIds: f.problemIds.includes(id) ? f.problemIds.filter((x) => x !== id) : [...f.problemIds, id] }));
   }
 
-  function submit(event) {
-    event.preventDefault();
+  function submit(e) {
+    e.preventDefault();
     if (!form.title.trim() || form.problemIds.length === 0) return;
-    addContest({ id: "kt" + Date.now(), title: form.title.trim(), status: "upcoming", date: form.date || "Chưa xếp lịch", duration: Number(form.duration) || 60, problemIds: form.problemIds });
+    addContest({
+      id: "kt" + Date.now(), title: form.title, status: "upcoming",
+      date: form.date || "Chưa xếp lịch", duration: Number(form.duration) || 60, problemIds: form.problemIds,
+    });
     setForm({ title: "", date: "", duration: 90, problemIds: [] });
     setShowForm(false);
   }
 
-  if (running) return <ContestRunner contest={running} onExit={() => setRunning(null)} isTeacher={isTeacher} problems={problems} solvedByCurrent={solvedByCurrent} onVerdict={onVerdict} />;
+  if (running) {
+    return (
+      <ContestRunner
+        contest={running} onExit={() => setRunning(null)} isTeacher={isTeacher}
+        problems={problems} solvedByCurrent={solvedByCurrent} onVerdict={onVerdict}
+      />
+    );
+  }
 
   return (
-    <div className="nb-exam-page">
-      <div className="nb-exam-hero"><div><div className="nb-eyebrow">Kiểm tra định kỳ · Mô phỏng phòng thi</div><h2 className="nb-exam-title">Đề thi thử</h2><p className="nb-exam-sub">Luyện tập trong điều kiện giống kỳ thi thật, có tính giờ và chấm tự động.</p></div><div className="nb-exam-hero-icon"><Clock size={28} /><span>Thi thật<br />Tự tin hơn</span></div></div>
-      <div className="nb-exam-stat-grid"><div className="nb-exam-stat"><span className="blue"><ListChecks size={17} /></span><div><strong>{stats.total}</strong><small>Tổng số đề</small></div></div><div className="nb-exam-stat"><span className="green"><Play size={17} /></span><div><strong>{stats.active}</strong><small>Đang mở</small></div></div><div className="nb-exam-stat"><span className="gold"><Clock size={17} /></span><div><strong>{stats.upcoming}</strong><small>Sắp diễn ra</small></div></div><div className="nb-exam-stat"><span className="ink"><CheckCircle2 size={17} /></span><div><strong>{stats.completed}</strong><small>Đã kết thúc</small></div></div></div>
+    <div>
+      <SectionHeading eyebrow="Kiểm tra định kỳ" title="Đề thi thử có tính giờ"
+        sub="Mô phỏng áp lực phòng thi thật — đồng hồ đếm ngược, chấm tự động." />
 
-      {isTeacher && <div className="nb-exam-create-panel"><button className="nb-btn nb-btn-primary" onClick={() => setShowForm((value) => !value)}><Plus size={16} /> {showForm ? "Đóng biểu mẫu" : "Tạo đề thi mới"}</button>{showForm && <form onSubmit={submit} className="nb-exam-form"><div className="nb-exam-form-heading"><div><div className="nb-eyebrow">Quản trị kỳ thi</div><h3 className="nb-h3">Thiết lập đề thi</h3></div><span>{form.problemIds.length} bài đã chọn</span></div><div className="nb-exam-form-grid"><label><span>Tên đề thi</span><input className="nb-input" placeholder="Ví dụ: Vòng loại tháng 9" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label><span>Ngày thi</span><input className="nb-input" placeholder="20/09/2026 · 08:00" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label><label><span>Thời lượng (phút)</span><input className="nb-input" type="number" min="10" max="300" value={form.duration} onChange={(event) => setForm({ ...form, duration: event.target.value })} /></label></div><div className="nb-exam-select-head"><div><strong>Chọn bài tập</strong><small>Đề thi cần ít nhất một bài</small></div><span>{form.problemIds.length}/{problems.length} đã chọn</span></div><div className="nb-exam-problem-checklist">{problems.map((problem) => <label key={problem.id} className={`nb-exam-check ${form.problemIds.includes(problem.id) ? "selected" : ""}`}><input type="checkbox" checked={form.problemIds.includes(problem.id)} onChange={() => toggleProblem(problem.id)} /><span><strong>{problem.id} · {problem.title}</strong><small>{problem.points} điểm · {problem.isPython ? "Python" : "C++17"} · {problem.difficulty}</small></span><CheckCircle2 size={16} /></label>)}</div><button className="nb-btn nb-btn-primary" type="submit" disabled={!form.title.trim() || form.problemIds.length === 0}><Save size={15} /> Tạo đề thi</button></form>}</div>}
+      {isTeacher && (
+        <div className="nb-panel" style={{ marginBottom: 16 }}>
+          <button className="nb-btn nb-btn-ghost" onClick={() => setShowForm((v) => !v)}>
+            <Plus size={16} /> {showForm ? "Đóng" : "Tạo đề thi mới"}
+          </button>
+          {showForm && (
+            <form onSubmit={submit} className="nb-form">
+              <input className="nb-input" placeholder="Tên đề thi" value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })} />
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <input className="nb-input" placeholder="Ngày thi (vd: 20/08/2026)" value={form.date}
+                  onChange={(e) => setForm({ ...form, date: e.target.value })} />
+                <input className="nb-input" type="number" placeholder="Số phút" value={form.duration}
+                  onChange={(e) => setForm({ ...form, duration: e.target.value })} />
+              </div>
+              <div className="nb-sub">Chọn bài tập đưa vào đề:</div>
+              <div className="nb-checklist">
+                {problems.map((p) => (
+                  <label key={p.id} className="nb-checkbox-label">
+                    <input type="checkbox" checked={form.problemIds.includes(p.id)} onChange={() => toggleProblem(p.id)} />
+                    {p.id} · {p.title}
+                  </label>
+                ))}
+              </div>
+              <button className="nb-btn nb-btn-primary" type="submit">Tạo đề thi</button>
+            </form>
+          )}
+        </div>
+      )}
 
-      <div className="nb-exam-toolbar"><div className="nb-exam-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm đề thi hoặc ngày thi…" /></div><div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả"], ["active", "Đang mở"], ["upcoming", "Sắp diễn ra"], ["completed", "Đã kết thúc"]].map(([key, label]) => <button key={key} className={`nb-chip ${filter === key ? "active" : ""}`} onClick={() => setFilter(key)}>{label}</button>)}</div></div>
-
-      <div className="nb-exam-list">{visibleContests.map((contest) => { const meta = statusMeta[contest.status] || statusMeta.upcoming; const contestProblems = problems.filter((problem) => contest.problemIds.includes(problem.id)); const solved = contestProblems.filter((problem) => solvedByCurrent(problem.id)).length; const progress = contestProblems.length ? Math.round((solved / contestProblems.length) * 100) : 0; const totalPoints = contestProblems.reduce((sum, problem) => sum + (Number(problem.points) || 0), 0); return <article key={contest.id} className={`nb-exam-card ${meta.tone}`}><div className="nb-exam-card-accent" /><div className="nb-exam-card-head"><div><div className="nb-exam-card-kicker"><span className={`nb-pill ${meta.cls}`}>{meta.label}</span><span>{contest.date}</span></div><h3>{contest.title}</h3></div><div className="nb-exam-card-code">{contest.id}</div></div><div className="nb-exam-card-meta"><span><Clock size={14} /> {contest.duration} phút</span><span><ListChecks size={14} /> {contestProblems.length} bài</span><span><Award size={14} /> {totalPoints} điểm</span></div>{!isTeacher && contest.status !== "upcoming" && <div className="nb-exam-card-progress"><div className="nb-exam-progress-head"><span>Tiến độ của bạn</span><strong>{solved}/{contestProblems.length} bài · {progress}%</strong></div><div className="nb-exam-progress"><span style={{ width: `${progress}%` }} /></div></div>}{contest.status === "completed" && <div className="nb-mini-leaderboard">{[...students].sort((a, b) => points(b.id) - points(a.id)).slice(0, 3).map((student, index) => <div key={student.id} className="nb-mini-row"><span className="nb-eyebrow">#{index + 1}</span><Avatar name={student.name} size={22} /><span>{student.name}</span><span className="nb-sub" style={{ marginLeft: "auto" }}>{points(student.id)}đ</span></div>)}</div>}<div className="nb-exam-card-actions">{!isTeacher && contest.status === "upcoming" && <span className="nb-sub"><Lock size={13} /> Chưa mở đăng ký</span>}{(isTeacher || contest.status !== "upcoming") && <button className="nb-btn nb-btn-primary" onClick={() => setRunning(contest)}>{contest.status === "completed" ? <><Eye size={15} /> Xem lại đề</> : isTeacher ? <><Eye size={15} /> Xem trước</> : <><Play size={15} /> Vào thi</>}</button>}{isTeacher && contest.status === "upcoming" && <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(contest.id, "active")}><Play size={15} /> Mở đề thi</button>}{isTeacher && contest.status === "active" && <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(contest.id, "completed")}><CheckCircle2 size={15} /> Đóng đề thi</button>}</div></article>; })}</div>
-      {visibleContests.length === 0 && <div className="nb-exam-empty"><Clock size={26} /><strong>Không tìm thấy đề thi</strong><span>Thử đổi bộ lọc hoặc tạo một kỳ thi mới.</span></div>}
+      <div className="nb-contest-list">
+        {contests.map((c) => {
+          const meta = statusMeta[c.status] || statusMeta.upcoming;
+          return (
+            <div key={c.id} className="nb-panel nb-contest-card">
+              <div>
+                <div className="nb-eyebrow">{c.date} · {c.duration} phút · {c.problemIds.length} bài</div>
+                <h3 className="nb-h3">{c.title}</h3>
+              </div>
+              <div className="nb-contest-actions">
+                <span className={"nb-pill " + meta.cls}>{meta.label}</span>
+                {!isTeacher && c.status === "upcoming" && (
+                  <span className="nb-sub"><Lock size={13} style={{ marginRight: 4 }} />Chưa mở</span>
+                )}
+                {(isTeacher || c.status !== "upcoming") && (
+                  <button className="nb-btn nb-btn-primary" onClick={() => setRunning(c)}>
+                    {c.status === "completed" ? "Xem lại đề" : isTeacher ? "Xem trước đề" : "Vào thi"}
+                  </button>
+                )}
+                {isTeacher && c.status === "upcoming" && (
+                  <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(c.id, "active")}>Mở đề thi</button>
+                )}
+                {isTeacher && c.status === "active" && (
+                  <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(c.id, "completed")}>Đóng đề thi</button>
+                )}
+              </div>
+              {c.status === "completed" && (
+                <div className="nb-mini-leaderboard">
+                  {[...students]
+                    .sort((a, b) => points(b.id) - points(a.id))
+                    .slice(0, 5)
+                    .map((s, i) => (
+                      <div key={s.id} className="nb-mini-row">
+                        <span className="nb-eyebrow">#{i + 1}</span>
+                        <Avatar name={s.name} size={22} />
+                        <span>{s.name}</span>
+                        <span className="nb-sub" style={{ marginLeft: "auto" }}>{points(s.id)}đ</span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {contests.length === 0 && <p className="nb-sub">Chưa có đề thi nào được tạo.</p>}
+      </div>
     </div>
   );
 }
@@ -2051,6 +2093,85 @@ function App() {
           justify-content: center; font-weight: 700; font-family: 'JetBrains Mono', monospace; flex-shrink: 0;
         }
 
+        .nb-home-page { display: flex; flex-direction: column; gap: 18px; }
+        .nb-home-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 25px 27px; border-radius: 14px; color: #fff; box-shadow: 0 10px 24px rgba(44,74,140,0.16); }
+        .nb-home-hero.student { background: linear-gradient(120deg, #21415D 0%, #2C4A8C 62%, #5879B7 100%); }
+        .nb-home-hero.teacher { background: linear-gradient(120deg, #263A44 0%, #315C61 58%, #4F8780 100%); }
+        .nb-home-hero .nb-eyebrow { color: rgba(255,255,255,0.7); }
+        .nb-home-hero h1 { margin: 6px 0 7px; color: #fff; font-size: 29px; line-height: 1.15; letter-spacing: -0.02em; }
+        .nb-home-hero p { margin: 0; color: rgba(255,255,255,0.75); font-size: 13px; line-height: 1.5; }
+        .nb-home-hero-rank { display: flex; align-items: center; gap: 10px; padding: 12px 15px; border: 1px solid rgba(255,255,255,0.22); border-radius: 10px; background: rgba(255,255,255,0.1); }
+        .nb-home-hero-rank > span { display: flex; flex-direction: column; gap: 2px; }
+        .nb-home-hero-rank strong { font: 700 21px 'JetBrains Mono', monospace; }
+        .nb-home-hero-rank small { color: rgba(255,255,255,0.7); font-size: 10px; }
+        .nb-home-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .nb-home-stat { display: flex; align-items: center; gap: 10px; padding: 14px; background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; }
+        .nb-home-stat > span { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 9px; }
+        .nb-home-stat > span.blue { color: var(--pen-blue); background: rgba(44,74,140,0.11); }
+        .nb-home-stat > span.green { color: var(--ac-green); background: rgba(46,158,109,0.12); }
+        .nb-home-stat > span.gold { color: var(--gold); background: rgba(185,130,47,0.13); }
+        .nb-home-stat > span.red { color: var(--red-pen); background: rgba(178,58,58,0.1); }
+        .nb-home-stat div { display: flex; flex-direction: column; gap: 2px; }
+        .nb-home-stat strong { color: var(--ink); font: 700 20px 'JetBrains Mono', monospace; }
+        .nb-home-stat small { color: var(--slate); font-size: 11px; }
+        .nb-home-main-grid { display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 14px; }
+        .nb-home-progress-card, .nb-home-class-card, .nb-home-contest-card { display: flex; flex-direction: column; gap: 12px; padding: 21px; border: 1px solid var(--paper-line); border-radius: 11px; background: #fff; }
+        .nb-home-progress-card, .nb-home-class-card { background: linear-gradient(135deg, #fff 0%, #F8FAFD 100%); }
+        .nb-home-contest-card { background: #FBF9F1; }
+        .nb-home-contest-card.live { border-color: rgba(46,158,109,0.35); background: linear-gradient(135deg, #F8FCF7, #EEF8F1); }
+        .nb-home-card-head, .nb-home-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+        .nb-home-card-head h2, .nb-home-section-head h2 { margin: 4px 0 0; font-size: 18px; letter-spacing: -0.01em; }
+        .nb-home-percent { color: var(--pen-blue); font: 700 25px 'JetBrains Mono', monospace; }
+        .nb-home-progress { height: 9px; overflow: hidden; border-radius: 99px; background: var(--paper-line); }
+        .nb-home-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pen-blue), #6A91D1); }
+        .nb-home-progress-foot { display: flex; justify-content: space-between; gap: 10px; color: var(--slate); font-size: 11px; }
+        .nb-home-progress-foot strong { color: var(--ink); font: 600 10px 'JetBrains Mono', monospace; }
+        .nb-home-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 3px; }
+        .nb-home-contest-card h3 { margin: 2px 0 0; font-size: 17px; }
+        .nb-home-contest-meta { display: flex; align-items: center; gap: 12px; color: var(--slate); font-size: 11px; }
+        .nb-home-contest-meta span { display: inline-flex; align-items: center; gap: 4px; }
+        .nb-home-live-dot { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(46,158,109,0.12); }
+        .nb-home-live-dot span { width: 9px; height: 9px; border-radius: 50%; background: var(--ac-green); box-shadow: 0 0 0 5px rgba(46,158,109,0.12); }
+        .nb-home-clock-icon { color: var(--gold); }
+        .nb-home-lower-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 14px; }
+        .nb-home-activity, .nb-home-next, .nb-home-class-activity, .nb-home-attention { min-width: 0; }
+        .nb-home-section-head { margin-bottom: 14px; }
+        .nb-link-button { display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0; background: transparent; color: var(--pen-blue); cursor: pointer; font-size: 11px; font-weight: 600; }
+        .nb-home-activity-list, .nb-home-student-list, .nb-home-support-list, .nb-home-class-feed { display: flex; flex-direction: column; gap: 2px; }
+        .nb-home-activity-item, .nb-home-student-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--paper-line); }
+        .nb-home-activity-item:last-child, .nb-home-student-row:last-child { border-bottom: 0; }
+        .nb-home-activity-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 8px; }
+        .nb-home-activity-icon.success { color: var(--ac-green); background: rgba(46,158,109,0.12); }
+        .nb-home-activity-icon.warning { color: var(--gold); background: rgba(185,130,47,0.14); }
+        .nb-home-activity-item > div, .nb-home-student-row > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+        .nb-home-activity-item strong, .nb-home-student-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+        .nb-home-activity-item small, .nb-home-student-row small { color: var(--slate); font-size: 10px; }
+        .nb-home-activity-score, .nb-home-student-row > b { color: var(--pen-blue); font: 700 12px 'JetBrains Mono', monospace; }
+        .nb-home-student-row > b small { margin-left: 2px; color: var(--slate); font-size: 9px; }
+        .nb-home-rank { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 6px; color: var(--slate); background: var(--paper-line); font: 700 10px 'JetBrains Mono', monospace; }
+        .nb-home-rank.rank-1 { color: #9A6B13; background: rgba(185,130,47,0.18); }
+        .nb-home-rank.rank-2 { color: #5A6878; background: rgba(90,104,120,0.14); }
+        .nb-home-rank.rank-3 { color: #8A5B3B; background: rgba(138,91,59,0.13); }
+        .nb-home-next { background: #fff; }
+        .nb-home-next h2 { margin: 6px 0 5px; font-size: 19px; }
+        .nb-home-next-links { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+        .nb-home-next-links button { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border: 0; border-top: 1px solid var(--paper-line); background: transparent; color: var(--ink); cursor: pointer; font-family: inherit; font-size: 12px; text-align: left; }
+        .nb-home-next-links button > span { display: inline-flex; align-items: center; gap: 8px; }
+        .nb-home-next-links button > svg { color: var(--slate); }
+        .nb-home-support-list > div { display: flex; align-items: center; gap: 9px; padding: 9px 0; border-bottom: 1px solid var(--paper-line); }
+        .nb-home-support-list > div:last-child { border-bottom: 0; }
+        .nb-home-support-list > div > span { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+        .nb-home-support-list strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+        .nb-home-support-list small { color: var(--slate); font-size: 10px; }
+        .nb-home-support-list button { display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 25px; border: 1px solid var(--paper-line); border-radius: 6px; background: #fff; color: var(--slate); cursor: pointer; }
+        .nb-home-class-activity { padding: 18px 20px; }
+        .nb-home-class-feed > div { display: flex; align-items: center; gap: 9px; padding: 9px 0; border-bottom: 1px solid var(--paper-line); font-size: 12px; }
+        .nb-home-class-feed > div:last-child { border-bottom: 0; }
+        .nb-home-class-feed > div > span:last-child { display: flex; flex-direction: column; gap: 2px; }
+        .nb-home-class-feed small { color: var(--slate); font-size: 10px; }
+        .nb-home-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 25px 10px; color: var(--slate); text-align: center; }
+        .nb-home-empty strong { color: var(--ink); font-size: 13px; }
+        .nb-home-empty span { font-size: 11px; }
         .nb-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
         .nb-practice-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
         .nb-practice-summary-card { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--paper-line); border-radius: 9px; padding: 12px 14px; color: var(--pen-blue); }
@@ -2236,103 +2357,6 @@ function App() {
         .nb-spin { animation: nb-spin 0.9s linear infinite; }
         @keyframes nb-spin { to { transform: rotate(360deg); } }
 
-        .nb-exam-page { display: flex; flex-direction: column; gap: 18px; }
-        .nb-exam-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 25px 27px; border-radius: 14px; color: #fff; background: linear-gradient(120deg, #21415D 0%, #2C4A8C 62%, #5879B7 100%); box-shadow: 0 10px 24px rgba(44,74,140,0.18); }
-        .nb-exam-title { margin: 6px 0 7px; font-size: 30px; line-height: 1.15; letter-spacing: -0.02em; }
-        .nb-exam-sub { margin: 0; color: rgba(255,255,255,0.72); font-size: 13px; line-height: 1.5; }
-        .nb-exam-hero .nb-eyebrow { color: #C8D7EC; }
-        .nb-exam-hero-icon { display: flex; align-items: center; gap: 10px; padding: 12px 15px; border: 1px solid rgba(255,255,255,0.22); border-radius: 10px; background: rgba(255,255,255,0.1); font: 600 11px/1.4 'JetBrains Mono', monospace; }
-        .nb-exam-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-        .nb-exam-stat { display: flex; align-items: center; gap: 10px; padding: 14px; background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; }
-        .nb-exam-stat > span { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 9px; }
-        .nb-exam-stat > span.blue { color: var(--pen-blue); background: rgba(44,74,140,0.11); }
-        .nb-exam-stat > span.green { color: var(--ac-green); background: rgba(46,158,109,0.12); }
-        .nb-exam-stat > span.gold { color: var(--gold); background: rgba(185,130,47,0.13); }
-        .nb-exam-stat > span.ink { color: var(--ink); background: rgba(16,21,28,0.08); }
-        .nb-exam-stat div { display: flex; flex-direction: column; gap: 2px; }
-        .nb-exam-stat strong { color: var(--ink); font: 700 20px 'JetBrains Mono', monospace; }
-        .nb-exam-stat small { color: var(--slate); font-size: 11px; }
-        .nb-exam-create-panel { background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; padding: 16px; }
-        .nb-exam-form { display: flex; flex-direction: column; gap: 16px; margin-top: 17px; padding-top: 16px; border-top: 1px solid var(--paper-line); }
-        .nb-exam-form-heading, .nb-exam-select-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-        .nb-exam-form-heading > span, .nb-exam-select-head > span { color: var(--pen-blue); font: 700 11px 'JetBrains Mono', monospace; }
-        .nb-exam-form-grid { display: grid; grid-template-columns: 1.6fr 1fr 0.7fr; gap: 10px; }
-        .nb-exam-form-grid label { display: flex; flex-direction: column; gap: 6px; }
-        .nb-exam-form-grid label > span { color: var(--slate); font-size: 11px; font-weight: 600; }
-        .nb-exam-select-head > div { display: flex; flex-direction: column; gap: 3px; }
-        .nb-exam-select-head small { color: var(--slate); font-size: 11px; }
-        .nb-exam-problem-checklist { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; max-height: 230px; overflow-y: auto; padding: 3px; }
-        .nb-exam-check { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid var(--paper-line); border-radius: 8px; background: #FDFCF7; cursor: pointer; }
-        .nb-exam-check.selected { border-color: var(--pen-blue); background: rgba(44,74,140,0.06); }
-        .nb-exam-check input { accent-color: var(--pen-blue); }
-        .nb-exam-check > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-        .nb-exam-check strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-        .nb-exam-check small { color: var(--slate); font-size: 10px; }
-        .nb-exam-check > svg { color: var(--pen-blue); opacity: 0; }
-        .nb-exam-check.selected > svg { opacity: 1; }
-        .nb-exam-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-        .nb-exam-search { display: flex; align-items: center; gap: 8px; flex: 1 1 240px; height: 40px; padding: 0 11px; background: #fff; border: 1px solid var(--paper-line); border-radius: 8px; color: var(--slate); }
-        .nb-exam-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: 13px inherit; }
-        .nb-exam-list { display: flex; flex-direction: column; gap: 12px; }
-        .nb-exam-card { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 13px; padding: 19px 20px 17px 23px; background: #fff; border: 1px solid var(--paper-line); border-radius: 11px; }
-        .nb-exam-card-accent { position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--pen-blue); }
-        .nb-exam-card.active .nb-exam-card-accent { background: var(--ac-green); }
-        .nb-exam-card.upcoming .nb-exam-card-accent { background: var(--gold); }
-        .nb-exam-card.completed .nb-exam-card-accent { background: var(--slate); }
-        .nb-exam-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-        .nb-exam-card-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 7px; color: var(--slate); font-size: 11px; }
-        .nb-exam-card-head h3 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
-        .nb-exam-card-code { color: var(--slate); font: 11px 'JetBrains Mono', monospace; }
-        .nb-exam-card-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--slate); font-size: 12px; }
-        .nb-exam-card-meta span { display: inline-flex; align-items: center; gap: 5px; }
-        .nb-exam-card-progress { max-width: 520px; }
-        .nb-exam-progress-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; color: var(--slate); font-size: 11px; }
-        .nb-exam-progress-head strong { color: var(--ink); font: 600 10px 'JetBrains Mono', monospace; }
-        .nb-exam-progress { height: 7px; flex: 1; overflow: hidden; border-radius: 99px; background: var(--paper-line); }
-        .nb-exam-progress span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pen-blue), #6A91D1); }
-        .nb-exam-card-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 3px; }
-        .nb-exam-card-actions .nb-sub { display: inline-flex; align-items: center; gap: 5px; }
-        .nb-exam-empty { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 48px 15px; color: var(--slate); text-align: center; background: #fff; border: 1px dashed var(--paper-line); border-radius: 10px; }
-        .nb-exam-empty strong { color: var(--ink); font-size: 14px; }
-        .nb-exam-empty span { font-size: 12px; }
-        .nb-exam-room { display: flex; flex-direction: column; gap: 14px; }
-        .nb-exam-room-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px; padding: 15px 17px; background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; }
-        .nb-exam-room-title { min-width: 0; }
-        .nb-exam-room-title h2 { margin: 3px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 20px; }
-        .nb-exam-timer { display: inline-flex; align-items: center; gap: 7px; padding: 9px 12px; border-radius: 8px; color: var(--red-pen); background: rgba(178,58,58,0.08); font: 700 14px 'JetBrains Mono', monospace; white-space: nowrap; }
-        .nb-exam-timer.warning { color: #9B5C00; background: rgba(185,130,47,0.16); }
-        .nb-exam-room-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--slate); font-size: 12px; }
-        .nb-exam-room-meta > span { display: inline-flex; align-items: center; gap: 5px; }
-        .nb-exam-room-meta > .nb-exam-progress { max-width: 180px; }
-        .nb-exam-room-meta > strong { color: var(--ink); font: 600 11px 'JetBrains Mono', monospace; }
-        .nb-exam-room-layout { display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 14px; align-items: start; }
-        .nb-exam-navigator { overflow: hidden; background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; }
-        .nb-exam-navigator-head { display: flex; justify-content: space-between; align-items: center; padding: 14px; border-bottom: 1px solid var(--paper-line); }
-        .nb-exam-navigator-head > strong { color: var(--pen-blue); font: 700 12px 'JetBrains Mono', monospace; }
-        .nb-exam-navigator-list { display: flex; flex-direction: column; }
-        .nb-exam-nav-item { display: flex; align-items: center; gap: 9px; padding: 12px 11px; border: 0; border-bottom: 1px solid var(--paper-line); background: transparent; text-align: left; cursor: pointer; font-family: inherit; }
-        .nb-exam-nav-item:last-child { border-bottom: 0; }
-        .nb-exam-nav-item:hover, .nb-exam-nav-item.active { background: rgba(44,74,140,0.07); box-shadow: inset 3px 0 var(--pen-blue); }
-        .nb-exam-nav-item > span { width: 26px; color: var(--slate); font: 600 10px 'JetBrains Mono', monospace; }
-        .nb-exam-nav-item > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
-        .nb-exam-nav-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-        .nb-exam-nav-item small { color: var(--slate); font-size: 10px; }
-        .nb-exam-nav-item > svg { color: var(--slate); }
-        .nb-exam-nav-item.done > svg { color: var(--ac-green); }
-        .nb-exam-room-main { min-width: 0; }
-        .nb-exam-room-intro { padding: 22px 24px; border-radius: 10px; background: linear-gradient(135deg, #F7F9FC, #fff); border: 1px solid var(--paper-line); }
-        .nb-exam-room-intro h3 { margin: 5px 0 5px; font-size: 20px; }
-        .nb-exam-room-intro p { margin: 0; color: var(--slate); font-size: 13px; line-height: 1.6; }
-        .nb-exam-problem-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
-        .nb-exam-problem-card { display: flex; flex-direction: column; gap: 15px; min-height: 145px; padding: 15px; border: 1px solid var(--paper-line); border-radius: 10px; background: #fff; text-align: left; cursor: pointer; font-family: inherit; transition: transform .12s, box-shadow .12s, border-color .12s; }
-        .nb-exam-problem-card:hover { transform: translateY(-2px); border-color: var(--pen-blue); box-shadow: 0 8px 18px rgba(16,21,28,0.07); }
-        .nb-exam-problem-card.done { border-color: rgba(46,158,109,0.45); }
-        .nb-exam-problem-card-top, .nb-exam-problem-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-        .nb-exam-index { color: var(--pen-blue); font: 700 10px 'JetBrains Mono', monospace; }
-        .nb-exam-done { display: inline-flex; align-items: center; gap: 4px; color: var(--ac-green); font-size: 10px; font-weight: 600; }
-        .nb-exam-problem-card h4 { flex: 1; margin: 0; font-size: 14px; line-height: 1.4; }
-        .nb-exam-problem-card-foot > span { color: var(--slate); font: 11px 'JetBrains Mono', monospace; }
-
         .nb-contest-list { display: flex; flex-direction: column; gap: 14px; }
         .nb-contest-card { display: flex; flex-direction: column; gap: 10px; }
         .nb-contest-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -2458,13 +2482,8 @@ function App() {
           .nb-content { padding: 16px 14px 92px 14px; }
           .nb-storage-banner { margin: -8px -14px 16px -14px; padding-left: 14px; }
           .nb-stat-grid { grid-template-columns: repeat(2, 1fr); }
-          .nb-exam-stat-grid { grid-template-columns: repeat(2, 1fr); }
-          .nb-exam-form-grid { grid-template-columns: 1fr 1fr; }
-          .nb-exam-form-grid label:first-child { grid-column: 1 / -1; }
-          .nb-exam-problem-checklist { grid-template-columns: 1fr; }
-          .nb-exam-room-layout { grid-template-columns: 1fr; }
-          .nb-exam-navigator { order: 2; }
-          .nb-exam-room-main { order: 1; }
+          .nb-home-stat-grid { grid-template-columns: repeat(2, 1fr); }
+          .nb-home-main-grid, .nb-home-lower-grid { grid-template-columns: 1fr; }
           .nb-ranking-stat-grid { grid-template-columns: repeat(2, 1fr); }
           .nb-ranking-insight-grid { grid-template-columns: 1fr; }
           .nb-ranking-podium { gap: 8px; }
@@ -2485,13 +2504,6 @@ function App() {
           .nb-testcase-grid { grid-template-columns: 1fr; }
           .nb-sample-grid { grid-template-columns: 1fr; }
           .nb-two-col, .nb-modal-body { grid-template-columns: 1fr; }
-          .nb-exam-hero { align-items: flex-start; padding: 20px; }
-          .nb-exam-title { font-size: 24px; }
-          .nb-exam-hero-icon { display: none; }
-          .nb-exam-toolbar { align-items: stretch; }
-          .nb-exam-search { flex-basis: 100%; }
-          .nb-exam-room-head { grid-template-columns: 1fr auto; gap: 10px; }
-          .nb-exam-room-head > .nb-btn { grid-column: 1 / -1; }
           .nb-ranking-hero { align-items: flex-start; padding: 20px; }
           .nb-ranking-title { font-size: 24px; }
           .nb-ranking-toolbar { align-items: stretch; }
@@ -2499,17 +2511,15 @@ function App() {
           .nb-ranking-controls { width: 100%; justify-content: space-between; }
           .nb-ranking-controls .nb-input { flex: 1; }
           .nb-modal { max-height: 94vh; }
-          .nb-exam-stat-grid { gap: 8px; }
-          .nb-exam-stat { padding: 11px; }
-          .nb-exam-stat strong { font-size: 16px; }
-          .nb-exam-form-grid { grid-template-columns: 1fr; }
-          .nb-exam-form-grid label:first-child { grid-column: auto; }
-          .nb-exam-card { padding-left: 18px; }
-          .nb-exam-card-head h3 { font-size: 16px; }
-          .nb-exam-card-meta { gap: 8px; }
-          .nb-exam-card-actions .nb-btn { flex: 1; justify-content: center; }
-          .nb-exam-room-meta { gap: 8px; }
-          .nb-exam-room-meta > .nb-exam-progress { flex-basis: 100%; max-width: none; }
+          .nb-home-hero { align-items: flex-start; padding: 20px; }
+          .nb-home-hero h1 { font-size: 24px; }
+          .nb-home-hero-rank { display: none; }
+          .nb-home-stat { padding: 11px; }
+          .nb-home-stat strong { font-size: 16px; }
+          .nb-home-progress-card, .nb-home-class-card, .nb-home-contest-card { padding: 17px; }
+          .nb-home-progress-foot { flex-direction: column; gap: 4px; }
+          .nb-home-actions .nb-btn { flex: 1; justify-content: center; }
+          .nb-home-section-head { align-items: center; }
           .nb-ranking-podium { grid-template-columns: 1fr 1fr 1fr; min-height: 180px; }
           .nb-podium-card.rank-1 { min-height: 188px; }
           .nb-podium-card.rank-2, .nb-podium-card.rank-3 { min-height: 160px; }
@@ -2603,7 +2613,7 @@ function App() {
                 <OverviewView
                   currentUser={currentUser} students={students} submissions={submissions}
                   points={points} solvedCount={solvedCount} contests={contests} discussions={discussions}
-                  problemsCount={problems.length}
+                  problemsCount={problems.length} onNavigate={setTab}
                 />
               )}
               {tab === "lessons" && (
