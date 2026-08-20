@@ -4,7 +4,7 @@ import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
-  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save,
+  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
@@ -46,7 +46,8 @@ function createEmptyTestCase() {
 function createProblemForm(topicId) {
   return {
     title: "", topic: topicId, difficulty: "Dễ", points: 100, statement: "",
-    sampleInput: "", sampleOutput: "", testCases: [createEmptyTestCase()], isPython: false,
+    sampleInput: "", sampleOutput: "", imageUrl: "", imageFile: null,
+    testCases: [createEmptyTestCase()], isPython: false,
   };
 }
 
@@ -81,6 +82,7 @@ function mapProblem(row) {
     id: row.id, title: row.title, topic: row.topic, difficulty: row.difficulty, points: row.points,
     isPython: row.is_python, statement: row.statement,
     sample: { input: row.sample_input, output: row.sample_output },
+    imageUrl: row.statement_image_url || "",
     testCases: normalizeTestCases(row.test_cases),
   };
 }
@@ -170,7 +172,8 @@ async function dbRemoveTopic(id) {
 async function dbAddProblem(p) {
   const { error } = await supabase.from("problems").insert({
     id: p.id, title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
-    is_python: p.isPython, statement: p.statement, sample_input: p.sample.input, sample_output: p.sample.output,
+    is_python: p.isPython, statement: p.statement, statement_image_url: p.imageUrl || null,
+    sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
   });
   if (error) throw error;
@@ -178,7 +181,8 @@ async function dbAddProblem(p) {
 async function dbUpdateProblem(p) {
   const { error } = await supabase.from("problems").update({
     title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
-    is_python: p.isPython, statement: p.statement, sample_input: p.sample.input, sample_output: p.sample.output,
+    is_python: p.isPython, statement: p.statement, statement_image_url: p.imageUrl || null,
+    sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
   }).eq("id", p.id);
   if (error) throw error;
@@ -186,6 +190,23 @@ async function dbUpdateProblem(p) {
 async function dbRemoveProblem(id) {
   const { error } = await supabase.from("problems").delete().eq("id", id);
   if (error) throw error;
+}
+
+async function uploadProblemImage(file) {
+  if (!file) return "";
+  if (!file.type.startsWith("image/")) throw new Error("Chỉ được tải tệp hình ảnh.");
+  if (file.size > 5 * 1024 * 1024) throw new Error("Ảnh đề bài không được vượt quá 5 MB.");
+  const extension = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const suffix = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const objectPath = `problem-statements/${suffix}.${extension}`;
+  const { error } = await supabase.storage.from("problem-assets").upload(objectPath, file, {
+    cacheControl: "3600",
+    contentType: file.type,
+    upsert: false,
+  });
+  if (error) throw error;
+  const { data } = supabase.storage.from("problem-assets").getPublicUrl(objectPath);
+  return data?.publicUrl || "";
 }
 async function dbAddContest(c) {
   const { error } = await supabase.from("contests").insert({ id: c.id, title: c.title, status: c.status, date: c.date, duration: c.duration, problem_ids: c.problemIds });
@@ -574,6 +595,25 @@ function ChangePasswordModal({ currentUser, onClose, onChange }) {
 /*  PROBLEM SOLVER MODAL                                                    */
 /* ---------------------------------------------------------------------- */
 
+function ProblemStatement({ problem }) {
+  const paragraphs = String(problem.statement || "").split(/\n{2,}/).filter((part) => part.trim());
+  return (
+    <div className="nb-problem-statement">
+      {problem.imageUrl && <img className="nb-problem-statement-image" src={problem.imageUrl} alt={`Hình minh họa cho ${problem.title}`} />}
+      {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+    </div>
+  );
+}
+
+function MultilineCodeBlock({ label, value }) {
+  return (
+    <div className="nb-code-block">
+      <div className="nb-code-block-label">{label}</div>
+      <pre>{String(value || "") || "(không có dữ liệu)"}</pre>
+    </div>
+  );
+}
+
 function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0 }) {
   const [code, setCode] = useState(
     problem.isPython ? "# Viết code Python của bạn tại đây\n\n" : "// Viết code của bạn tại đây\n\n"
@@ -588,7 +628,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
     try {
       const r = await judgeSourceCode(problem, code);
       setResult(r);
-      onVerdict && onVerdict(problem.id, r.verdict);
+      onVerdict && onVerdict(problem.id, r);
     } catch (error) {
       setResult({
         verdict: "SE",
@@ -617,10 +657,13 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
           <div className="nb-modal-col">
             <DifficultyTag level={problem.difficulty} />
             {alreadySolved && <span className="nb-pill nb-pill-ac" style={{ marginLeft: 8 }}>Đã hoàn thành</span>}
-            <p className="nb-para" style={{ marginTop: 12 }}>{problem.statement}</p>
+            <ProblemStatement problem={problem} />
             <div className="nb-sample">
-              <div className="nb-sample-row"><span>Input mẫu</span><code>{problem.sample.input}</code></div>
-              <div className="nb-sample-row"><span>Output mẫu</span><code>{problem.sample.output}</code></div>
+              <div className="nb-sample-title">Ví dụ minh họa</div>
+              <div className="nb-sample-grid">
+                <MultilineCodeBlock label="Input mẫu" value={problem.sample.input} />
+                <MultilineCodeBlock label="Output mẫu" value={problem.sample.output} />
+              </div>
             </div>
             {!readOnly && <div className="nb-solver-meta"><span>Điểm tốt nhất: <strong>{bestScore}/{problem.points}</strong></span><span>Đã nộp: <strong>{attemptCount}</strong> lần</span><span>{getProblemTestCases(problem).length} test case</span></div>}
           </div>
@@ -926,6 +969,9 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [formError, setFormError] = useState("");
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [imagePreview, setImagePreview] = useState("");
+  const imageObjectUrlRef = useRef(null);
   const [form, setForm] = useState(() => createProblemForm(topics[0]?.id));
 
   const filtered = problems.filter((p) => {
@@ -946,7 +992,16 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     };
   }
 
+  function clearImagePreview() {
+    if (imageObjectUrlRef.current) {
+      URL.revokeObjectURL(imageObjectUrlRef.current);
+      imageObjectUrlRef.current = null;
+    }
+    setImagePreview("");
+  }
+
   function resetForm() {
+    clearImagePreview();
     setForm(createProblemForm(topics[0]?.id));
     setEditingId(null);
     setFormError("");
@@ -967,11 +1022,31 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       statement: problem.statement || "",
       sampleInput: problem.sample?.input === "—" ? "" : (problem.sample?.input || ""),
       sampleOutput: problem.sample?.output === "—" ? "" : (problem.sample?.output || ""),
+      imageUrl: problem.imageUrl || "", imageFile: null,
       testCases: normalizeTestCases(problem.testCases).length > 0 ? normalizeTestCases(problem.testCases) : [createEmptyTestCase()],
       isPython: Boolean(problem.isPython),
     });
+    clearImagePreview();
+    setImagePreview(problem.imageUrl || "");
     setFormError("");
     setShowForm(true);
+  }
+
+  function handleImageChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { setFormError("Chỉ được tải tệp hình ảnh."); return; }
+    if (file.size > 5 * 1024 * 1024) { setFormError("Ảnh đề bài không được vượt quá 5 MB."); return; }
+    if (imageObjectUrlRef.current) URL.revokeObjectURL(imageObjectUrlRef.current);
+    imageObjectUrlRef.current = URL.createObjectURL(file);
+    setImagePreview(imageObjectUrlRef.current);
+    setForm((current) => ({ ...current, imageFile: file }));
+    setFormError("");
+  }
+
+  function removeImage() {
+    clearImagePreview();
+    setForm((current) => ({ ...current, imageFile: null, imageUrl: "" }));
   }
 
   function updateTestCase(id, field, value) {
@@ -992,7 +1067,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     }));
   }
 
-  function submit(e) {
+  async function submit(e) {
     e.preventDefault();
     setFormError("");
     if (!form.title.trim() || !form.statement.trim()) {
@@ -1012,21 +1087,30 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       return;
     }
 
-    const problem = {
-      id: editingId || ("PX" + Date.now()),
-      title: form.title.trim(),
-      topic: form.topic || topics[0]?.id || "",
-      difficulty: form.difficulty,
-      points: pointsValue,
-      isPython: form.isPython,
-      statement: form.statement.trim(),
-      sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
-      testCases,
-    };
-    if (editingId) updateProblem(problem);
-    else addProblem(problem);
-    resetForm();
-    setShowForm(false);
+    setUploadingImage(true);
+    try {
+      const uploadedImageUrl = form.imageFile ? await uploadProblemImage(form.imageFile) : form.imageUrl || "";
+      const problem = {
+        id: editingId || ("PX" + Date.now()),
+        title: form.title.trim(),
+        topic: form.topic || topics[0]?.id || "",
+        difficulty: form.difficulty,
+        points: pointsValue,
+        isPython: form.isPython,
+        statement: form.statement.trim(),
+        imageUrl: uploadedImageUrl,
+        sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
+        testCases,
+      };
+      if (editingId) updateProblem(problem);
+      else addProblem(problem);
+      resetForm();
+      setShowForm(false);
+    } catch (error) {
+      setFormError(error?.message || "Không thể tải ảnh hoặc lưu bài tập.");
+    } finally {
+      setUploadingImage(false);
+    }
   }
 
   function handleDelete(problem) {
@@ -1113,13 +1197,23 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
             <input className="nb-input" type="number" min="1" placeholder="Điểm" value={form.points}
               onChange={(e) => setForm({ ...form, points: e.target.value })} />
           </div>
-          <textarea className="nb-input" placeholder="Đề bài" rows={4} value={form.statement}
+          <textarea className="nb-input" placeholder="Đề bài — có thể nhập nhiều đoạn, mô tả thuật toán, ràng buộc và ví dụ" rows={7} value={form.statement}
             onChange={(e) => setForm({ ...form, statement: e.target.value })} />
+          <div className="nb-form-section-label">Hình minh họa cho đề bài</div>
+          <div className="nb-image-upload-panel">
+            <label className="nb-upload-drop">
+              <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={handleImageChange} />
+              <UploadCloud size={20} />
+              <span><strong>Chọn ảnh đề bài</strong><small>PNG, JPG, WEBP hoặc GIF · tối đa 5 MB</small></span>
+            </label>
+            {imagePreview && <div className="nb-image-preview-wrap"><img src={imagePreview} className="nb-image-preview" alt="Xem trước ảnh đề bài" /><button type="button" className="nb-btn nb-btn-danger" onClick={removeImage}><Trash2 size={14} /> Xóa ảnh</button></div>}
+            <input className="nb-input" placeholder="Hoặc dán URL ảnh công khai (không bắt buộc)" value={form.imageUrl} onChange={(e) => { setForm({ ...form, imageUrl: e.target.value, imageFile: null }); setImagePreview(e.target.value); }} />
+          </div>
           <div className="nb-form-section-label">Ví dụ hiển thị cho học sinh</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <textarea className="nb-input" rows={3} placeholder="Input mẫu" value={form.sampleInput}
+            <textarea className="nb-input nb-mono" rows={6} placeholder="Input mẫu — hỗ trợ nhiều dòng" value={form.sampleInput}
               onChange={(e) => setForm({ ...form, sampleInput: e.target.value })} />
-            <textarea className="nb-input" rows={3} placeholder="Output mẫu" value={form.sampleOutput}
+            <textarea className="nb-input nb-mono" rows={6} placeholder="Output mẫu — hỗ trợ nhiều dòng" value={form.sampleOutput}
               onChange={(e) => setForm({ ...form, sampleOutput: e.target.value })} />
           </div>
           <div className="nb-form-section-label">Test case chấm điểm</div>
@@ -1132,9 +1226,9 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
                   <button type="button" className="nb-icon-btn" onClick={() => removeTestCase(test.id)} title="Xóa test case" aria-label={`Xóa test ${index + 1}`}><Trash2 size={15} /></button>
                 </div>
                 <div className="nb-testcase-grid">
-                  <textarea className="nb-input nb-mono" rows={3} placeholder="Input chạy thử" value={test.input}
+                  <textarea className="nb-input nb-mono" rows={6} placeholder="Input chạy thử — dữ liệu có thể gồm nhiều dòng" value={test.input}
                     onChange={(e) => updateTestCase(test.id, "input", e.target.value)} />
-                  <textarea className="nb-input nb-mono" rows={3} placeholder="Output kỳ vọng" value={test.output}
+                  <textarea className="nb-input nb-mono" rows={6} placeholder="Output kỳ vọng — giữ nguyên xuống dòng và khoảng trắng" value={test.output}
                     onChange={(e) => updateTestCase(test.id, "output", e.target.value)} />
                 </div>
               </div>
@@ -1148,7 +1242,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
             Gắn nhãn “Python cơ bản”
           </label>
           <div className="nb-editor-actions">
-            <button className="nb-btn nb-btn-primary" type="submit"><Save size={15} /> {editingId ? "Lưu thay đổi" : "Tạo bài tập"}</button>
+            <button className="nb-btn nb-btn-primary" type="submit" disabled={uploadingImage}><Save size={15} /> {uploadingImage ? "Đang tải ảnh…" : (editingId ? "Lưu thay đổi" : "Tạo bài tập")}</button>
             <button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowForm(false); }}>Hủy</button>
           </div>
         </form>
@@ -1165,6 +1259,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
                 {solved && <CheckCircle2 size={16} style={{ color: "var(--ac-green)" }} />}
               </div>
               <div className="nb-problem-title">{p.title}</div>
+              {p.imageUrl && <img className="nb-problem-card-image" src={p.imageUrl} alt="Ảnh minh họa đề bài" />}
               <div className="nb-problem-bottom">
                 <DifficultyTag level={p.difficulty} />
                 <span className="nb-sub">{p.points}đ · {getProblemTestCases(p).length} test</span>
@@ -1937,6 +2032,13 @@ function App() {
         .nb-btn-danger { background: rgba(178,58,58,0.08); color: var(--red-pen); border: 1px solid rgba(178,58,58,0.22); }
         .nb-problem-editor { gap: 12px; }
         .nb-form-section-label { color: var(--ink); font-size: 12px; font-weight: 700; margin-top: 3px; }
+        .nb-image-upload-panel { display: flex; flex-direction: column; gap: 10px; }
+        .nb-upload-drop { display: flex; align-items: center; gap: 10px; border: 1px dashed var(--pen-blue); background: rgba(44,74,140,0.05); color: var(--pen-blue); border-radius: 9px; padding: 13px; cursor: pointer; }
+        .nb-upload-drop input { display: none; }
+        .nb-upload-drop span { display: flex; flex-direction: column; gap: 3px; }
+        .nb-upload-drop small { color: var(--slate); font-size: 11px; }
+        .nb-image-preview-wrap { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+        .nb-image-preview { max-width: 100%; max-height: 220px; object-fit: contain; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; padding: 4px; }
         .nb-testcase-editor { display: flex; flex-direction: column; gap: 10px; }
         .nb-testcase-card { border: 1px solid var(--paper-line); border-radius: 9px; padding: 10px; background: #FDFCF7; }
         .nb-testcase-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; color: var(--pen-blue); font-size: 12px; }
@@ -2017,6 +2119,7 @@ function App() {
         .nb-problem-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
         .nb-problem-card { background: #fff; border: 1px solid var(--paper-line); border-radius: 10px; padding: 14px; text-align: left; cursor: pointer; font-family: inherit; display: flex; flex-direction: column; gap: 10px; transition: transform .12s, box-shadow .12s; }
         .nb-problem-card:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(16,21,28,0.08); }
+        .nb-problem-card-image { width: 100%; max-height: 110px; object-fit: cover; border-radius: 7px; border: 1px solid var(--paper-line); }
         .nb-problem-meta { display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed var(--paper-line); padding-top: 8px; color: var(--slate); font-size: 11px; }
         .nb-problem-meta strong { color: var(--pen-blue); font-family: 'JetBrains Mono', monospace; }
         .nb-problem-top { display: flex; justify-content: space-between; align-items: center; }
@@ -2041,7 +2144,14 @@ function App() {
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
         .nb-modal-col { display: flex; flex-direction: column; }
         .nb-sample { background: #fff; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; margin-top: 14px; }
-        .nb-sample-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; font-family: 'JetBrains Mono', monospace; gap: 8px; }
+        .nb-sample-title { color: var(--ink); font-size: 12px; font-weight: 700; margin-bottom: 9px; }
+        .nb-sample-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .nb-code-block { min-width: 0; border: 1px solid var(--paper-line); border-radius: 7px; overflow: hidden; background: #F8F8F4; }
+        .nb-code-block-label { padding: 6px 8px; color: var(--slate); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--paper-line); }
+        .nb-code-block pre { margin: 0; padding: 9px; min-height: 34px; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--ink); font: 12px/1.55 'JetBrains Mono', monospace; }
+        .nb-problem-statement { margin-top: 12px; color: var(--ink); font-size: 13.5px; line-height: 1.7; }
+        .nb-problem-statement p { margin: 0 0 10px; white-space: pre-wrap; }
+        .nb-problem-statement-image { display: block; max-width: 100%; max-height: 360px; object-fit: contain; margin: 0 0 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; padding: 5px; }
         .nb-code-editor { width: 100%; min-height: 200px; background: var(--ink); color: #D8DEE9; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; border-radius: 8px; border: none; padding: 14px; resize: vertical; box-sizing: border-box; }
         .nb-modal-actions { margin-top: 10px; display: flex; }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
@@ -2123,6 +2233,7 @@ function App() {
           .nb-management-actions { width: 100%; }
           .nb-management-actions .nb-btn { flex: 1; justify-content: center; }
           .nb-testcase-grid { grid-template-columns: 1fr; }
+          .nb-sample-grid { grid-template-columns: 1fr; }
           .nb-two-col, .nb-modal-body { grid-template-columns: 1fr; }
           .nb-modal { max-height: 94vh; }
           .nb-modal-body { padding: 16px; }
