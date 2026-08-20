@@ -300,73 +300,48 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   }
 }
 
-async function readJudgeResponse(response) {
-  const text = await response.text();
-  if (!text.trim()) return null;
-  try { return JSON.parse(text); }
-  catch (error) { throw new Error(`Dịch vụ chấm trả về dữ liệu không hợp lệ (HTTP ${response.status}).`); }
-}
-
-function judgeResponseMessage(payload, fallback = "Không có thông tin chi tiết.") {
-  if (!payload) return fallback;
-  if (typeof payload === "string") return payload;
-  return payload.error || payload.message || payload.detail || payload.status?.description || fallback;
-}
-
 async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
-  const payload = {
-    source_code: String(sourceCode || ""),
-    language_id: Number(languageId),
-    stdin: String(input ?? ""),
-    expected_output: String(expectedOutput ?? ""),
-    cpu_time_limit: 2,
-    wall_time_limit: 5,
-    memory_limit: 128000,
-  };
   const createResponse = await fetchWithTimeout(
     `${JUDGE0_ENDPOINT}/submissions?base64_encoded=false&wait=false`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_code: sourceCode,
+        language_id: languageId,
+        stdin: input,
+        expected_output: expectedOutput,
+        cpu_time_limit: 2,
+        wall_time_limit: 5,
+        memory_limit: 128000,
+      }),
     }
   );
-  const created = await readJudgeResponse(createResponse);
-  if (!createResponse.ok) {
-    throw new Error(`Không thể tạo lượt chấm (HTTP ${createResponse.status}): ${judgeResponseMessage(created)}.`);
-  }
-  if (!created?.token) throw new Error("Dịch vụ chấm không trả về mã lượt chấm.");
 
-  let lastPollError = "";
-  for (let attempt = 0; attempt < 36; attempt += 1) {
-    await wait(attempt < 4 ? 500 : 800);
+  if (!createResponse.ok) {
+    throw new Error(`Không thể tạo lượt chấm (HTTP ${createResponse.status}).`);
+  }
+
+  const created = await createResponse.json();
+  if (!created.token) throw new Error("Dịch vụ chấm không trả về mã lượt chấm.");
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await wait(500);
     const resultResponse = await fetchWithTimeout(
       `${JUDGE0_ENDPOINT}/submissions/${encodeURIComponent(created.token)}?base64_encoded=false`,
-      { headers: { Accept: "application/json" } },
+      {},
       10000
     );
-    const result = await readJudgeResponse(resultResponse);
-
-    // Judge0 đôi khi trả HTTP 400/429 hoặc body rỗng trong lúc hàng đợi chưa ổn định.
-    // Retry polling giúp tránh biến lỗi tạm thời thành SE giả.
-    if ([400, 408, 425, 429, 500, 502, 503, 504].includes(resultResponse.status)) {
-      lastPollError = `HTTP ${resultResponse.status}: ${judgeResponseMessage(result, "phản hồi tạm thời không có nội dung")}`;
-      if (attempt < 10) continue;
-      throw new Error(`Không thể lấy kết quả chấm sau nhiều lần thử (${lastPollError}).`);
-    }
     if (!resultResponse.ok) {
-      throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}): ${judgeResponseMessage(result)}.`);
+      throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}).`);
     }
-    if (!result) continue;
 
+    const result = await resultResponse.json();
     const statusId = result.status?.id;
-    if (result.error && !result.status) {
-      throw new Error(`Judge0 từ chối lượt chấm: ${judgeResponseMessage(result)}.`);
-    }
     if (statusId !== 1 && statusId !== 2) return result;
   }
 
-  throw new Error(lastPollError || "Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
+  throw new Error("Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
 }
 
 function getProblemTestCases(problem) {
