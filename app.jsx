@@ -300,48 +300,73 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   }
 }
 
+async function readJudgeResponse(response) {
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try { return JSON.parse(text); }
+  catch (error) { throw new Error(`Dịch vụ chấm trả về dữ liệu không hợp lệ (HTTP ${response.status}).`); }
+}
+
+function judgeResponseMessage(payload, fallback = "Không có thông tin chi tiết.") {
+  if (!payload) return fallback;
+  if (typeof payload === "string") return payload;
+  return payload.error || payload.message || payload.detail || payload.status?.description || fallback;
+}
+
 async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
+  const payload = {
+    source_code: String(sourceCode || ""),
+    language_id: Number(languageId),
+    stdin: String(input ?? ""),
+    expected_output: String(expectedOutput ?? ""),
+    cpu_time_limit: 2,
+    wall_time_limit: 5,
+    memory_limit: 128000,
+  };
   const createResponse = await fetchWithTimeout(
     `${JUDGE0_ENDPOINT}/submissions?base64_encoded=false&wait=false`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source_code: sourceCode,
-        language_id: languageId,
-        stdin: input,
-        expected_output: expectedOutput,
-        cpu_time_limit: 2,
-        wall_time_limit: 5,
-        memory_limit: 128000,
-      }),
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(payload),
     }
   );
-
+  const created = await readJudgeResponse(createResponse);
   if (!createResponse.ok) {
-    throw new Error(`Không thể tạo lượt chấm (HTTP ${createResponse.status}).`);
+    throw new Error(`Không thể tạo lượt chấm (HTTP ${createResponse.status}): ${judgeResponseMessage(created)}.`);
   }
+  if (!created?.token) throw new Error("Dịch vụ chấm không trả về mã lượt chấm.");
 
-  const created = await createResponse.json();
-  if (!created.token) throw new Error("Dịch vụ chấm không trả về mã lượt chấm.");
-
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    await wait(500);
+  let lastPollError = "";
+  for (let attempt = 0; attempt < 36; attempt += 1) {
+    await wait(attempt < 4 ? 500 : 800);
     const resultResponse = await fetchWithTimeout(
       `${JUDGE0_ENDPOINT}/submissions/${encodeURIComponent(created.token)}?base64_encoded=false`,
-      {},
+      { headers: { Accept: "application/json" } },
       10000
     );
-    if (!resultResponse.ok) {
-      throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}).`);
+    const result = await readJudgeResponse(resultResponse);
+    if ([400, 408, 425, 429, 500, 502, 503, 504].includes(resultResponse.status)) {
+      lastPollError = `HTTP ${resultResponse.status}: ${judgeResponseMessage(result, "phản hồi tạm thời không có nội dung")}`;
+      if (attempt < 10) continue;
+      throw new Error(`Không thể lấy kết quả chấm sau nhiều lần thử (${lastPollError}).`);
     }
-
-    const result = await resultResponse.json();
+    if (!resultResponse.ok) {
+      throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}): ${judgeResponseMessage(result)}.`);
+    }
+    if (!result) continue;
     const statusId = result.status?.id;
+    if (result.error && !result.status) throw new Error(`Judge0 từ chối lượt chấm: ${judgeResponseMessage(result)}.`);
     if (statusId !== 1 && statusId !== 2) return result;
   }
+  throw new Error(lastPollError || "Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
+}
 
-  throw new Error("Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
+function getJudgeVerdict(result) {
+  const mapped = JUDGE_STATUS_TO_VERDICT[result?.status?.id] || "SE";
+  const diagnostics = `${result?.compile_output || ""}\n${result?.stderr || ""}`;
+  if (mapped === "RE" && /(SyntaxError|IndentationError|TabError|Compilation failed|fatal error|Syntax error)/i.test(diagnostics)) return "CE";
+  return mapped;
 }
 
 function getProblemTestCases(problem) {
@@ -364,9 +389,9 @@ async function judgeSourceCode(problem, code) {
 
   const testCases = getProblemTestCases(problem);
   const incompleteCase = testCases.find((test) => !test.output.trim() || test.output.trim() === "—");
-  if (incompleteCase) {
+  if (incompleteCase || testCases.length === 0) {
     return {
-      verdict: "SE",
+      verdict: "CONFIG",
       tests: [],
       passedTests: 0,
       totalTests: testCases.length,
@@ -387,7 +412,7 @@ async function judgeSourceCode(problem, code) {
     }));
   }
 
-  const verdicts = results.map((result) => JUDGE_STATUS_TO_VERDICT[result.status?.id] || "SE");
+  const verdicts = results.map(getJudgeVerdict);
   const tests = verdicts.map((verdict) => verdict === "AC");
   const passedTests = tests.filter(Boolean).length;
   const totalTests = testCases.length;
@@ -424,6 +449,7 @@ function VerdictPill({ verdict }) {
     AC: { label: "AC · Chấp nhận", cls: "nb-pill-ac" },
     WA: { label: "WA · Sai kết quả", cls: "nb-pill-wa" },
     CE: { label: "CE · Lỗi biên dịch", cls: "nb-pill-wa" },
+    CONFIG: { label: "CẤU HÌNH · Thiếu test hợp lệ", cls: "nb-pill-wa" },
     TLE: { label: "TLE · Quá thời gian", cls: "nb-pill-wa" },
     RE: { label: "RE · Lỗi khi chạy", cls: "nb-pill-wa" },
     SE: { label: "SE · Lỗi dịch vụ chấm", cls: "nb-pill-wa" },
@@ -623,6 +649,66 @@ function formatSubmissionDate(value) {
   catch (e) { return "Thời gian chưa có"; }
 }
 
+const PYTHON_KEYWORDS = new Set("and as assert async await break case class continue def del elif else except False finally for from global if import in is lambda match None nonlocal not or pass raise return True try while with yield print range len int float str list dict set tuple input open enumerate zip sum min max".split(" "));
+const CPP_KEYWORDS = new Set("alignas alignof auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long namespace new nullptr operator private protected public register return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while std string cin cout endl".split(" "));
+
+function highlightCodeLine(line, language) {
+  const keywords = language === "python" ? PYTHON_KEYWORDS : CPP_KEYWORDS;
+  const tokenPattern = /(#.*|\/\/.*|\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
+  const parts = [];
+  let cursor = 0;
+  let match;
+  while ((match = tokenPattern.exec(line))) {
+    if (match.index > cursor) parts.push({ value: line.slice(cursor, match.index), className: "" });
+    const token = match[0];
+    let className = "";
+    if (token.startsWith("#") || token.startsWith("//")) className = "nb-syntax-comment";
+    else if (token.startsWith("\"") || token.startsWith("'")) className = "nb-syntax-string";
+    else if (/^\\d/.test(token)) className = "nb-syntax-number";
+    else if (keywords.has(token)) className = "nb-syntax-keyword";
+    else if (/^(print|input|len|range|int|float|str|sum|cout|cin|std)$/.test(token)) className = "nb-syntax-function";
+    parts.push({ value: token, className });
+    cursor = match.index + token.length;
+  }
+  if (cursor < line.length) parts.push({ value: line.slice(cursor), className: "" });
+  return parts.map((part, index) => part.className ? <span key={index} className={part.className}>{part.value}</span> : <React.Fragment key={index}>{part.value}</React.Fragment>);
+}
+
+function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
+  const [scroll, setScroll] = useState({ top: 0, left: 0 });
+  const lines = String(code || "").split("\n");
+  const textareaRef = useRef(null);
+
+  function handleKeyDown(event) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const target = event.currentTarget;
+      const start = target.selectionStart;
+      const end = target.selectionEnd;
+      const next = `${code.slice(0, start)}    ${code.slice(end)}`;
+      onChange(next);
+      requestAnimationFrame(() => { target.selectionStart = target.selectionEnd = start + 4; });
+    } else if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      onSubmit?.();
+    }
+  }
+
+  return (
+    <div className="nb-thonny-editor">
+      <div className="nb-editor-toolbar"><span><Code2 size={14} /> {language === "python" ? "Python 3 · Editor" : "C++17 · Editor"}</span><span>Ln {Math.min(lines.length, 999)} · {code.length} ký tự</span></div>
+      <div className="nb-editor-workspace">
+        <div className="nb-editor-gutter" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}>{lines.map((_, index) => <span key={index}>{index + 1}</span>)}</div>
+        <div className="nb-editor-code-layer">
+          <pre className="nb-code-highlight" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }} aria-hidden="true"><code>{lines.map((line, index) => <React.Fragment key={index}>{highlightCodeLine(line, language)}{index < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</code></pre>
+          <textarea ref={textareaRef} className="nb-code-input" value={code} onChange={(event) => onChange(event.target.value)} onKeyDown={handleKeyDown} onScroll={(event) => setScroll({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} spellCheck={false} readOnly={readOnly} aria-label="Trình soạn thảo mã nguồn" />
+        </div>
+      </div>
+      <div className="nb-editor-status"><span>{readOnly ? "Chế độ chỉ xem" : "Tab: 4 khoảng trắng · Ctrl/Cmd + Enter: nộp bài"}</span><span>{language === "python" ? "Python" : "GNU C++17"}</span></div>
+    </div>
+  );
+}
+
 function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0, submissionHistory = [] }) {
   const [code, setCode] = useState(
     problem.isPython ? "# Viết code Python của bạn tại đây\n\n" : "// Viết code của bạn tại đây\n\n"
@@ -631,7 +717,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [result, setResult] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
-  const orderedHistory = [...submissionHistory].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
   async function handleSubmit() {
@@ -679,8 +765,8 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
               </div>
             </div>
             {!readOnly && <div className="nb-solver-meta"><span>Điểm tốt nhất: <strong>{bestScore}/{problem.points}</strong></span><span>Đã nộp: <strong>{attemptCount}</strong> lần</span><span>{getProblemTestCases(problem).length} test case</span></div>}
-            {!readOnly && submissionHistory.length > 0 && <div className="nb-history-panel">
-              <button type="button" className="nb-history-toggle" onClick={() => setHistoryOpen((open) => !open)}><RefreshCw size={14} /> Lịch sử code đã nộp ({submissionHistory.length})<ChevronRight size={14} className={historyOpen ? "nb-history-chevron open" : "nb-history-chevron"} /></button>
+            {!readOnly && orderedHistory.length > 0 && <div className="nb-history-panel">
+              <button type="button" className="nb-history-toggle" onClick={() => setHistoryOpen((open) => !open)}><RefreshCw size={14} /> Lịch sử code đã nộp ({orderedHistory.length})<ChevronRight size={14} className={historyOpen ? "nb-history-chevron open" : "nb-history-chevron"} /></button>
               {historyOpen && <div className="nb-history-body">
                 <div className="nb-history-list">{orderedHistory.map((submission) => <button type="button" key={submission.id} className={"nb-history-item " + (selectedHistory?.id === submission.id ? "active" : "")} onClick={() => setSelectedHistoryId(submission.id)}><div><VerdictPill verdict={submission.verdict} /><span className="nb-history-date">{formatSubmissionDate(submission.createdAt)}</span></div><strong>{submission.score ?? 0}/{submission.problemPoints ?? problem.points}đ</strong><small>{submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test đạt` : "Bản nộp cũ"}</small></button>)}</div>
                 {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" disabled={!selectedHistory.sourceCode} onClick={() => { setCode(selectedHistory.sourceCode); setResult(null); setHistoryOpen(false); }}><Code2 size={14} /> Khôi phục vào editor</button></div>{selectedHistory.sourceCode ? <pre className="nb-history-code">{selectedHistory.sourceCode}</pre> : <p className="nb-sub">Lượt nộp này được tạo trước khi hệ thống lưu source code.</p>}</div>}
@@ -689,13 +775,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
           </div>
 
           <div className="nb-modal-col">
-            <textarea
-              className="nb-code-editor"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              spellCheck={false}
-              readOnly={readOnly}
-            />
+            <CodeEditor code={code} onChange={setCode} language={problem.isPython ? "python" : "cpp"} onSubmit={handleSubmit} readOnly={readOnly} />
             <p className="nb-sub" style={{ marginTop: 6 }}>
               Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
             </p>
@@ -2176,6 +2256,24 @@ function App() {
         .nb-problem-statement p { margin: 0 0 10px; white-space: pre-wrap; }
         .nb-problem-statement-image { display: block; max-width: 100%; max-height: 360px; object-fit: contain; margin: 0 0 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; padding: 5px; }
         .nb-code-editor { width: 100%; min-height: 200px; background: var(--ink); color: #D8DEE9; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; border-radius: 8px; border: none; padding: 14px; resize: vertical; box-sizing: border-box; }
+        .nb-thonny-editor { border: 1px solid #27364A; border-radius: 9px; overflow: hidden; background: #10202F; box-shadow: 0 6px 16px rgba(16,32,47,0.16); }
+        .nb-editor-toolbar, .nb-editor-status { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 10px; color: #A8B8C8; background: #1A3045; font: 11px/1.2 'JetBrains Mono', monospace; }
+        .nb-editor-toolbar span:first-child { display: flex; align-items: center; gap: 6px; color: #E4EDF5; font-weight: 600; }
+        .nb-editor-status { color: #8296A8; background: #14283A; border-top: 1px solid #27364A; font-size: 10px; }
+        .nb-editor-workspace { display: flex; position: relative; min-height: 330px; max-height: 480px; overflow: hidden; background: #10202F; }
+        .nb-editor-gutter { flex: 0 0 46px; padding: 14px 7px 14px 0; color: #687E91; background: #0D1B28; text-align: right; user-select: none; font: 13px/1.55 'JetBrains Mono', monospace; }
+        .nb-editor-gutter span { display: block; height: 20px; }
+        .nb-editor-code-layer { position: relative; flex: 1; min-width: 0; overflow: hidden; }
+        .nb-code-highlight, .nb-code-input { position: absolute; inset: 0; width: max-content; min-width: 100%; min-height: 100%; margin: 0; padding: 14px 16px; border: 0; box-sizing: border-box; font: 13px/1.55 'JetBrains Mono', monospace; letter-spacing: 0; tab-size: 4; white-space: pre; }
+        .nb-code-highlight { pointer-events: none; color: #E5EDF5; background: transparent; }
+        .nb-code-highlight code { font: inherit; }
+        .nb-code-input { z-index: 2; resize: none; overflow: auto; color: transparent; caret-color: #F7C873; background: transparent; outline: none; -webkit-text-fill-color: transparent; }
+        .nb-code-input::selection { background: rgba(92, 155, 213, 0.38); }
+        .nb-syntax-comment { color: #6FA47C; font-style: italic; }
+        .nb-syntax-string { color: #E6B36A; }
+        .nb-syntax-number { color: #C99BE8; }
+        .nb-syntax-keyword { color: #7DB7E8; font-weight: 600; }
+        .nb-syntax-function { color: #82D4C1; }
         .nb-modal-actions { margin-top: 10px; display: flex; }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
         .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
@@ -2277,6 +2375,9 @@ function App() {
           .nb-modal { max-height: 94vh; }
           .nb-modal-body { padding: 16px; }
           .nb-code-editor { min-height: 160px; }
+          .nb-editor-workspace { min-height: 250px; }
+          .nb-editor-toolbar, .nb-editor-status { font-size: 9px; }
+          .nb-code-highlight, .nb-code-input { font-size: 12px; padding-left: 12px; padding-right: 12px; }
         }
       `}</style>
 
