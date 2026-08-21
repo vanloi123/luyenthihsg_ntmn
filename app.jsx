@@ -308,6 +308,30 @@ function lsSet(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* ignore */ }
 }
 
+const PENDING_PROBLEM_WRITES_KEY = "pending-problem-writes-v1";
+
+function getPendingProblemWrites() {
+  const pending = lsGet(PENDING_PROBLEM_WRITES_KEY);
+  return Array.isArray(pending) ? pending : [];
+}
+
+function isDuplicateKeyError(error) {
+  return error?.code === "23505" || /duplicate key|unique constraint/i.test(String(error?.message || ""));
+}
+
+function problemSaveErrorMessage(error) {
+  const detail = String(error?.message || "").trim();
+  if (error?.code === "42501" || /row-level security|permission denied|not allowed/i.test(detail)) {
+    return "Không thể lưu bài tập vì tài khoản hiện tại chưa có quyền tạo bài. Hãy kiểm tra quyền INSERT của bảng problems.";
+  }
+  if (/network|fetch|failed to fetch|timeout/i.test(detail)) {
+    return "Không thể kết nối để lưu bài tập. Bài đã được giữ trên thiết bị này và sẽ thử gửi lại khi bạn bấm làm mới.";
+  }
+  return detail
+    ? `Không thể lưu bài tập. Bài đã được giữ trên thiết bị này. Chi tiết: ${detail}`
+    : "Không thể lưu bài tập. Bài đã được giữ trên thiết bị này và sẽ thử gửi lại khi bạn bấm làm mới.";
+}
+
 /* ---------------------------------------------------------------------- */
 /*  HELPERS                                                                 */
 /* ---------------------------------------------------------------------- */
@@ -568,12 +592,16 @@ function SectionHeading({ eyebrow, title, sub }) {
   );
 }
 
-function StorageBanner({ visible, onDismiss }) {
+function StorageBanner({ visible, message, onDismiss, onRetry }) {
   if (!visible) return null;
+  const text = typeof message === "string" && message.trim()
+    ? message
+    : "Không đồng bộ được dữ liệu lúc này — thay đổi có thể chưa được lưu cho cả lớp.";
   return (
     <div className="nb-storage-banner">
       <AlertCircle size={15} />
-      <span>Không đồng bộ được dữ liệu lúc này — thay đổi có thể chưa được lưu cho cả lớp. Thử bấm làm mới.</span>
+      <span>{text}</span>
+      {onRetry && <button className="nb-icon-btn" onClick={onRetry} aria-label="Thử đồng bộ lại" title="Thử đồng bộ lại"><RefreshCw size={14} /></button>}
       <button className="nb-icon-btn" onClick={onDismiss} aria-label="Đóng"><X size={14} /></button>
     </div>
   );
@@ -1317,8 +1345,8 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
         sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
         testCases,
       };
-      if (editingId) updateProblem(problem);
-      else addProblem(problem);
+      if (editingId) await updateProblem(problem);
+      else await addProblem(problem);
       resetForm();
       setShowForm(false);
     } catch (error) {
@@ -1949,11 +1977,22 @@ function App() {
   const [setupError, setSetupError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [storageError, setStorageError] = useState(false);
+  const [pendingProblemWrites, setPendingProblemWrites] = useState(getPendingProblemWrites);
 
   const currentUser = accounts.find((a) => a.id === authUserId) || null;
   const isAdmin = currentUser?.role === "admin";
   const isTeacher = currentUser?.role === "teacher" || isAdmin;
   const students = accounts.filter((a) => a.role === "student");
+
+  useEffect(() => {
+    lsSet(PENDING_PROBLEM_WRITES_KEY, pendingProblemWrites);
+  }, [pendingProblemWrites]);
+
+  useEffect(() => {
+    if (pendingProblemWrites.length > 0) {
+      setStorageError((current) => current || `Có ${pendingProblemWrites.length} bài tập đang chờ gửi. Dữ liệu đã được giữ trên thiết bị này.`);
+    }
+  }, [pendingProblemWrites.length]);
 
   const runInitialLoad = useCallback(async () => {
     setLoading(true);
@@ -2014,9 +2053,10 @@ function App() {
       setSubmissions(data.submissions);
       setDiscussions(data.discussions);
       setAccounts(data.accounts);
-      setStorageError(false);
+      const retryResult = await retryPendingProblemWrites();
+      if (retryResult.failed === 0) setStorageError(false);
     } catch (e) {
-      setStorageError(true);
+      setStorageError("Không thể tải dữ liệu lớp học lúc này. Hãy kiểm tra kết nối rồi thử đồng bộ lại.");
     }
     setRefreshing(false);
   }
@@ -2102,13 +2142,62 @@ function App() {
     setTopics((prev) => prev.filter((item) => item.id !== id));
     dbRemoveTopic(id).catch(() => setStorageError(true));
   }
-  function addProblem(p) {
-    setProblems((prev) => [...prev, p]);
-    dbAddProblem(p).catch(() => setStorageError(true));
+  async function retryPendingProblemWrites() {
+    if (pendingProblemWrites.length === 0) return { saved: 0, failed: 0 };
+
+    const saved = [];
+    const remaining = [];
+    for (const problem of pendingProblemWrites) {
+      try {
+        await dbAddProblem(problem);
+        saved.push(problem);
+      } catch (error) {
+        // Nếu lần trước máy chủ đã ghi thành công nhưng phản hồi bị mất, coi lỗi khóa trùng là đã lưu.
+        if (isDuplicateKeyError(error)) saved.push(problem);
+        else remaining.push(problem);
+      }
+    }
+
+    if (saved.length > 0) {
+      setProblems((prev) => {
+        const knownIds = new Set(prev.map((item) => item.id));
+        return [...prev, ...saved.filter((item) => !knownIds.has(item.id))];
+      });
+    }
+    setPendingProblemWrites(remaining);
+
+    if (remaining.length > 0) {
+      setStorageError(`Vẫn còn ${remaining.length} bài tập chưa gửi được. Dữ liệu đã được giữ trên thiết bị này.`);
+    }
+    return { saved: saved.length, failed: remaining.length };
   }
-  function updateProblem(p) {
-    setProblems((prev) => prev.map((item) => item.id === p.id ? p : item));
-    dbUpdateProblem(p).catch(() => setStorageError(true));
+  async function addProblem(p) {
+    try {
+      await dbAddProblem(p);
+    } catch (error) {
+      // Không thêm dữ liệu vào danh sách chính trước khi máy chủ xác nhận đã lưu.
+      // Bản ghi được lưu cục bộ để người dùng không mất nội dung khi tải lại trang.
+      if (!isDuplicateKeyError(error)) {
+        setPendingProblemWrites((prev) => prev.some((item) => item.id === p.id) ? prev : [...prev, p]);
+        const message = problemSaveErrorMessage(error);
+        setStorageError(message);
+        throw new Error(message);
+      }
+    }
+    setProblems((prev) => prev.some((item) => item.id === p.id) ? prev : [...prev, p]);
+    setPendingProblemWrites((prev) => prev.filter((item) => item.id !== p.id));
+    setStorageError(false);
+  }
+  async function updateProblem(p) {
+    try {
+      await dbUpdateProblem(p);
+      setProblems((prev) => prev.map((item) => item.id === p.id ? p : item));
+      setStorageError(false);
+    } catch (error) {
+      const message = problemSaveErrorMessage(error);
+      setStorageError(message);
+      throw new Error(message);
+    }
   }
   function removeProblem(id) {
     setProblems((prev) => prev.filter((item) => item.id !== id));
@@ -2910,7 +2999,12 @@ function App() {
             </div>
 
             <div className="nb-content">
-              <StorageBanner visible={storageError} onDismiss={() => setStorageError(false)} />
+              <StorageBanner
+                visible={storageError}
+                message={storageError}
+                onRetry={refreshNow}
+                onDismiss={() => setStorageError(false)}
+              />
 
               {tab === "overview" && (
                 <OverviewView
