@@ -1281,7 +1281,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     const state = progressState(problem);
     const language = LANGUAGE_META[problemLanguage(problem)] || LANGUAGE_META.cpp;
     return (
-      <button key={problem.id} className={`nb-practice-problem ${state.className}`} onClick={() => setActive(problem)}>
+      <div key={problem.id} className={`nb-practice-problem ${state.className} ${isTeacher ? "teacher" : ""}`} role="button" tabIndex={0} onClick={() => setActive(problem)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActive(problem); } }}>
         <div className="nb-practice-problem-index">{String(index + 1).padStart(2, "0")}</div>
         <div className="nb-practice-problem-main">
           <div className="nb-practice-problem-titleline">
@@ -1300,7 +1300,8 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           {!isTeacher && <strong>{studentStats.bestScore}/{problem.points}</strong>}
           {isTeacher && <span>Quản lý <ChevronRight size={16} /></span>}
         </div>
-      </button>
+        {isTeacher && <div className="nb-practice-problem-actions"><button type="button" className="nb-practice-manage-action edit" onClick={(event) => { event.stopPropagation(); beginEdit(problem); }}><Pencil size={14} /> Sửa</button><button type="button" className="nb-practice-manage-action delete" onClick={(event) => { event.stopPropagation(); handleDelete(problem); }}><Trash2 size={14} /> Xóa</button></div>}
+      </div>
     );
   }
 
@@ -2615,6 +2616,8 @@ function App() {
         .nb-practice-problem-list { display: flex; flex-direction: column; border-top: 1px solid var(--paper-line); }
         .nb-practice-problem { width: 100%; display: grid; grid-template-columns: 29px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 12px 5px 12px 0; color: var(--ink); border: 0; border-bottom: 1px solid var(--paper-line); background: transparent; text-align: left; cursor: pointer; font-family: inherit; transition: background .14s ease, transform .14s ease; }
         .nb-practice-problem:hover { padding-left: 8px; background: rgba(44,74,140,0.045); }
+        .nb-practice-problem:focus-visible { outline: 2px solid var(--pen-blue); outline-offset: -2px; }
+        .nb-practice-problem.teacher { grid-template-columns: 29px minmax(0, 1fr) auto auto; }
         .nb-practice-problem-index { color: var(--slate); font: 600 10px 'JetBrains Mono', monospace; text-align: center; }
         .nb-practice-problem-main { min-width: 0; }
         .nb-practice-problem-titleline { display: flex; align-items: center; gap: 8px; }
@@ -2628,6 +2631,11 @@ function App() {
         .nb-practice-problem-score { display: flex; align-items: center; justify-content: flex-end; gap: 9px; min-width: 106px; }
         .nb-practice-problem-score strong { color: var(--pen-blue); font: 700 11px 'JetBrains Mono', monospace; }
         .nb-practice-problem-score > span { display: inline-flex; align-items: center; gap: 3px; color: var(--pen-blue); font-size: 10px; }
+        .nb-practice-problem-actions { display: flex; align-items: center; gap: 5px; padding-left: 5px; border-left: 1px solid var(--paper-line); }
+        .nb-practice-manage-action { display: inline-flex; align-items: center; gap: 4px; padding: 6px 8px; border: 1px solid var(--paper-line); border-radius: 6px; background: #fff; color: var(--pen-blue); cursor: pointer; font: 600 10px inherit; transition: background .12s, border-color .12s; }
+        .nb-practice-manage-action:hover { border-color: var(--pen-blue); background: rgba(44,74,140,0.07); }
+        .nb-practice-manage-action.delete { color: var(--red-pen); }
+        .nb-practice-manage-action.delete:hover { border-color: rgba(178,58,58,0.4); background: rgba(178,58,58,0.08); }
         .nb-practice-group-actions { padding-top: 10px; }
         .nb-practice-group-actions .nb-btn { padding: 6px 10px; font-size: 11px; }
         .nb-practice-empty { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 43px 15px 25px; color: var(--slate); text-align: center; }
@@ -2976,6 +2984,8 @@ function App() {
           .nb-practice-group-summary > div { margin-left: 0; }
           .nb-practice-problem { grid-template-columns: 23px minmax(0, 1fr); gap: 7px; padding-right: 0; }
           .nb-practice-problem-score { grid-column: 2; justify-content: flex-start; min-width: 0; }
+          .nb-practice-problem.teacher { grid-template-columns: 23px minmax(0, 1fr); }
+          .nb-practice-problem.teacher .nb-practice-problem-actions { grid-column: 2; justify-content: flex-start; padding: 7px 0 0; border: 0; }
           .nb-practice-problem h4 { white-space: normal; }
           .nb-management-row { align-items: flex-start; flex-direction: column; }
           .nb-management-actions { width: 100%; }
