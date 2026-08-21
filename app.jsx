@@ -87,8 +87,21 @@ function parseTestCasesJson(text) {
   }
 }
 
+const ACCOUNT_ROLE_META = {
+  student: { label: "Học sinh", shortLabel: "HS" },
+  teacher: { label: "Giáo viên", shortLabel: "GV" },
+  admin: { label: "Quản trị viên tối cao", shortLabel: "Admin" },
+};
+
 function normalizeAccountRole(rawRole) {
-  return String(rawRole || "").trim().toLowerCase() === "teacher" ? "teacher" : "student";
+  const value = String(rawRole || "").trim().toLowerCase();
+  if (["admin", "administrator", "superadmin", "super_admin", "root"].includes(value)) return "admin";
+  if (["teacher", "gv", "lecturer"].includes(value)) return "teacher";
+  return "student";
+}
+
+function accountRoleLabel(role) {
+  return ACCOUNT_ROLE_META[normalizeAccountRole(role)]?.label || ACCOUNT_ROLE_META.student.label;
 }
 
 function mapAccount(row) {
@@ -974,7 +987,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 /* ---------------------------------------------------------------------- */
 
 function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, onNavigate }) {
-  const isTeacher = currentUser.role === "teacher";
+  const isTeacher = currentUser.role === "teacher" || currentUser.role === "admin";
   const firstName = currentUser.name.split(" ").slice(-1)[0];
 
   if (!isTeacher) {
@@ -1054,10 +1067,10 @@ function LessonDiscussion({ topic, discussions, currentUser, addThread, addReply
           <div className="nb-lesson-thread" key={discussion.id}>
             <div className="nb-thread-head">
               <Avatar name={discussion.author} size={28} />
-              <div><strong>{discussion.author}</strong>{discussion.role === "teacher" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 6 }}>Giáo viên</span>}<div className="nb-sub">Câu hỏi về {topic.title}</div></div>
+              <div><strong>{discussion.author}</strong>{discussion.role !== "student" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 6 }}>{discussion.role === "admin" ? "Quản trị viên" : "Giáo viên"}</span>}<div className="nb-sub">Câu hỏi về {topic.title}</div></div>
             </div>
             <p className="nb-para" style={{ margin: "9px 0" }}>{discussion.content}</p>
-            {(discussion.replies || []).length > 0 && <div className="nb-reply-list">{discussion.replies.map((reply, index) => <div className="nb-reply" key={index}><Avatar name={reply.author} size={22} /><div><strong style={{ fontSize: 12 }}>{reply.author}</strong>{reply.role === "teacher" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 5 }}>GV</span>}<div className="nb-sub" style={{ color: "var(--ink)" }}>{reply.content}</div></div></div>)}</div>}
+            {(discussion.replies || []).length > 0 && <div className="nb-reply-list">{discussion.replies.map((reply, index) => <div className="nb-reply" key={index}><Avatar name={reply.author} size={22} /><div><strong style={{ fontSize: 12 }}>{reply.author}</strong>{reply.role !== "student" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 5 }}>{reply.role === "admin" ? "Admin" : "GV"}</span>}<div className="nb-sub" style={{ color: "var(--ink)" }}>{reply.content}</div></div></div>)}</div>}
             <div className="nb-reply-form"><input className="nb-input" value={replyDrafts[discussion.id] || ""} onChange={(e) => setReplyDrafts((current) => ({ ...current, [discussion.id]: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitReply(discussion.id); } }} placeholder="Viết phản hồi…" /><button type="button" className="nb-icon-btn" onClick={() => submitReply(discussion.id)} aria-label="Gửi phản hồi"><Send size={15} /></button></div>
           </div>
         ))}
@@ -1749,7 +1762,7 @@ function DiscussionView({ discussions, addThread, addReply, currentUser }) {
             <div className="nb-thread-head">
               <Avatar name={d.author} size={30} />
               <div>
-                <div style={{ fontWeight: 600 }}>{d.author} {d.role === "teacher" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 6 }}>Giáo viên</span>}</div>
+                <div style={{ fontWeight: 600 }}>{d.author} {d.role !== "student" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 6 }}>{d.role === "admin" ? "Quản trị viên" : "Giáo viên"}</span>}</div>
                 <div className="nb-eyebrow">{d.topicRef}</div>
               </div>
             </div>
@@ -1760,7 +1773,7 @@ function DiscussionView({ discussions, addThread, addReply, currentUser }) {
                   <div key={i} className="nb-reply">
                     <Avatar name={r.author} size={22} />
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{r.author} {r.role === "teacher" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 6 }}>Giáo viên</span>}</div>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>{r.author} {r.role !== "student" && <span className="nb-pill nb-pill-pending" style={{ marginLeft: 6 }}>{r.role === "admin" ? "Quản trị viên" : "Giáo viên"}</span>}</div>
                       <div className="nb-sub" style={{ color: "var(--ink)" }}>{r.content}</div>
                     </div>
                   </div>
@@ -1781,7 +1794,7 @@ function DiscussionView({ discussions, addThread, addReply, currentUser }) {
   );
 }
 
-function AccountsView({ accounts, resetPassword, addAccount, removeAccount, currentUser }) {
+function AccountsView({ accounts, resetPassword, addAccount, removeAccount, currentUser, isAdmin }) {
   const [resetDrafts, setResetDrafts] = useState({});
   const [showAdd, setShowAdd] = useState(false);
   const [query, setQuery] = useState("");
@@ -1790,6 +1803,7 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
 
   const teacherCount = accounts.filter((account) => account.role === "teacher").length;
   const studentCount = accounts.filter((account) => account.role === "student").length;
+  const adminCount = accounts.filter((account) => account.role === "admin").length;
   const filteredAccounts = accounts.filter((account) => {
     const haystack = `${account.name} ${account.username}`.toLowerCase();
     const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase());
@@ -1828,7 +1842,12 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
       alert("Tên đăng nhập này đã tồn tại, hãy chọn tên khác.");
       return;
     }
-    addAccount({ name, username, password, role: normalizeAccountRole(form.role) });
+    const role = normalizeAccountRole(form.role);
+    if (role === "teacher" && !isAdmin) {
+      alert("Chỉ Quản trị viên tối cao mới được tạo tài khoản giáo viên.");
+      return;
+    }
+    addAccount({ name, username, password, role });
     resetForm();
     setShowAdd(false);
   }
@@ -1841,7 +1860,7 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
         <div className="nb-home-stat"><span className="blue"><Users size={17} /></span><div><strong>{accounts.length}</strong><small>Tổng tài khoản</small></div></div>
         <div className="nb-home-stat"><span className="green"><GraduationCap size={17} /></span><div><strong>{studentCount}</strong><small>Học sinh</small></div></div>
         <div className="nb-home-stat"><span className="gold"><Users size={17} /></span><div><strong>{teacherCount}</strong><small>Giáo viên</small></div></div>
-        <div className="nb-home-stat"><span className="red"><RefreshCw size={17} /></span><div><strong>{accounts.filter((account) => !account.passwordChanged).length}</strong><small>Chưa đổi mật khẩu</small></div></div>
+        <div className="nb-home-stat"><span className="red"><Award size={17} /></span><div><strong>{adminCount}</strong><small>Quản trị tối cao</small></div></div>
       </div>
 
       <div className="nb-panel" style={{ marginBottom: 16 }}>
@@ -1849,7 +1868,7 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
           <div>
             <div className="nb-eyebrow">Cấp quyền truy cập</div>
             <h3 className="nb-h3">Tạo tài khoản mới</h3>
-            <p className="nb-sub">Chọn đúng vai trò ngay khi tạo. Giáo viên có thể quản lý bài giảng, bài tập, đề thi và tài khoản.</p>
+            <p className="nb-sub">{isAdmin ? "Quản trị viên tối cao có thể tạo học sinh và giáo viên; giáo viên thường chỉ được tạo học sinh." : "Giáo viên có thể tạo tài khoản học sinh và quản lý mật khẩu học sinh."}</p>
           </div>
           <button className="nb-btn nb-btn-primary" onClick={() => setShowAdd((value) => !value)}>
             <Plus size={16} /> {showAdd ? "Đóng biểu mẫu" : "Tạo tài khoản"}
@@ -1861,9 +1880,9 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
               <label><span className="nb-field-label">Họ và tên</span><input className="nb-input" placeholder="Ví dụ: Nguyễn Minh Anh" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
               <label><span className="nb-field-label">Tên đăng nhập</span><input className="nb-input" autoCapitalize="none" autoCorrect="off" placeholder={form.role === "teacher" ? "Ví dụ: gv.toan" : "Ví dụ: hs21"} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
               <label><span className="nb-field-label">Mật khẩu ban đầu</span><input className="nb-input" type="password" minLength={4} placeholder="Ít nhất 4 ký tự" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
-              <label><span className="nb-field-label">Vai trò</span><select className="nb-input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="student">Học sinh</option><option value="teacher">Giáo viên</option></select></label>
+              <label><span className="nb-field-label">Vai trò</span><select className="nb-input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="student">Học sinh</option>{isAdmin && <option value="teacher">Giáo viên</option>}</select></label>
             </div>
-            <div className="nb-sub" style={{ marginTop: 10 }}>{form.role === "teacher" ? "Tài khoản giáo viên sẽ xuất hiện trong khu vực quản trị và có quyền tạo, chỉnh sửa nội dung học tập." : "Tài khoản học sinh được gắn mặc định với lớp 11 Tin và chỉ sử dụng các khu vực học tập."}</div>
+            <div className="nb-sub" style={{ marginTop: 10 }}>{form.role === "teacher" ? "Tài khoản giáo viên có thể quản lý nội dung học tập; chỉ Quản trị viên tối cao mới có thể tạo vai trò này." : "Tài khoản học sinh được gắn mặc định với lớp 11 Tin và chỉ sử dụng các khu vực học tập."}</div>
             <div className="nb-editor-actions"><button className="nb-btn nb-btn-primary" type="submit"><Save size={15} /> Tạo {form.role === "teacher" ? "tài khoản giáo viên" : "tài khoản học sinh"}</button><button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowAdd(false); }}>Hủy</button></div>
           </form>
         )}
@@ -1876,7 +1895,7 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
         </div>
         <div className="nb-exam-toolbar" style={{ padding: "0 18px 14px" }}>
           <div className="nb-exam-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm theo tên hoặc tên đăng nhập…" /></div>
-          <div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả"], ["student", "Học sinh"], ["teacher", "Giáo viên"]].map(([key, label]) => <button key={key} className={`nb-chip ${roleFilter === key ? "active" : ""}`} onClick={() => setRoleFilter(key)}>{label}</button>)}</div>
+          <div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả"], ["student", "Học sinh"], ["teacher", "Giáo viên"], ...(isAdmin ? [["admin", "Quản trị tối cao"]] : [])].map(([key, label]) => <button key={key} className={`nb-chip ${roleFilter === key ? "active" : ""}`} onClick={() => setRoleFilter(key)}>{label}</button>)}</div>
         </div>
         <table className="nb-table">
           <thead><tr><th>Họ tên</th><th>Vai trò</th><th>Tên đăng nhập</th><th>Trạng thái mật khẩu</th><th>Đặt lại mật khẩu</th><th></th></tr></thead>
@@ -1884,11 +1903,11 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
             {filteredAccounts.map((account) => (
               <tr key={account.id}>
                 <td><strong>{account.name}</strong>{account.id === currentUser?.id && <span className="nb-sub"> (bạn)</span>}</td>
-                <td>{account.role === "teacher" ? <span className="nb-pill nb-pill-pending">Giáo viên</span> : <span className="nb-pill nb-pill-ac">Học sinh</span>}</td>
+                <td>{account.role === "admin" ? <span className="nb-pill nb-pill-pending">Quản trị tối cao</span> : account.role === "teacher" ? <span className="nb-pill nb-pill-pending">Giáo viên</span> : <span className="nb-pill nb-pill-ac">Học sinh</span>}</td>
                 <td className="nb-mono">{account.username}</td>
                 <td>{account.passwordChanged ? <span className="nb-pill nb-pill-ac">Đã đổi</span> : <span className="nb-pill nb-pill-pending">Mặc định: {account.plainInitial || "Đã thiết lập"}</span>}</td>
-                <td><div style={{ display: "flex", gap: 6 }}><input className="nb-input" style={{ width: 120 }} type="password" minLength={4} placeholder="Mật khẩu mới" value={resetDrafts[account.id] || ""} onChange={(e) => setResetDrafts({ ...resetDrafts, [account.id]: e.target.value })} /><button className="nb-btn nb-btn-ghost" type="button" onClick={() => doReset(account.id)}>Đặt lại</button></div></td>
-                <td>{account.role === "student" && <button className="nb-icon-btn" title="Xóa tài khoản" aria-label={`Xóa tài khoản ${account.name}`} onClick={() => { if (window.confirm(`Xóa tài khoản ${account.name}? Không thể hoàn tác.`)) removeAccount(account.id); }}><X size={15} /></button>}</td>
+                <td>{account.role === "admin" ? <span className="nb-sub">Chỉ tự đổi mật khẩu</span> : (isAdmin || account.role === "student") ? <div style={{ display: "flex", gap: 6 }}><input className="nb-input" style={{ width: 120 }} type="password" minLength={4} placeholder="Mật khẩu mới" value={resetDrafts[account.id] || ""} onChange={(e) => setResetDrafts({ ...resetDrafts, [account.id]: e.target.value })} /><button className="nb-btn nb-btn-ghost" type="button" onClick={() => doReset(account.id)}>Đặt lại</button></div> : <span className="nb-sub">Chỉ admin quản lý</span>}</td>
+                <td>{((isAdmin && account.role !== "admin") || account.role === "student") && <button className="nb-icon-btn" title="Xóa tài khoản" aria-label={`Xóa tài khoản ${account.name}`} onClick={() => { if (window.confirm(`Xóa tài khoản ${account.name}? Không thể hoàn tác.`)) removeAccount(account.id); }}><X size={15} /></button>}</td>
               </tr>
             ))}
           </tbody>
@@ -1932,7 +1951,8 @@ function App() {
   const [storageError, setStorageError] = useState(false);
 
   const currentUser = accounts.find((a) => a.id === authUserId) || null;
-  const isTeacher = currentUser?.role === "teacher";
+  const isAdmin = currentUser?.role === "admin";
+  const isTeacher = currentUser?.role === "teacher" || isAdmin;
   const students = accounts.filter((a) => a.role === "student");
 
   const runInitialLoad = useCallback(async () => {
@@ -2120,6 +2140,8 @@ function App() {
   }
   function resetPassword(id, newPassword) {
     if (!isTeacher) return;
+    const target = accounts.find((account) => account.id === id);
+    if (!target || target.role === "admin" || (!isAdmin && target.role !== "student")) return;
     const hash = hashPassword(newPassword);
     setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, passwordHash: hash, passwordChanged: true, plainInitial: undefined } : a)));
     dbUpdatePassword(id, hash).catch(() => setStorageError(true));
@@ -2127,6 +2149,7 @@ function App() {
   function addAccount({ name, username, password, role = "student" }) {
     if (!isTeacher) return;
     const normalizedRole = normalizeAccountRole(role);
+    if (normalizedRole === "admin" || (normalizedRole === "teacher" && !isAdmin)) return;
     const acc = {
       id: (normalizedRole === "teacher" ? "gv" : "hs") + Date.now(), name, role: normalizedRole, username,
       passwordHash: hashPassword(password), plainInitial: password, passwordChanged: false,
@@ -2137,6 +2160,8 @@ function App() {
   }
   function removeAccount(id) {
     if (!isTeacher) return;
+    const target = accounts.find((account) => account.id === id);
+    if (!target || target.role === "admin" || (!isAdmin && target.role !== "student")) return;
     setAccounts((prev) => prev.filter((a) => a.id !== id));
     dbRemoveAccount(id).catch(() => setStorageError(true));
   }
@@ -2853,7 +2878,7 @@ function App() {
                 <Avatar name={currentUser.name} size={30} />
                 <div style={{ lineHeight: 1.2 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{currentUser.name}</div>
-                  <div className="nb-sub" style={{ color: "#75809A" }}>{isTeacher ? "Giáo viên" : "Học sinh"}</div>
+                  <div className="nb-sub" style={{ color: "#75809A" }}>{accountRoleLabel(currentUser.role)}</div>
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
@@ -2922,7 +2947,7 @@ function App() {
                 <DiscussionView discussions={discussions} addThread={addThread} addReply={addReply} currentUser={currentUser} />
               )}
               {tab === "accounts" && isTeacher && (
-                <AccountsView accounts={accounts} resetPassword={resetPassword} addAccount={addAccount} removeAccount={removeAccount} currentUser={currentUser} />
+                <AccountsView accounts={accounts} resetPassword={resetPassword} addAccount={addAccount} removeAccount={removeAccount} currentUser={currentUser} isAdmin={isAdmin} />
               )}
             </div>
 
