@@ -87,9 +87,13 @@ function parseTestCasesJson(text) {
   }
 }
 
+function normalizeAccountRole(rawRole) {
+  return String(rawRole || "").trim().toLowerCase() === "teacher" ? "teacher" : "student";
+}
+
 function mapAccount(row) {
   return {
-    id: row.id, name: row.name, role: row.role, username: row.username,
+    id: row.id, name: row.name, role: normalizeAccountRole(row.role), username: row.username,
     passwordHash: row.password_hash, passwordChanged: row.password_changed,
     plainInitial: row.plain_initial, className: row.class_name, streak: row.streak || 0,
   };
@@ -271,10 +275,11 @@ async function dbUpdatePassword(id, newHash) {
   if (error) throw error;
 }
 async function dbAddAccount(a) {
+  const role = normalizeAccountRole(a.role);
   const { error } = await supabase.from("accounts").insert({
-    id: a.id, name: a.name, role: "student", username: a.username,
+    id: a.id, name: a.name, role, username: a.username,
     password_hash: a.passwordHash, password_changed: false, plain_initial: a.plainInitial,
-    class_name: "11 Tin", streak: 0,
+    class_name: role === "student" ? "11 Tin" : null, streak: 0,
   });
   if (error) throw error;
 }
@@ -1779,80 +1784,116 @@ function DiscussionView({ discussions, addThread, addReply, currentUser }) {
 function AccountsView({ accounts, resetPassword, addAccount, removeAccount, currentUser }) {
   const [resetDrafts, setResetDrafts] = useState({});
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ name: "", username: "", password: "" });
+  const [query, setQuery] = useState("");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "student" });
+
+  const teacherCount = accounts.filter((account) => account.role === "teacher").length;
+  const studentCount = accounts.filter((account) => account.role === "student").length;
+  const filteredAccounts = accounts.filter((account) => {
+    const haystack = `${account.name} ${account.username}`.toLowerCase();
+    const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase());
+    const matchesRole = roleFilter === "all" || account.role === roleFilter;
+    return matchesQuery && matchesRole;
+  });
+
+  function resetForm() {
+    setForm({ name: "", username: "", password: "", role: "student" });
+  }
 
   function doReset(id) {
     const val = (resetDrafts[id] || "").trim();
-    if (val.length < 4) return;
+    if (val.length < 4) {
+      alert("Mật khẩu mới cần ít nhất 4 ký tự.");
+      return;
+    }
     resetPassword(id, val);
     setResetDrafts({ ...resetDrafts, [id]: "" });
   }
 
   function submitAdd(e) {
     e.preventDefault();
-    if (!form.name.trim() || !form.username.trim() || !form.password.trim()) return;
-    if (accounts.some((a) => a.username.toLowerCase() === form.username.trim().toLowerCase())) {
+    const name = form.name.trim();
+    const username = form.username.trim().toLowerCase();
+    const password = form.password.trim();
+    if (!name || !username || password.length < 4) {
+      alert("Vui lòng nhập đủ thông tin; mật khẩu cần ít nhất 4 ký tự.");
+      return;
+    }
+    if (!/^[a-z0-9._-]+$/.test(username)) {
+      alert("Tên đăng nhập chỉ nên gồm chữ thường, số, dấu chấm, gạch dưới hoặc gạch ngang.");
+      return;
+    }
+    if (accounts.some((a) => a.username.toLowerCase() === username)) {
       alert("Tên đăng nhập này đã tồn tại, hãy chọn tên khác.");
       return;
     }
-    addAccount({ name: form.name.trim(), username: form.username.trim(), password: form.password.trim() });
-    setForm({ name: "", username: "", password: "" });
+    addAccount({ name, username, password, role: normalizeAccountRole(form.role) });
+    resetForm();
     setShowAdd(false);
   }
 
   return (
     <div>
-      <SectionHeading eyebrow="Quản trị" title="Quản lý tài khoản" sub="Cấp phát và đặt lại mật khẩu cho các thành viên trong lớp." />
+      <SectionHeading eyebrow="Quản trị" title="Quản lý tài khoản" sub="Quản lý thành viên, tạo giáo viên mới và cấp lại mật khẩu trong cùng một không gian." />
+
+      <div className="nb-home-stat-grid" style={{ marginBottom: 16 }}>
+        <div className="nb-home-stat"><span className="blue"><Users size={17} /></span><div><strong>{accounts.length}</strong><small>Tổng tài khoản</small></div></div>
+        <div className="nb-home-stat"><span className="green"><GraduationCap size={17} /></span><div><strong>{studentCount}</strong><small>Học sinh</small></div></div>
+        <div className="nb-home-stat"><span className="gold"><Users size={17} /></span><div><strong>{teacherCount}</strong><small>Giáo viên</small></div></div>
+        <div className="nb-home-stat"><span className="red"><RefreshCw size={17} /></span><div><strong>{accounts.filter((account) => !account.passwordChanged).length}</strong><small>Chưa đổi mật khẩu</small></div></div>
+      </div>
 
       <div className="nb-panel" style={{ marginBottom: 16 }}>
-        <button className="nb-btn nb-btn-ghost" onClick={() => setShowAdd((v) => !v)}>
-          <Plus size={16} /> {showAdd ? "Đóng" : "Thêm học sinh mới"}
-        </button>
+        <div className="nb-management-head">
+          <div>
+            <div className="nb-eyebrow">Cấp quyền truy cập</div>
+            <h3 className="nb-h3">Tạo tài khoản mới</h3>
+            <p className="nb-sub">Chọn đúng vai trò ngay khi tạo. Giáo viên có thể quản lý bài giảng, bài tập, đề thi và tài khoản.</p>
+          </div>
+          <button className="nb-btn nb-btn-primary" onClick={() => setShowAdd((value) => !value)}>
+            <Plus size={16} /> {showAdd ? "Đóng biểu mẫu" : "Tạo tài khoản"}
+          </button>
+        </div>
         {showAdd && (
-          <form onSubmit={submitAdd} className="nb-form">
-            <input className="nb-input" placeholder="Họ tên học sinh" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            <input className="nb-input" placeholder="Tên đăng nhập (vd: hs21)" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-            <input className="nb-input" placeholder="Mật khẩu ban đầu" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-            <button className="nb-btn nb-btn-primary" type="submit">Tạo tài khoản</button>
+          <form onSubmit={submitAdd} className="nb-form" style={{ marginTop: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+              <label><span className="nb-field-label">Họ và tên</span><input className="nb-input" placeholder="Ví dụ: Nguyễn Minh Anh" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+              <label><span className="nb-field-label">Tên đăng nhập</span><input className="nb-input" autoCapitalize="none" autoCorrect="off" placeholder={form.role === "teacher" ? "Ví dụ: gv.toan" : "Ví dụ: hs21"} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
+              <label><span className="nb-field-label">Mật khẩu ban đầu</span><input className="nb-input" type="password" minLength={4} placeholder="Ít nhất 4 ký tự" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
+              <label><span className="nb-field-label">Vai trò</span><select className="nb-input" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="student">Học sinh</option><option value="teacher">Giáo viên</option></select></label>
+            </div>
+            <div className="nb-sub" style={{ marginTop: 10 }}>{form.role === "teacher" ? "Tài khoản giáo viên sẽ xuất hiện trong khu vực quản trị và có quyền tạo, chỉnh sửa nội dung học tập." : "Tài khoản học sinh được gắn mặc định với lớp 11 Tin và chỉ sử dụng các khu vực học tập."}</div>
+            <div className="nb-editor-actions"><button className="nb-btn nb-btn-primary" type="submit"><Save size={15} /> Tạo {form.role === "teacher" ? "tài khoản giáo viên" : "tài khoản học sinh"}</button><button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowAdd(false); }}>Hủy</button></div>
           </form>
         )}
       </div>
 
       <div className="nb-panel nb-table-wrap">
+        <div className="nb-management-head" style={{ padding: "16px 18px 10px" }}>
+          <div><div className="nb-eyebrow">Danh sách thành viên</div><h3 className="nb-h3">Tài khoản trong hệ thống</h3></div>
+          <span className="nb-sub">{filteredAccounts.length}/{accounts.length} tài khoản</span>
+        </div>
+        <div className="nb-exam-toolbar" style={{ padding: "0 18px 14px" }}>
+          <div className="nb-exam-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm theo tên hoặc tên đăng nhập…" /></div>
+          <div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả"], ["student", "Học sinh"], ["teacher", "Giáo viên"]].map(([key, label]) => <button key={key} className={`nb-chip ${roleFilter === key ? "active" : ""}`} onClick={() => setRoleFilter(key)}>{label}</button>)}</div>
+        </div>
         <table className="nb-table">
-          <thead>
-            <tr><th>Họ tên</th><th>Vai trò</th><th>Tên đăng nhập</th><th>Trạng thái mật khẩu</th><th>Đặt lại mật khẩu</th><th></th></tr>
-          </thead>
+          <thead><tr><th>Họ tên</th><th>Vai trò</th><th>Tên đăng nhập</th><th>Trạng thái mật khẩu</th><th>Đặt lại mật khẩu</th><th></th></tr></thead>
           <tbody>
-            {accounts.map((a) => (
-              <tr key={a.id}>
-                <td>{a.name}{a.id === currentUser.id && <span className="nb-sub"> (bạn)</span>}</td>
-                <td>{a.role === "teacher" ? "Giáo viên" : "Học sinh"}</td>
-                <td className="nb-mono">{a.username}</td>
-                <td>
-                  {a.passwordChanged
-                    ? <span className="nb-pill nb-pill-ac">Đã đổi</span>
-                    : <span className="nb-pill nb-pill-pending">Mặc định: {a.plainInitial}</span>}
-                </td>
-                <td>
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <input className="nb-input" style={{ width: 110 }} placeholder="Mật khẩu mới"
-                      value={resetDrafts[a.id] || ""} onChange={(e) => setResetDrafts({ ...resetDrafts, [a.id]: e.target.value })} />
-                    <button className="nb-btn nb-btn-ghost" type="button" onClick={() => doReset(a.id)}>Đặt lại</button>
-                  </div>
-                </td>
-                <td>
-                  {a.role === "student" && (
-                    <button className="nb-icon-btn" title="Xoá tài khoản"
-                      onClick={() => { if (window.confirm("Xoá tài khoản " + a.name + "? Không thể hoàn tác.")) removeAccount(a.id); }}>
-                      <X size={15} />
-                    </button>
-                  )}
-                </td>
+            {filteredAccounts.map((account) => (
+              <tr key={account.id}>
+                <td><strong>{account.name}</strong>{account.id === currentUser?.id && <span className="nb-sub"> (bạn)</span>}</td>
+                <td>{account.role === "teacher" ? <span className="nb-pill nb-pill-pending">Giáo viên</span> : <span className="nb-pill nb-pill-ac">Học sinh</span>}</td>
+                <td className="nb-mono">{account.username}</td>
+                <td>{account.passwordChanged ? <span className="nb-pill nb-pill-ac">Đã đổi</span> : <span className="nb-pill nb-pill-pending">Mặc định: {account.plainInitial || "Đã thiết lập"}</span>}</td>
+                <td><div style={{ display: "flex", gap: 6 }}><input className="nb-input" style={{ width: 120 }} type="password" minLength={4} placeholder="Mật khẩu mới" value={resetDrafts[account.id] || ""} onChange={(e) => setResetDrafts({ ...resetDrafts, [account.id]: e.target.value })} /><button className="nb-btn nb-btn-ghost" type="button" onClick={() => doReset(account.id)}>Đặt lại</button></div></td>
+                <td>{account.role === "student" && <button className="nb-icon-btn" title="Xóa tài khoản" aria-label={`Xóa tài khoản ${account.name}`} onClick={() => { if (window.confirm(`Xóa tài khoản ${account.name}? Không thể hoàn tác.`)) removeAccount(account.id); }}><X size={15} /></button>}</td>
               </tr>
             ))}
           </tbody>
         </table>
+        {filteredAccounts.length === 0 && <div className="nb-home-empty" style={{ padding: 28 }}><Users size={22} /><strong>Không tìm thấy tài khoản</strong><span>Hãy thử từ khóa hoặc bộ lọc vai trò khác.</span></div>}
       </div>
     </div>
   );
@@ -2078,20 +2119,24 @@ function App() {
     dbAddReply(threadId, reply).catch(() => setStorageError(true));
   }
   function resetPassword(id, newPassword) {
+    if (!isTeacher) return;
     const hash = hashPassword(newPassword);
     setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, passwordHash: hash, passwordChanged: true, plainInitial: undefined } : a)));
     dbUpdatePassword(id, hash).catch(() => setStorageError(true));
   }
-  function addAccount({ name, username, password }) {
+  function addAccount({ name, username, password, role = "student" }) {
+    if (!isTeacher) return;
+    const normalizedRole = normalizeAccountRole(role);
     const acc = {
-      id: "hs" + Date.now(), name, role: "student", username,
+      id: (normalizedRole === "teacher" ? "gv" : "hs") + Date.now(), name, role: normalizedRole, username,
       passwordHash: hashPassword(password), plainInitial: password, passwordChanged: false,
-      className: "11 Tin", streak: 0,
+      className: normalizedRole === "student" ? "11 Tin" : null, streak: 0,
     };
     setAccounts((prev) => [...prev, acc]);
     dbAddAccount(acc).catch(() => setStorageError(true));
   }
   function removeAccount(id) {
+    if (!isTeacher) return;
     setAccounts((prev) => prev.filter((a) => a.id !== id));
     dbRemoveAccount(id).catch(() => setStorageError(true));
   }
