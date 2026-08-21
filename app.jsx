@@ -24,6 +24,26 @@ function hashPassword(pw) {
   return hashStr("ntsalt_v1::" + pw).toString(36);
 }
 
+const LANGUAGE_OPTIONS = [
+  { value: "python", label: "Python 3", judgeId: 71, extension: ".py", starter: "# Viết code Python của bạn tại đây\n\n" },
+  { value: "c", label: "C (GNU C11)", judgeId: 50, extension: ".c", starter: "/* Viết code C của bạn tại đây */\n\n" },
+  { value: "cpp", label: "C++17", judgeId: 54, extension: ".cpp", starter: "// Viết code C++ của bạn tại đây\n\n" },
+];
+const LANGUAGE_META = Object.fromEntries(LANGUAGE_OPTIONS.map((item) => [item.value, item]));
+
+function normalizeLanguage(rawLanguage, legacyIsPython = false) {
+  const value = String(rawLanguage ?? "").trim().toLowerCase();
+  if (["python", "py", "python3", "71", "true"].includes(value)) return "python";
+  if (["c", "c11", "gnu c", "gnu c11", "50"].includes(value)) return "c";
+  if (["cpp", "c++", "cxx", "gnu c++", "gnu c++17", "54"].includes(value)) return "cpp";
+  if (legacyIsPython === true || legacyIsPython === 1 || String(legacyIsPython).trim().toLowerCase() === "true") return "python";
+  return "cpp";
+}
+
+function problemLanguage(problem) {
+  return normalizeLanguage(problem?.language, problem?.isPython);
+}
+
 function normalizeTestCases(raw) {
   let value = raw;
   if (typeof value === "string") {
@@ -47,7 +67,7 @@ function createProblemForm(topicId) {
   return {
     title: "", topic: topicId, difficulty: "Dễ", points: 100, statement: "",
     sampleInput: "", sampleOutput: "", imageUrl: "", imageFile: null,
-    testCases: [createEmptyTestCase()], isPython: false,
+    testCases: [createEmptyTestCase()], language: "cpp", isPython: false,
   };
 }
 
@@ -78,9 +98,10 @@ function mapTopic(row) {
   return { id: row.id, code: row.code, title: row.title, weeks: row.weeks, summary: row.summary, content: row.content };
 }
 function mapProblem(row) {
+  const language = normalizeLanguage(row.language, row.is_python);
   return {
     id: row.id, title: row.title, topic: row.topic, difficulty: row.difficulty, points: row.points,
-    isPython: row.is_python, statement: row.statement,
+    language, isPython: language === "python", statement: row.statement,
     sample: { input: row.sample_input, output: row.sample_output },
     imageUrl: row.statement_image_url || "",
     testCases: normalizeTestCases(row.test_cases),
@@ -174,7 +195,7 @@ async function dbRemoveTopic(id) {
 async function dbAddProblem(p) {
   const { error } = await supabase.from("problems").insert({
     id: p.id, title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
-    is_python: p.isPython, statement: p.statement, statement_image_url: p.imageUrl || null,
+    language: normalizeLanguage(p.language, p.isPython), is_python: normalizeLanguage(p.language, p.isPython) === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
   });
@@ -183,7 +204,7 @@ async function dbAddProblem(p) {
 async function dbUpdateProblem(p) {
   const { error } = await supabase.from("problems").update({
     title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
-    is_python: p.isPython, statement: p.statement, statement_image_url: p.imageUrl || null,
+    language: normalizeLanguage(p.language, p.isPython), is_python: normalizeLanguage(p.language, p.isPython) === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
   }).eq("id", p.id);
@@ -277,7 +298,8 @@ const DIFFICULTIES = ["Dễ", "Trung bình", "Khó"];
 
 const JUDGE0_ENDPOINT = "https://ce.judge0.com";
 const JUDGE0_LANGUAGE_IDS = {
-  python: 71, // Python 3.8.1
+  python: 71, // Python 3
+  c: 50, // GNU C11
   cpp: 54, // GNU C++17
 };
 
@@ -323,18 +345,49 @@ function judgeResponseMessage(payload, fallback = "Không có thông tin chi ti�
   return payload.error || payload.message || payload.detail || payload.status?.description || fallback;
 }
 
+function encodeBase64Utf8(value) {
+  const bytes = new TextEncoder().encode(String(value ?? ""));
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function decodeBase64Utf8(value) {
+  if (!value || typeof value !== "string") return value || "";
+  try {
+    const binary = atob(value);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder().decode(bytes);
+  } catch (error) {
+    return value;
+  }
+}
+
+function decodeJudgeResult(result) {
+  if (!result || typeof result !== "object") return result;
+  return {
+    ...result,
+    stdout: decodeBase64Utf8(result.stdout),
+    stderr: decodeBase64Utf8(result.stderr),
+    compile_output: decodeBase64Utf8(result.compile_output),
+    message: decodeBase64Utf8(result.message),
+  };
+}
+
 async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
   const payload = {
-    source_code: String(sourceCode || ""),
+    source_code: encodeBase64Utf8(sourceCode),
     language_id: Number(languageId),
-    stdin: String(input ?? ""),
-    expected_output: String(expectedOutput ?? ""),
+    stdin: encodeBase64Utf8(input),
+    expected_output: encodeBase64Utf8(expectedOutput),
     cpu_time_limit: 2,
     wall_time_limit: 5,
     memory_limit: 128000,
   };
   const createResponse = await fetchWithTimeout(
-    `${JUDGE0_ENDPOINT}/submissions?base64_encoded=false&wait=false`,
+    `${JUDGE0_ENDPOINT}/submissions?base64_encoded=true&wait=false`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -351,7 +404,7 @@ async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
   for (let attempt = 0; attempt < 36; attempt += 1) {
     await wait(attempt < 4 ? 500 : 800);
     const resultResponse = await fetchWithTimeout(
-      `${JUDGE0_ENDPOINT}/submissions/${encodeURIComponent(created.token)}?base64_encoded=false`,
+      `${JUDGE0_ENDPOINT}/submissions/${encodeURIComponent(created.token)}?base64_encoded=true`,
       { headers: { Accept: "application/json" } },
       10000
     );
@@ -365,9 +418,10 @@ async function judgeOneTest({ sourceCode, languageId, input, expectedOutput }) {
       throw new Error(`Không thể lấy kết quả chấm (HTTP ${resultResponse.status}): ${judgeResponseMessage(result)}.`);
     }
     if (!result) continue;
-    const statusId = result.status?.id;
-    if (result.error && !result.status) throw new Error(`Judge0 từ chối lượt chấm: ${judgeResponseMessage(result)}.`);
-    if (statusId !== 1 && statusId !== 2) return result;
+    const decodedResult = decodeJudgeResult(result);
+    const statusId = decodedResult.status?.id;
+    if (decodedResult.error && !decodedResult.status) throw new Error(`Judge0 từ chối lượt chấm: ${judgeResponseMessage(decodedResult)}.`);
+    if (statusId !== 1 && statusId !== 2) return decodedResult;
   }
   throw new Error(lastPollError || "Dịch vụ chấm phản hồi quá lâu. Em hãy thử nộp lại sau ít giây.");
 }
@@ -410,7 +464,8 @@ async function judgeSourceCode(problem, code) {
     };
   }
 
-  const languageId = problem.isPython ? JUDGE0_LANGUAGE_IDS.python : JUDGE0_LANGUAGE_IDS.cpp;
+  const language = problemLanguage(problem);
+  const languageId = JUDGE0_LANGUAGE_IDS[language] || JUDGE0_LANGUAGE_IDS.cpp;
   const results = [];
   for (const test of testCases) {
     // Chấm tuần tự để không tạo nhiều tiến trình chạy đồng thời cho cùng một bài.
@@ -660,10 +715,11 @@ function formatSubmissionDate(value) {
 }
 
 const PYTHON_KEYWORDS = new Set("and as assert async await break case class continue def del elif else except False finally for from global if import in is lambda match None nonlocal not or pass raise return True try while with yield print range len int float str list dict set tuple input open enumerate zip sum min max".split(" "));
-const CPP_KEYWORDS = new Set("alignas alignof auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long namespace new nullptr operator private protected public register return short signed sizeof static struct switch template this throw true try typedef typename union unsigned using virtual void volatile while std string cin cout endl".split(" "));
+const C_KEYWORDS = new Set("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Bool _Complex _Imaginary NULL printf scanf malloc free".split(" "));
+const CPP_KEYWORDS = new Set("alignas alignof auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long namespace new nullptr operator private protected public register return short signed sizeof static struct template this throw true try typedef typename union unsigned using virtual void volatile while std string cin cout endl".split(" "));
 
 function highlightCodeLine(line, language) {
-  const keywords = language === "python" ? PYTHON_KEYWORDS : CPP_KEYWORDS;
+  const keywords = language === "python" ? PYTHON_KEYWORDS : language === "c" ? C_KEYWORDS : CPP_KEYWORDS;
   const tokenPattern = /(#.*|\/\/.*|\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
   const parts = [];
   let cursor = 0;
@@ -792,7 +848,7 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
 
   return (
     <div className="nb-thonny-editor">
-      <div className="nb-editor-toolbar"><span><Code2 size={14} /> {language === "python" ? "Python 3 · Editor" : "C++17 · Editor"}</span><span>Ln {Math.min(lines.length, 999)} · {code.length} ký tự</span></div>
+      <div className="nb-editor-toolbar"><span><Code2 size={14} /> {(LANGUAGE_META[language] || LANGUAGE_META.cpp).label} · Editor</span><span>Ln {Math.min(lines.length, 999)} · {code.length} ký tự</span></div>
       <div className="nb-editor-workspace">
         <div className="nb-editor-gutter" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}>{lines.map((_, index) => <span key={index}>{index + 1}</span>)}</div>
         <div className="nb-editor-code-layer">
@@ -800,15 +856,15 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
           <textarea ref={textareaRef} className="nb-code-input" value={code} onChange={(event) => onChange(event.target.value)} onKeyDown={handleKeyDown} onScroll={(event) => setScroll({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} spellCheck={false} readOnly={readOnly} aria-label="Trình soạn thảo mã nguồn" />
         </div>
       </div>
-      <div className="nb-editor-status"><span>{readOnly ? "Chế độ chỉ xem" : "Enter sau : tự thụt 4 khoảng · Shift+Tab lùi dòng · Ctrl/Cmd + Enter nộp bài"}</span><span>{language === "python" ? "Python" : "GNU C++17"}</span></div>
+      <div className="nb-editor-status"><span>{readOnly ? "Chế độ chỉ xem" : "Enter sau : tự thụt 4 khoảng · Shift+Tab lùi dòng · Ctrl/Cmd + Enter nộp bài"}</span><span>{(LANGUAGE_META[language] || LANGUAGE_META.cpp).label}</span></div>
     </div>
   );
 }
 
 function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0, submissionHistory = [] }) {
-  const [code, setCode] = useState(
-    problem.isPython ? "# Viết code Python của bạn tại đây\n\n" : "// Viết code của bạn tại đây\n\n"
-  );
+  const editorLanguage = problemLanguage(problem);
+  const editorMeta = LANGUAGE_META[editorLanguage] || LANGUAGE_META.cpp;
+  const [code, setCode] = useState(() => editorMeta.starter);
   const [judging, setJudging] = useState(false);
   const [result, setResult] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -842,7 +898,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
       <div className="nb-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
           <div>
-            <div className="nb-eyebrow">{problem.id} · {problem.points} điểm</div>
+            <div className="nb-eyebrow">{problem.id} · {editorMeta.label} · {problem.points} điểm</div>
             <h3 className="nb-h3">{problem.title}</h3>
           </div>
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
@@ -871,7 +927,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
           </div>
 
           <div className="nb-modal-col">
-            <CodeEditor code={code} onChange={setCode} language={problem.isPython ? "python" : "cpp"} onSubmit={handleSubmit} readOnly={readOnly} />
+            <CodeEditor code={code} onChange={setCode} language={editorLanguage} onSubmit={handleSubmit} readOnly={readOnly} />
             <p className="nb-sub" style={{ marginTop: 6 }}>
               Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
             </p>
@@ -1114,8 +1170,9 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [form, setForm] = useState(() => createProblemForm(topics[0]?.id));
 
   const filtered = problems.filter((p) => {
-    if (filter === "python") return p.isPython;
-    if (filter === "algo") return !p.isPython;
+    if (filter === "python") return problemLanguage(p) === "python";
+    if (filter === "c") return problemLanguage(p) === "c";
+    if (filter === "cpp") return problemLanguage(p) === "cpp";
     return true;
   });
 
@@ -1163,7 +1220,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       sampleOutput: problem.sample?.output === "—" ? "" : (problem.sample?.output || ""),
       imageUrl: problem.imageUrl || "", imageFile: null,
       testCases: normalizeTestCases(problem.testCases).length > 0 ? normalizeTestCases(problem.testCases) : [createEmptyTestCase()],
-      isPython: Boolean(problem.isPython),
+      language: problemLanguage(problem), isPython: problemLanguage(problem) === "python",
     });
     clearImagePreview();
     setImagePreview(problem.imageUrl || "");
@@ -1235,7 +1292,8 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
         topic: form.topic || topics[0]?.id || "",
         difficulty: form.difficulty,
         points: pointsValue,
-        isPython: form.isPython,
+        language: normalizeLanguage(form.language, form.isPython),
+        isPython: normalizeLanguage(form.language, form.isPython) === "python",
         statement: form.statement.trim(),
         imageUrl: uploadedImageUrl,
         sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
@@ -1276,7 +1334,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       )}
 
       <div className="nb-filter-row">
-        {[['all', 'Tất cả'], ['algo', 'Thuật toán'], ['python', 'Python cơ bản']].map(([key, label]) => (
+        {[['all', 'Tất cả'], ['python', 'Python'], ['c', 'C'], ['cpp', 'C++']].map(([key, label]) => (
           <button key={key} className={"nb-chip " + (filter === key ? "active" : "")} onClick={() => setFilter(key)}>{label}</button>
         ))}
         {isTeacher && (
@@ -1301,7 +1359,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
                 <div className="nb-management-info">
                   <span className="nb-eyebrow">{problem.id}</span>
                   <strong>{problem.title}</strong>
-                  <span className="nb-sub">{problem.isPython ? "Python" : "Thuật toán"} · {problem.points} điểm · {getProblemTestCases(problem).length} test</span>
+                  <span className="nb-sub">{(LANGUAGE_META[problemLanguage(problem)] || LANGUAGE_META.cpp).label} · {problem.points} điểm · {getProblemTestCases(problem).length} test</span>
                 </div>
                 <div className="nb-management-actions">
                   <button type="button" className="nb-btn nb-btn-ghost" onClick={() => beginEdit(problem)}><Pencil size={14} /> Sửa</button>
@@ -1377,8 +1435,10 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           <p className="nb-sub">Lưu ý: trong kiến trúc frontend hiện tại, test case có thể bị xem qua Network. Muốn ẩn tuyệt đối, cần chuyển bộ chấm sang server.</p>
           {formError && <div className="nb-login-error"><AlertCircle size={14} /> {formError}</div>}
           <label className="nb-checkbox-label">
-            <input type="checkbox" checked={form.isPython} onChange={(e) => setForm({ ...form, isPython: e.target.checked })} />
-            Gắn nhãn “Python cơ bản”
+            <span className="nb-field-label">Ngôn ngữ biên dịch</span>
+            <select className="nb-input" value={form.language || (form.isPython ? "python" : "cpp")} onChange={(e) => setForm({ ...form, language: e.target.value, isPython: e.target.value === "python" })}>
+              {LANGUAGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label} · Judge0 {option.judgeId}</option>)}
+            </select>
           </label>
           <div className="nb-editor-actions">
             <button className="nb-btn nb-btn-primary" type="submit" disabled={uploadingImage}><Save size={15} /> {uploadingImage ? "Đang tải ảnh…" : (editingId ? "Lưu thay đổi" : "Tạo bài tập")}</button>
@@ -1563,7 +1623,7 @@ function ContestsView({ contests, isTeacher, students, points, problems, addCont
       <div className="nb-exam-hero"><div><div className="nb-eyebrow">Kiểm tra định kỳ · Mô phỏng phòng thi</div><h2 className="nb-exam-title">Đề thi thử</h2><p className="nb-exam-sub">Một không gian thi tập trung, minh bạch và có tính giờ cho từng thử thách.</p></div><div className="nb-exam-hero-icon"><Clock size={28} /><span>Thi thật<br />Tự tin hơn</span></div></div>
       <div className="nb-exam-stat-grid"><div className="nb-exam-stat"><span className="blue"><ListChecks size={17} /></span><div><strong>{stats.total}</strong><small>Tổng số đề</small></div></div><div className="nb-exam-stat"><span className="green"><Play size={17} /></span><div><strong>{stats.active}</strong><small>Đang mở</small></div></div><div className="nb-exam-stat"><span className="gold"><Clock size={17} /></span><div><strong>{stats.upcoming}</strong><small>Sắp diễn ra</small></div></div><div className="nb-exam-stat"><span className="ink"><CheckCircle2 size={17} /></span><div><strong>{stats.completed}</strong><small>Đã kết thúc</small></div></div></div>
 
-      {isTeacher && <div className="nb-exam-create-panel"><div className="nb-exam-manage-head"><div><div className="nb-eyebrow">Khu vực giáo viên</div><h3 className="nb-h3">Quản lý đề thi</h3><p className="nb-sub">Tạo, chỉnh sửa, nhân bản, mở hoặc đóng kỳ thi từ một nơi.</p></div><button className="nb-btn nb-btn-primary" onClick={() => showForm ? (resetForm(), setShowForm(false)) : openCreate()}><Plus size={16} /> {showForm ? "Đóng biểu mẫu" : "Tạo đề thi mới"}</button></div>{showForm && <form onSubmit={submit} className="nb-exam-form"><div className="nb-exam-form-heading"><div><div className="nb-eyebrow">{editingId ? "Chỉnh sửa kỳ thi" : "Tạo kỳ thi mới"}</div><h3 className="nb-h3">{editingId ? "Cập nhật thông tin đề" : "Thiết lập đề thi"}</h3></div><span>{form.problemIds.length} bài đã chọn</span></div><div className="nb-exam-form-grid"><label><span>Tên đề thi</span><input className="nb-input" placeholder="Ví dụ: Vòng loại tháng 9" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label><span>Ngày thi</span><input className="nb-input" placeholder="20/09/2026 · 08:00" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label><label><span>Thời lượng (phút)</span><input className="nb-input" type="number" min="10" max="300" value={form.duration} onChange={(event) => setForm({ ...form, duration: event.target.value })} /></label></div>{editingId && <div className="nb-exam-status-selector"><span>Trạng thái</span>{["upcoming", "active", "completed"].map((status) => <button type="button" key={status} className={`nb-chip ${form.status === status ? "active" : ""}`} onClick={() => setForm({ ...form, status })}>{statusMeta[status].label}</button>)}</div>}<div className="nb-exam-select-head"><div><strong>Chọn bài tập</strong><small>Đề thi cần ít nhất một bài</small></div><span>{form.problemIds.length}/{problems.length} đã chọn</span></div><div className="nb-exam-problem-checklist">{problems.map((problem) => <label key={problem.id} className={`nb-exam-check ${form.problemIds.includes(problem.id) ? "selected" : ""}`}><input type="checkbox" checked={form.problemIds.includes(problem.id)} onChange={() => toggleProblem(problem.id)} /><span><strong>{problem.id} · {problem.title}</strong><small>{problem.points} điểm · {problem.isPython ? "Python" : "C++17"} · {problem.difficulty}</small></span><CheckCircle2 size={16} /></label>)}</div><div className="nb-editor-actions"><button className="nb-btn nb-btn-primary" type="submit" disabled={!form.title.trim() || form.problemIds.length === 0}><Save size={15} /> {editingId ? "Lưu thay đổi" : "Tạo đề thi"}</button><button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowForm(false); }}>Hủy</button></div></form>}</div>}
+      {isTeacher && <div className="nb-exam-create-panel"><div className="nb-exam-manage-head"><div><div className="nb-eyebrow">Khu vực giáo viên</div><h3 className="nb-h3">Quản lý đề thi</h3><p className="nb-sub">Tạo, chỉnh sửa, nhân bản, mở hoặc đóng kỳ thi từ một nơi.</p></div><button className="nb-btn nb-btn-primary" onClick={() => showForm ? (resetForm(), setShowForm(false)) : openCreate()}><Plus size={16} /> {showForm ? "Đóng biểu mẫu" : "Tạo đề thi mới"}</button></div>{showForm && <form onSubmit={submit} className="nb-exam-form"><div className="nb-exam-form-heading"><div><div className="nb-eyebrow">{editingId ? "Chỉnh sửa kỳ thi" : "Tạo kỳ thi mới"}</div><h3 className="nb-h3">{editingId ? "Cập nhật thông tin đề" : "Thiết lập đề thi"}</h3></div><span>{form.problemIds.length} bài đã chọn</span></div><div className="nb-exam-form-grid"><label><span>Tên đề thi</span><input className="nb-input" placeholder="Ví dụ: Vòng loại tháng 9" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label><span>Ngày thi</span><input className="nb-input" placeholder="20/09/2026 · 08:00" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} /></label><label><span>Thời lượng (phút)</span><input className="nb-input" type="number" min="10" max="300" value={form.duration} onChange={(event) => setForm({ ...form, duration: event.target.value })} /></label></div>{editingId && <div className="nb-exam-status-selector"><span>Trạng thái</span>{["upcoming", "active", "completed"].map((status) => <button type="button" key={status} className={`nb-chip ${form.status === status ? "active" : ""}`} onClick={() => setForm({ ...form, status })}>{statusMeta[status].label}</button>)}</div>}<div className="nb-exam-select-head"><div><strong>Chọn bài tập</strong><small>Đề thi cần ít nhất một bài</small></div><span>{form.problemIds.length}/{problems.length} đã chọn</span></div><div className="nb-exam-problem-checklist">{problems.map((problem) => <label key={problem.id} className={`nb-exam-check ${form.problemIds.includes(problem.id) ? "selected" : ""}`}><input type="checkbox" checked={form.problemIds.includes(problem.id)} onChange={() => toggleProblem(problem.id)} /><span><strong>{problem.id} · {problem.title}</strong><small>{problem.points} điểm · {(LANGUAGE_META[problemLanguage(problem)] || LANGUAGE_META.cpp).label} · {problem.difficulty}</small></span><CheckCircle2 size={16} /></label>)}</div><div className="nb-editor-actions"><button className="nb-btn nb-btn-primary" type="submit" disabled={!form.title.trim() || form.problemIds.length === 0}><Save size={15} /> {editingId ? "Lưu thay đổi" : "Tạo đề thi"}</button><button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowForm(false); }}>Hủy</button></div></form>}</div>}
 
       <div className="nb-exam-toolbar"><div className="nb-exam-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm đề thi hoặc ngày thi…" /></div><div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả"], ["active", "Đang mở"], ["upcoming", "Sắp diễn ra"], ["completed", "Đã kết thúc"]].map(([key, label]) => <button key={key} className={`nb-chip ${filter === key ? "active" : ""}`} onClick={() => setFilter(key)}>{label}</button>)}</div></div>
 
