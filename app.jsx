@@ -210,18 +210,22 @@ async function dbRemoveTopic(id) {
   if (error) throw error;
 }
 async function dbAddProblem(p) {
+  // Schema hiện tại lưu ngôn ngữ Python qua is_python; không gửi cột language chưa tồn tại.
+  const language = normalizeLanguage(p.language, p.isPython);
   const { error } = await supabase.from("problems").insert({
     id: p.id, title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
-    language: normalizeLanguage(p.language, p.isPython), is_python: normalizeLanguage(p.language, p.isPython) === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
+    is_python: language === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
   });
   if (error) throw error;
 }
 async function dbUpdateProblem(p) {
+  // Giữ tương thích với schema hiện có: chỉ cập nhật is_python.
+  const language = normalizeLanguage(p.language, p.isPython);
   const { error } = await supabase.from("problems").update({
     title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
-    language: normalizeLanguage(p.language, p.isPython), is_python: normalizeLanguage(p.language, p.isPython) === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
+    is_python: language === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
   }).eq("id", p.id);
@@ -1205,7 +1209,9 @@ function LessonsView({ isTeacher, currentUser, topics, progress, onProgressChang
 }
 
 function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics }) {
-  const [filter, setFilter] = useState("all");
+  const [languageFilter, setLanguageFilter] = useState("all");
+  const [progressFilter, setProgressFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const [active, setActive] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -1215,15 +1221,8 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const imageObjectUrlRef = useRef(null);
   const [form, setForm] = useState(() => createProblemForm(topics[0]?.id));
 
-  const filtered = problems.filter((p) => {
-    if (filter === "python") return problemLanguage(p) === "python";
-    if (filter === "c") return problemLanguage(p) === "c";
-    if (filter === "cpp") return problemLanguage(p) === "cpp";
-    return true;
-  });
-
-  const completedCount = problems.filter((p) => solvedByCurrent(p.id)).length;
   const currentSubmissions = submissions.filter((s) => s.studentId === currentUser?.id);
+  const completedCount = problems.filter((p) => solvedByCurrent(p.id)).length;
   const attemptsCount = currentSubmissions.length;
 
   function problemStats(problemId) {
@@ -1232,6 +1231,77 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       attempts: attempts.length,
       bestScore: attempts.reduce((best, s) => Math.max(best, Number(s.score ?? (s.verdict === "AC" ? s.problemPoints : 0))), 0),
     };
+  }
+
+  function teacherProblemStats(problemId) {
+    const attempts = submissions.filter((s) => s.problemId === problemId);
+    return {
+      attempts: attempts.length,
+      solvedStudents: new Set(attempts.filter((s) => s.verdict === "AC").map((s) => s.studentId)).size,
+    };
+  }
+
+  const topicById = useMemo(() => new Map(topics.map((topic) => [topic.id, topic])), [topics]);
+  const filtered = useMemo(() => problems.filter((problem) => {
+    const languageMatches = languageFilter === "all" || problemLanguage(problem) === languageFilter;
+    const solved = solvedByCurrent(problem.id);
+    const attempts = problemStats(problem.id).attempts;
+    const progressMatches = progressFilter === "all"
+      || (progressFilter === "todo" && attempts === 0)
+      || (progressFilter === "in-progress" && attempts > 0 && !solved)
+      || (progressFilter === "done" && solved);
+    const topic = topicById.get(problem.topic);
+    const searchText = `${problem.id} ${problem.title} ${topic?.title || ""} ${topic?.code || ""}`.toLocaleLowerCase("vi-VN");
+    return languageMatches && progressMatches && (!query.trim() || searchText.includes(query.trim().toLocaleLowerCase("vi-VN")));
+  }), [problems, languageFilter, progressFilter, query, topicById, currentSubmissions, solvedByCurrent]);
+
+  const practiceGroups = useMemo(() => {
+    const groups = topics.map((topic) => ({
+      id: topic.id,
+      title: topic.title,
+      subtitle: `${topic.code || "Chuyên đề"}${topic.weeks ? ` · ${topic.weeks}` : ""}`,
+      problems: filtered.filter((problem) => problem.topic === topic.id),
+    })).filter((group) => group.problems.length > 0);
+    const uncategorized = filtered.filter((problem) => !topicById.has(problem.topic));
+    if (uncategorized.length > 0) groups.push({ id: "uncategorized", title: "Chưa phân chuyên đề", subtitle: "Cần giáo viên sắp xếp", problems: uncategorized });
+    return groups;
+  }, [topics, filtered, topicById]);
+
+  function progressState(problem) {
+    const solved = solvedByCurrent(problem.id);
+    const attempts = problemStats(problem.id).attempts;
+    if (solved) return { label: "Đã hoàn thành", className: "done" };
+    if (attempts > 0) return { label: "Đang luyện", className: "in-progress" };
+    return { label: "Chưa bắt đầu", className: "todo" };
+  }
+
+  function renderPracticeProblem(problem, index) {
+    const studentStats = problemStats(problem.id);
+    const teacherStats = teacherProblemStats(problem.id);
+    const state = progressState(problem);
+    const language = LANGUAGE_META[problemLanguage(problem)] || LANGUAGE_META.cpp;
+    return (
+      <button key={problem.id} className={`nb-practice-problem ${state.className}`} onClick={() => setActive(problem)}>
+        <div className="nb-practice-problem-index">{String(index + 1).padStart(2, "0")}</div>
+        <div className="nb-practice-problem-main">
+          <div className="nb-practice-problem-titleline">
+            <h4>{problem.title}</h4>
+            {!isTeacher && <span className={`nb-practice-status ${state.className}`}>{state.label}</span>}
+          </div>
+          <div className="nb-practice-problem-meta">
+            <span>{language.label}</span><i />
+            <span>{problem.points} điểm</span><i />
+            <span>{getProblemTestCases(problem).length} test</span>
+            {isTeacher ? <><i /><span>{teacherStats.attempts} lượt nộp · {teacherStats.solvedStudents} học sinh đạt</span></> : <><i /><span>{studentStats.attempts ? `${studentStats.attempts} lượt nộp` : "Chưa có lượt nộp"}</span></>}
+          </div>
+        </div>
+        <div className="nb-practice-problem-score">
+          <DifficultyTag level={problem.difficulty} />
+          {!isTeacher && <strong>{studentStats.bestScore}/{problem.points}</strong>}
+          {isTeacher && <span>Quản lý <ChevronRight size={16} /></span>}
+        </div>
+      </button>
+    );
   }
 
   function clearImagePreview() {
@@ -1249,8 +1319,9 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     setFormError("");
   }
 
-  function beginAdd() {
+  function beginAdd(topicId) {
     resetForm();
+    if (topicId) setForm(createProblemForm(topicId));
     setShowForm(true);
   }
 
@@ -1368,53 +1439,27 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
 
   return (
     <div>
-      <SectionHeading eyebrow="Ngân hàng bài tập" title="Luyện tập & Python"
-        sub="Mỗi lần nộp được chấm qua test case; điểm tổng chỉ giữ thành tích tốt nhất của từng bài." />
+      <SectionHeading eyebrow="Lộ trình luyện tập" title="Luyện tập & Python"
+        sub="Bài tập được xếp theo chuyên đề đang học để học sinh biết bước tiếp theo, còn giáo viên nhìn được mức độ tham gia của cả lớp." />
 
       {!isTeacher && (
-        <div className="nb-practice-summary">
-          <div className="nb-practice-summary-card"><Code2 size={17} /><strong>{completedCount}/{problems.length}</strong><span>Bài đã hoàn thành</span></div>
-          <div className="nb-practice-summary-card"><Award size={17} /><strong>{points(currentUser.id)}</strong><span>Điểm tích lũy</span></div>
-          <div className="nb-practice-summary-card"><TrendingUp size={17} /><strong>{attemptsCount}</strong><span>Lượt nộp</span></div>
+        <div className="nb-practice-progress-board">
+          <div className="nb-practice-progress-copy"><div className="nb-eyebrow">Tiến độ của em</div><strong>{completedCount}/{problems.length}</strong><span>bài đã hoàn thành</span><div className="nb-practice-track"><i style={{ width: `${problems.length ? Math.round(completedCount / problems.length * 100) : 0}%` }} /></div></div>
+          <div className="nb-practice-summary"><div className="nb-practice-summary-card"><Award size={17} /><strong>{points(currentUser.id)}</strong><span>Điểm tích lũy</span></div><div className="nb-practice-summary-card"><TrendingUp size={17} /><strong>{attemptsCount}</strong><span>Lượt nộp</span></div></div>
         </div>
       )}
 
-      <div className="nb-filter-row">
-        {[['all', 'Tất cả'], ['python', 'Python'], ['c', 'C'], ['cpp', 'C++']].map(([key, label]) => (
-          <button key={key} className={"nb-chip " + (filter === key ? "active" : "")} onClick={() => setFilter(key)}>{label}</button>
-        ))}
-        {isTeacher && (
-          <button className="nb-btn nb-btn-primary" style={{ marginLeft: "auto" }} onClick={beginAdd}>
-            <Plus size={16} /> Thêm bài tập
-          </button>
-        )}
+      <div className="nb-practice-toolbar">
+        <label className="nb-practice-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm bài, mã bài hoặc chuyên đề…" /></label>
+        <div className="nb-practice-filter-stack"><span>Ngôn ngữ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['python', 'Python'], ['c', 'C'], ['cpp', 'C++']].map(([key, label]) => <button key={key} className={`nb-chip ${languageFilter === key ? "active" : ""}`} onClick={() => setLanguageFilter(key)}>{label}</button>)}</div></div>
+        {!isTeacher && <div className="nb-practice-filter-stack"><span>Tiến độ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['todo', 'Chưa mở'], ['in-progress', 'Đang luyện'], ['done', 'Đã xong']].map(([key, label]) => <button key={key} className={`nb-chip ${progressFilter === key ? "active" : ""}`} onClick={() => setProgressFilter(key)}>{label}</button>)}</div></div>}
       </div>
 
       {isTeacher && (
-        <div className="nb-panel nb-management-panel">
-          <div className="nb-management-head">
-            <div>
-              <div className="nb-eyebrow">Khu vực giáo viên</div>
-              <h3 className="nb-h3">Quản lý bài tập</h3>
-            </div>
-            <span className="nb-sub">{problems.length} bài · {problems.reduce((sum, p) => sum + getProblemTestCases(p).length, 0)} test case</span>
-          </div>
-          <div className="nb-management-list">
-            {problems.map((problem) => (
-              <div key={problem.id} className="nb-management-row">
-                <div className="nb-management-info">
-                  <span className="nb-eyebrow">{problem.id}</span>
-                  <strong>{problem.title}</strong>
-                  <span className="nb-sub">{(LANGUAGE_META[problemLanguage(problem)] || LANGUAGE_META.cpp).label} · {problem.points} điểm · {getProblemTestCases(problem).length} test</span>
-                </div>
-                <div className="nb-management-actions">
-                  <button type="button" className="nb-btn nb-btn-ghost" onClick={() => beginEdit(problem)}><Pencil size={14} /> Sửa</button>
-                  <button type="button" className="nb-btn nb-btn-danger" onClick={() => handleDelete(problem)}><Trash2 size={14} /> Xóa</button>
-                </div>
-              </div>
-            ))}
-            {problems.length === 0 && <p className="nb-sub">Chưa có bài tập nào.</p>}
-          </div>
+        <div className="nb-practice-teacher-board">
+          <div><div className="nb-eyebrow">Bàn điều phối giáo viên</div><h3 className="nb-h3">Sắp xếp bài theo chuyên đề học</h3><p className="nb-sub">Chọn chuyên đề khi tạo bài để học sinh luôn thấy bài theo đúng lộ trình đang ôn.</p></div>
+          <div className="nb-practice-teacher-stats"><span><b>{problems.length}</b> bài tập</span><span><b>{topics.length}</b> chuyên đề</span><span><b>{submissions.length}</b> lượt nộp</span></div>
+          <button className="nb-btn nb-btn-primary" onClick={() => beginAdd()}><Plus size={16} /> Thêm bài tập</button>
         </div>
       )}
 
@@ -1493,30 +1538,21 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
         </form>
       )}
 
-      <div className="nb-problem-grid">
-        {filtered.map((p) => {
-          const solved = solvedByCurrent(p.id);
-          const stats = problemStats(p.id);
-          return (
-            <button key={p.id} className="nb-problem-card" onClick={() => setActive(p)}>
-              <div className="nb-problem-top">
-                <span className="nb-eyebrow">{p.id}</span>
-                {solved && <CheckCircle2 size={16} style={{ color: "var(--ac-green)" }} />}
-              </div>
-              <div className="nb-problem-title">{p.title}</div>
-              {p.imageUrl && <img className="nb-problem-card-image" src={p.imageUrl} alt="Ảnh minh họa đề bài" />}
-              <div className="nb-problem-bottom">
-                <DifficultyTag level={p.difficulty} />
-                <span className="nb-sub">{p.points}đ · {getProblemTestCases(p).length} test</span>
-              </div>
-              <div className="nb-problem-meta">
-                <span>{stats.attempts} lượt nộp</span>
-                <strong>{stats.bestScore}/{p.points}đ</strong>
-              </div>
-            </button>
-          );
+      <div className="nb-practice-roadmap">
+        <div className="nb-practice-roadmap-head"><div><div className="nb-eyebrow">Lộ trình hiện tại</div><h3 className="nb-h3">Bài tập theo chuyên đề</h3></div><span className="nb-sub">{filtered.length}/{problems.length} bài đang hiển thị</span></div>
+        {practiceGroups.map((group, groupIndex) => {
+          const groupSolved = group.problems.filter((problem) => solvedByCurrent(problem.id)).length;
+          const groupAttempts = group.problems.reduce((total, problem) => total + (isTeacher ? teacherProblemStats(problem.id).attempts : problemStats(problem.id).attempts), 0);
+          return <section className="nb-practice-group" key={group.id}>
+            <div className="nb-practice-group-rail"><span>{String(groupIndex + 1).padStart(2, "0")}</span><i /></div>
+            <div className="nb-practice-group-content">
+              <div className="nb-practice-group-head"><div><p>{group.subtitle}</p><h3>{group.title}</h3></div><div className="nb-practice-group-summary">{isTeacher ? <span>{group.problems.length} bài · {groupAttempts} lượt nộp</span> : <><span>{groupSolved}/{group.problems.length} đã xong</span><div><i style={{ width: `${group.problems.length ? Math.round(groupSolved / group.problems.length * 100) : 0}%` }} /></div></>}</div></div>
+              <div className="nb-practice-problem-list">{group.problems.map(renderPracticeProblem)}</div>
+              {isTeacher && <div className="nb-practice-group-actions"><button className="nb-btn nb-btn-ghost" type="button" onClick={() => beginAdd(group.id === "uncategorized" ? undefined : group.id)}><Plus size={14} /> Thêm bài vào chuyên đề</button></div>}
+            </div>
+          </section>;
         })}
-        {filtered.length === 0 && <p className="nb-sub">Chưa có bài tập nào trong mục này.</p>}
+        {practiceGroups.length === 0 && <div className="nb-practice-empty"><Search size={20} /><strong>Không tìm thấy bài tập phù hợp</strong><span>Hãy đổi bộ lọc, từ khóa tìm kiếm hoặc thêm bài mới.</span></div>}
       </div>
 
       {active && (
@@ -2538,10 +2574,65 @@ function App() {
         .nb-exam-status-selector > span { margin-right: 4px; color: var(--slate); font-size: 11px; font-weight: 600; }
         .nb-danger-icon { color: var(--red-pen) !important; border-color: rgba(178,58,58,0.22) !important; }
         .nb-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
-        .nb-practice-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
-        .nb-practice-summary-card { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--paper-line); border-radius: 9px; padding: 12px 14px; color: var(--pen-blue); }
-        .nb-practice-summary-card strong { color: var(--ink); font: 700 18px 'JetBrains Mono', monospace; margin-left: auto; }
+        .nb-practice-progress-board { display: grid; grid-template-columns: minmax(210px, 0.9fr) minmax(0, 1.1fr); gap: 1px; margin-bottom: 18px; overflow: hidden; border: 1px solid var(--paper-line); border-radius: 12px; background: var(--paper-line); box-shadow: 0 8px 20px rgba(16,21,28,0.04); }
+        .nb-practice-progress-copy { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 10px; row-gap: 3px; padding: 17px 19px; color: #fff; background: linear-gradient(125deg, #1D344A 0%, #2C4A8C 100%); }
+        .nb-practice-progress-copy .nb-eyebrow { grid-column: 1 / -1; color: rgba(255,255,255,0.62); }
+        .nb-practice-progress-copy strong { color: #fff; font: 700 27px 'JetBrains Mono', monospace; line-height: 1; }
+        .nb-practice-progress-copy > span { color: rgba(255,255,255,0.78); font-size: 12px; }
+        .nb-practice-track { grid-column: 1 / -1; height: 7px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,0.2); }
+        .nb-practice-track i { display: block; height: 100%; border-radius: inherit; background: #7CE0B1; transition: width .25s ease; }
+        .nb-practice-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--paper-line); }
+        .nb-practice-summary-card { display: grid; grid-template-columns: auto 1fr; align-content: center; gap: 3px 9px; padding: 14px 16px; color: var(--pen-blue); background: #fff; }
+        .nb-practice-summary-card svg { grid-row: 1 / 3; align-self: center; }
+        .nb-practice-summary-card strong { color: var(--ink); font: 700 18px 'JetBrains Mono', monospace; }
         .nb-practice-summary-card span { color: var(--slate); font-size: 11px; }
+        .nb-practice-toolbar { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; padding: 14px; margin-bottom: 18px; border: 1px solid var(--paper-line); border-radius: 10px; background: #fff; }
+        .nb-practice-search { flex: 1 1 250px; display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 10px; color: var(--slate); border: 1px solid var(--paper-line); border-radius: 7px; background: #FDFCF7; }
+        .nb-practice-search:focus-within { color: var(--pen-blue); border-color: var(--pen-blue); box-shadow: 0 0 0 3px rgba(44,74,140,0.08); }
+        .nb-practice-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font: 13px inherit; }
+        .nb-practice-filter-stack { display: flex; flex-direction: column; gap: 5px; }
+        .nb-practice-filter-stack > span { color: var(--slate); font: 600 10px 'JetBrains Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+        .nb-practice-toolbar .nb-chip { padding: 5px 10px; font-size: 11px; }
+        .nb-practice-teacher-board { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 20px; margin: 0 0 18px; padding: 16px 18px; border: 1px solid #CCD6E8; border-left: 4px solid var(--pen-blue); border-radius: 0 10px 10px 0; background: linear-gradient(90deg, rgba(44,74,140,0.07), rgba(255,255,255,0.96)); }
+        .nb-practice-teacher-board h3 { margin: 3px 0 4px; }
+        .nb-practice-teacher-stats { display: flex; align-items: center; gap: 14px; color: var(--slate); font-size: 11px; white-space: nowrap; }
+        .nb-practice-teacher-stats b { color: var(--pen-blue); font: 700 14px 'JetBrains Mono', monospace; }
+        .nb-practice-roadmap { position: relative; padding: 19px 20px 20px; border: 1px solid var(--paper-line); border-radius: 12px; background: #fff; }
+        .nb-practice-roadmap-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid var(--paper-line); }
+        .nb-practice-roadmap-head h3 { margin: 3px 0 0; font-size: 18px; }
+        .nb-practice-group { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; padding-top: 18px; }
+        .nb-practice-group-rail { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 5px; }
+        .nb-practice-group-rail span { z-index: 1; display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; color: #fff; background: var(--pen-blue); box-shadow: 0 0 0 4px #EDF2FA; font: 700 10px 'JetBrains Mono', monospace; }
+        .nb-practice-group-rail i { position: absolute; top: 35px; bottom: -20px; width: 1px; background: var(--paper-line); }
+        .nb-practice-group:last-child .nb-practice-group-rail i { display: none; }
+        .nb-practice-group-content { min-width: 0; padding-bottom: 8px; }
+        .nb-practice-group-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; margin-bottom: 9px; }
+        .nb-practice-group-head p { margin: 0 0 3px; color: var(--slate); font: 10px 'JetBrains Mono', monospace; }
+        .nb-practice-group-head h3 { margin: 0; color: var(--ink); font-size: 16px; }
+        .nb-practice-group-summary { min-width: 125px; color: var(--slate); font-size: 11px; text-align: right; }
+        .nb-practice-group-summary > div { width: 128px; height: 5px; margin-top: 5px; margin-left: auto; overflow: hidden; border-radius: 99px; background: var(--paper-line); }
+        .nb-practice-group-summary > div i { display: block; height: 100%; border-radius: inherit; background: var(--ac-green); transition: width .25s ease; }
+        .nb-practice-problem-list { display: flex; flex-direction: column; border-top: 1px solid var(--paper-line); }
+        .nb-practice-problem { width: 100%; display: grid; grid-template-columns: 29px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 12px 5px 12px 0; color: var(--ink); border: 0; border-bottom: 1px solid var(--paper-line); background: transparent; text-align: left; cursor: pointer; font-family: inherit; transition: background .14s ease, transform .14s ease; }
+        .nb-practice-problem:hover { padding-left: 8px; background: rgba(44,74,140,0.045); }
+        .nb-practice-problem-index { color: var(--slate); font: 600 10px 'JetBrains Mono', monospace; text-align: center; }
+        .nb-practice-problem-main { min-width: 0; }
+        .nb-practice-problem-titleline { display: flex; align-items: center; gap: 8px; }
+        .nb-practice-problem h4 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+        .nb-practice-problem-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 4px; color: var(--slate); font-size: 10.5px; }
+        .nb-practice-problem-meta i { width: 3px; height: 3px; border-radius: 50%; background: #B6BEC9; }
+        .nb-practice-status { flex-shrink: 0; padding: 2px 6px; border-radius: 99px; font: 600 9px 'JetBrains Mono', monospace; }
+        .nb-practice-status.todo { color: #697789; background: #EFF2F5; }
+        .nb-practice-status.in-progress { color: #9B5C00; background: rgba(185,130,47,0.14); }
+        .nb-practice-status.done { color: var(--ac-green); background: rgba(46,158,109,0.12); }
+        .nb-practice-problem-score { display: flex; align-items: center; justify-content: flex-end; gap: 9px; min-width: 106px; }
+        .nb-practice-problem-score strong { color: var(--pen-blue); font: 700 11px 'JetBrains Mono', monospace; }
+        .nb-practice-problem-score > span { display: inline-flex; align-items: center; gap: 3px; color: var(--pen-blue); font-size: 10px; }
+        .nb-practice-group-actions { padding-top: 10px; }
+        .nb-practice-group-actions .nb-btn { padding: 6px 10px; font-size: 11px; }
+        .nb-practice-empty { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 43px 15px 25px; color: var(--slate); text-align: center; }
+        .nb-practice-empty strong { color: var(--ink); font-size: 13px; }
+        .nb-practice-empty span { font-size: 11px; }
         .nb-management-panel { margin-bottom: 16px; }
         .nb-management-head, .nb-editor-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
         .nb-management-list { display: flex; flex-direction: column; margin-top: 12px; }
@@ -2869,7 +2960,23 @@ function App() {
           .nb-lesson-question-form { flex-direction: column; align-items: stretch; }
           .nb-lesson-question-form .nb-btn { justify-content: center; }
           .nb-lesson-progress-actions .nb-btn { flex: 1; justify-content: center; }
-          .nb-practice-summary { grid-template-columns: 1fr; }
+          .nb-practice-progress-board { grid-template-columns: 1fr; }
+          .nb-practice-toolbar { align-items: stretch; }
+          .nb-practice-search { flex-basis: 100%; }
+          .nb-practice-filter-stack { width: 100%; }
+          .nb-practice-filter-stack .nb-filter-row { width: 100%; }
+          .nb-practice-filter-stack .nb-chip { flex: 1; padding-left: 7px; padding-right: 7px; }
+          .nb-practice-teacher-board { grid-template-columns: 1fr; gap: 12px; }
+          .nb-practice-teacher-stats { justify-content: space-between; }
+          .nb-practice-teacher-board .nb-btn { justify-content: center; }
+          .nb-practice-roadmap { padding: 15px 12px; }
+          .nb-practice-group { grid-template-columns: 27px minmax(0, 1fr); gap: 7px; }
+          .nb-practice-group-head { align-items: flex-start; flex-direction: column; gap: 5px; }
+          .nb-practice-group-summary { text-align: left; }
+          .nb-practice-group-summary > div { margin-left: 0; }
+          .nb-practice-problem { grid-template-columns: 23px minmax(0, 1fr); gap: 7px; padding-right: 0; }
+          .nb-practice-problem-score { grid-column: 2; justify-content: flex-start; min-width: 0; }
+          .nb-practice-problem h4 { white-space: normal; }
           .nb-management-row { align-items: flex-start; flex-direction: column; }
           .nb-management-actions { width: 100%; }
           .nb-management-actions .nb-btn { flex: 1; justify-content: center; }
