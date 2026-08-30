@@ -920,8 +920,16 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [result, setResult] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
+  const modalBodyRef = useRef(null);
   const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (modalBodyRef.current) modalBodyRef.current.scrollTop = 0;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [problem.id]);
 
   async function handleSubmit() {
     if (readOnly || judging) return;
@@ -946,7 +954,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 
   return (
     <div className="nb-modal-overlay" onClick={onClose}>
-      <div className="nb-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="nb-modal nb-solver-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
           <div>
             <div className="nb-eyebrow">{problem.id} · {editorMeta.label} · {problem.points} điểm</div>
@@ -955,7 +963,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
         </div>
 
-        <div className="nb-modal-body">
+        <div ref={modalBodyRef} className="nb-modal-body nb-solver-modal-body">
           <div className="nb-modal-col">
             <DifficultyTag level={problem.difficulty} />
             {alreadySolved && <span className="nb-pill nb-pill-ac" style={{ marginLeft: 8 }}>Đã hoàn thành</span>}
@@ -2820,6 +2828,10 @@ function App() {
 
         .nb-modal-overlay { position: fixed; inset: 0; background: rgba(11,23,54,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
         .nb-modal { background: var(--paper); border-radius: 12px; max-width: 820px; width: 100%; max-height: 88vh; overflow-y: auto; }
+        .nb-solver-modal { display: flex; flex-direction: column; overflow: hidden; }
+        .nb-solver-modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+        .nb-solver-modal-body > .nb-modal-col:last-child { align-self: start; min-width: 0; }
+
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
         .nb-modal-col { min-width: 0; }
@@ -3251,7 +3263,9 @@ function App() {
           .nb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
           .nb-table { min-width: 620px; }
           .nb-modal-body { display: flex; flex-direction: column; gap: 16px; }
-          .nb-modal-body > .nb-modal-col:last-child { order: -1; }
+          .nb-modal-body > .nb-modal-col:last-child { order: -1; width: 100%; }
+          .nb-solver-modal-body { overflow-y: auto; }
+          .nb-solver-modal { max-height: 92vh; }
           .nb-modal-overlay { align-items: flex-end; padding: 0; }
           .nb-modal {
             max-height: 92vh;
