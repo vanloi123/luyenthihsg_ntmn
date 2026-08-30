@@ -2912,11 +2912,11 @@ function App() {
         .nb-modal-actions .nb-btn { min-height: 42px; }
         .nb-modal-actions .nb-btn-primary { box-shadow: 0 5px 14px rgba(4,166,199,0.24); }
         /* Responsive solver surface: header stays visible while content scrolls. */
-        .nb-solver-modal { width: min(1180px, 100%); max-width: 1180px; max-height: min(900px, calc(100dvh - 32px)); overflow: hidden; }
+        .nb-solver-modal { width: min(1180px, 100%); max-width: 1180px; height: min(900px, calc(100dvh - 32px)); max-height: min(900px, calc(100dvh - 32px)); overflow: hidden; }
         .nb-solver-modal .nb-modal-head { flex: 0 0 auto; min-width: 0; }
         .nb-solver-modal .nb-modal-head > div { min-width: 0; }
         .nb-solver-modal .nb-modal-head .nb-h3 { overflow-wrap: anywhere; }
-        .nb-solver-modal-body { flex: 1 1 auto; min-height: 0; width: 100%; overflow-y: auto; overscroll-behavior: contain; align-items: start; }
+        .nb-solver-modal-body { flex: 1 1 auto; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; align-items: start; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
         .nb-solver-modal-body > .nb-modal-col { min-width: 0; width: 100%; }
         .nb-problem-statement { overflow-wrap: anywhere; }
         .nb-problem-statement-image { width: auto; height: auto; max-width: 100%; }
@@ -2924,7 +2924,7 @@ function App() {
         .nb-editor-toolbar span, .nb-editor-status span { min-width: 0; overflow-wrap: anywhere; }
         .nb-editor-workspace { min-width: 0; height: clamp(260px, 42dvh, 520px); max-height: none; }
         .nb-editor-code-layer { overflow: hidden; }
-        .nb-code-input { width: 100%; min-width: 100%; }
+        .nb-code-input { width: 100%; min-width: 100%; overflow: auto; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
         .nb-code-highlight { min-width: max-content; }
         .nb-modal-actions { margin-top: 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
         .nb-modal-actions .nb-btn { touch-action: manipulation; }
@@ -3210,13 +3210,15 @@ function App() {
         }
 
         @media (max-width: 860px) {
-          .nb-solver-modal { max-height: calc(100dvh - 20px); }
+          .nb-solver-modal { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
           .nb-solver-modal-body { grid-template-columns: minmax(0, 1fr); gap: 18px; }
           .nb-solver-modal .nb-editor-workspace { height: clamp(260px, 46dvh, 500px); }
           .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; }
         }
         @media (max-width: 600px) {
-          .nb-solver-modal { max-height: 100dvh; border-radius: 18px 18px 0 0; }
+          /* The fixed bottom navigation is ~70px tall; keep the sheet above it. */
+          .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(74px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
+          .nb-solver-modal { height: calc(100dvh - 74px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 74px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
           .nb-solver-modal .nb-modal-head { padding: 14px 16px 12px; }
           .nb-solver-modal .nb-modal-body { padding: 14px 16px max(16px, env(safe-area-inset-bottom)); gap: 18px; }
           .nb-solver-modal .nb-editor-workspace { height: clamp(230px, 43dvh, 420px); }
