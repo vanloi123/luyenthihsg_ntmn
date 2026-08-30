@@ -121,6 +121,7 @@ function mapProblem(row) {
     language, isPython: language === "python", statement: row.statement,
     sample: { input: row.sample_input, output: row.sample_output },
     imageUrl: row.statement_image_url || "",
+    createdAt: row.created_at || row.createdAt || null,
     testCases: normalizeTestCases(row.test_cases),
   };
 }
@@ -217,6 +218,7 @@ async function dbAddProblem(p) {
     language, is_python: language === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
+    created_at: p.createdAt || new Date().toISOString(),
   });
   if (error) throw error;
 }
@@ -1220,6 +1222,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [imagePreview, setImagePreview] = useState("");
   const imageObjectUrlRef = useRef(null);
   const [form, setForm] = useState(() => createProblemForm(topics[0]?.id));
+  const [collapsedMonths, setCollapsedMonths] = useState({});
 
   const currentSubmissions = submissions.filter((s) => s.studentId === currentUser?.id);
   const completedCount = problems.filter((p) => solvedByCurrent(p.id)).length;
@@ -1255,15 +1258,35 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     return languageMatches && progressMatches && (!query.trim() || searchText.includes(query.trim().toLocaleLowerCase("vi-VN")));
   }), [problems, languageFilter, progressFilter, query, topicById, currentSubmissions, solvedByCurrent]);
 
+  function problemMonth(problem) {
+    const rawDate = problem.createdAt || problem.created_at;
+    if (!rawDate) return { key: "unknown", label: "Chưa phân tháng", sort: 0 };
+    const date = new Date(rawDate);
+    if (Number.isNaN(date.getTime())) return { key: "unknown", label: "Chưa phân tháng", sort: 0 };
+    const month = date.getMonth() + 1;
+    const year = date.getFullYear();
+    return { key: `${year}-${String(month).padStart(2, "0")}`, label: `Tháng ${month}/${year}`, sort: year * 100 + month };
+  }
+
   const practiceGroups = useMemo(() => {
-    const groups = topics.map((topic) => ({
-      id: topic.id,
-      title: topic.title,
-      subtitle: `${topic.code || "Chuyên đề"}${topic.weeks ? ` · ${topic.weeks}` : ""}`,
-      problems: filtered.filter((problem) => problem.topic === topic.id),
-    })).filter((group) => group.problems.length > 0);
+    const buildGroup = (id, title, subtitle, groupProblems) => {
+      const monthMap = new Map();
+      groupProblems.forEach((problem) => {
+        const month = problemMonth(problem);
+        if (!monthMap.has(month.key)) monthMap.set(month.key, { ...month, problems: [] });
+        monthMap.get(month.key).problems.push(problem);
+      });
+      const months = [...monthMap.values()].sort((a, b) => b.sort - a.sort);
+      return { id, title, subtitle, problems: groupProblems, months };
+    };
+    const groups = topics.map((topic) => buildGroup(
+      topic.id,
+      topic.title,
+      `${topic.code || "Chuyên đề"}${topic.weeks ? ` · ${topic.weeks}` : ""}`,
+      filtered.filter((problem) => problem.topic === topic.id),
+    )).filter((group) => group.problems.length > 0);
     const uncategorized = filtered.filter((problem) => !topicById.has(problem.topic));
-    if (uncategorized.length > 0) groups.push({ id: "uncategorized", title: "Chưa phân chuyên đề", subtitle: "Cần giáo viên sắp xếp", problems: uncategorized });
+    if (uncategorized.length > 0) groups.push(buildGroup("uncategorized", "Chưa phân chuyên đề", "Cần giáo viên sắp xếp", uncategorized));
     return groups;
   }, [topics, filtered, topicById]);
 
@@ -1548,7 +1571,22 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
             <div className="nb-practice-group-rail"><span>{String(groupIndex + 1).padStart(2, "0")}</span><i /></div>
             <div className="nb-practice-group-content">
               <div className="nb-practice-group-head"><div><p>{group.subtitle}</p><h3>{group.title}</h3></div><div className="nb-practice-group-summary">{isTeacher ? <span>{group.problems.length} bài · {groupAttempts} lượt nộp</span> : <><span>{groupSolved}/{group.problems.length} đã xong</span><div><i style={{ width: `${group.problems.length ? Math.round(groupSolved / group.problems.length * 100) : 0}%` }} /></div></>}</div></div>
-              <div className="nb-practice-problem-list">{group.problems.map(renderPracticeProblem)}</div>
+              <div className="nb-practice-month-list">
+                {group.months.map((month) => {
+                  const monthId = `${group.id}-${month.key}`;
+                  const isCollapsed = Boolean(collapsedMonths[monthId]);
+                  const monthSolved = month.problems.filter((problem) => solvedByCurrent(problem.id)).length;
+                  const monthAttempts = month.problems.reduce((total, problem) => total + (isTeacher ? teacherProblemStats(problem.id).attempts : problemStats(problem.id).attempts), 0);
+                  return <div className={`nb-practice-month ${isCollapsed ? "collapsed" : ""}`} key={monthId}>
+                    <button type="button" className="nb-practice-month-head" onClick={() => setCollapsedMonths((current) => ({ ...current, [monthId]: !current[monthId] }))} aria-expanded={!isCollapsed}>
+                      <span className="nb-practice-month-chevron"><ChevronRight size={15} /></span>
+                      <span className="nb-practice-month-title"><strong>{month.label}</strong><small>{month.problems.length} bài{isTeacher ? ` · ${monthAttempts} lượt nộp` : ` · ${monthSolved} đã xong`}</small></span>
+                      {!isTeacher && <span className="nb-practice-month-progress">{Math.round(monthSolved / month.problems.length * 100)}%</span>}
+                    </button>
+                    {!isCollapsed && <div className="nb-practice-problem-list">{month.problems.map(renderPracticeProblem)}</div>}
+                  </div>;
+                })}
+              </div>
               {isTeacher && <div className="nb-practice-group-actions"><button className="nb-btn nb-btn-ghost" type="button" onClick={() => beginAdd(group.id === "uncategorized" ? undefined : group.id)}><Plus size={14} /> Thêm bài vào chuyên đề</button></div>}
             </div>
           </section>;
@@ -2613,6 +2651,18 @@ function App() {
         .nb-practice-group-summary { min-width: 125px; color: var(--slate); font-size: 11px; text-align: right; }
         .nb-practice-group-summary > div { width: 128px; height: 5px; margin-top: 5px; margin-left: auto; overflow: hidden; border-radius: 99px; background: var(--paper-line); }
         .nb-practice-group-summary > div i { display: block; height: 100%; border-radius: inherit; background: var(--ac-green); transition: width .25s ease; }
+        .nb-practice-month-list { display: flex; flex-direction: column; gap: 9px; }
+        .nb-practice-month { overflow: hidden; border: 1px solid var(--paper-line); border-radius: 9px; background: #FBFDFF; }
+        .nb-practice-month-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 0; color: var(--ink); background: linear-gradient(90deg, rgba(4,166,199,0.08), rgba(255,255,255,0.72)); text-align: left; cursor: pointer; font-family: inherit; transition: background 180ms ease, color 180ms ease; }
+        .nb-practice-month-head:hover { background: rgba(4,166,199,0.14); }
+        .nb-practice-month-chevron { display: inline-flex; color: var(--pen-blue); transition: transform 180ms ease; }
+        .nb-practice-month:not(.collapsed) .nb-practice-month-chevron { transform: rotate(90deg); }
+        .nb-practice-month-title { display: flex; align-items: baseline; gap: 9px; min-width: 0; flex: 1; }
+        .nb-practice-month-title strong { font-size: 12px; }
+        .nb-practice-month-title small { color: var(--slate); font-size: 10px; }
+        .nb-practice-month-progress { color: var(--pen-blue); font: 700 10px 'JetBrains Mono', monospace; }
+        .nb-practice-month .nb-practice-problem-list { margin: 0 10px; }
+        .nb-practice-month .nb-practice-problem:last-child { border-bottom: 0; }
         .nb-practice-problem-list { display: flex; flex-direction: column; border-top: 1px solid var(--paper-line); }
         .nb-practice-problem { width: 100%; display: grid; grid-template-columns: 29px minmax(0, 1fr) auto; align-items: center; gap: 11px; padding: 12px 5px 12px 0; color: var(--ink); border: 0; border-bottom: 1px solid var(--paper-line); background: transparent; text-align: left; cursor: pointer; font-family: inherit; transition: background .14s ease, transform .14s ease; }
         .nb-practice-problem:hover { padding-left: 8px; background: rgba(4,166,199,0.045); }
@@ -2935,7 +2985,7 @@ function App() {
 
         .nb-bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; background: var(--ink); border-top: 1px solid rgba(255,255,255,0.08); padding: 6px 4px calc(6px + env(safe-area-inset-bottom, 0px)); gap: 2px; z-index: 20; overflow-x: auto; }
         .nb-bottom-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: transparent; border: none; color: #9FB2CC; font-size: 10px; font-family: inherit; padding: 6px 2px; border-radius: 8px; white-space: nowrap; }
-        .nb-bottom-nav-item.active { color: #fff; background: var(--red-pen); }
+        .nb-bottom-nav-item.active { color: #fff; background: var(--pen-blue); }
 
         @media (max-width: 860px) {
           .nb-only-desktop { display: none !important; }
@@ -3053,6 +3103,160 @@ function App() {
           .nb-editor-workspace { min-height: 250px; }
           .nb-editor-toolbar, .nb-editor-status { font-size: 9px; }
           .nb-code-highlight, .nb-code-input { font-size: 12px; padding-left: 12px; padding-right: 12px; }
+        }
+
+        /* ------------------------------------------------------------------
+           Motion & UX polish: subtle, purposeful, accessible interactions
+        ------------------------------------------------------------------ */
+        .nb-nav-item,
+        .nb-bottom-nav-item,
+        .nb-btn,
+        .nb-icon-btn,
+        .nb-chip,
+        .nb-practice-manage-action {
+          transition:
+            color 180ms ease,
+            background-color 180ms ease,
+            border-color 180ms ease,
+            box-shadow 180ms ease,
+            transform 180ms ease,
+            opacity 180ms ease;
+        }
+        .nb-nav-item:hover,
+        .nb-bottom-nav-item:hover {
+          transform: translateX(2px);
+        }
+        .nb-nav-item.active,
+        .nb-bottom-nav-item.active {
+          box-shadow: 0 6px 16px rgba(4,166,199,0.22);
+        }
+        .nb-nav-item:focus-visible,
+        .nb-bottom-nav-item:focus-visible,
+        .nb-btn:focus-visible,
+        .nb-icon-btn:focus-visible,
+        .nb-chip:focus-visible {
+          outline: 3px solid rgba(4,166,199,0.28);
+          outline-offset: 2px;
+        }
+
+        @keyframes nb-page-enter {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .nb-content { animation: nb-page-enter 320ms ease both; }
+
+        .nb-problem-card,
+        .nb-exam-card,
+        .nb-home-progress-card,
+        .nb-home-class-card,
+        .nb-home-contest-card {
+          transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+        }
+        .nb-problem-card:hover,
+        .nb-exam-card:hover,
+        .nb-home-progress-card:hover,
+        .nb-home-class-card:hover,
+        .nb-home-contest-card:hover {
+          transform: translateY(-3px);
+          border-color: rgba(4,166,199,0.55);
+          box-shadow: 0 14px 30px rgba(11,23,54,0.11);
+        }
+        .nb-problem-card:active,
+        .nb-exam-card:active {
+          transform: translateY(-1px) scale(0.995);
+        }
+
+        .nb-home-progress span,
+        .nb-exam-progress span,
+        .nb-practice-track i {
+          position: relative;
+          overflow: hidden;
+        }
+        .nb-home-progress span::after,
+        .nb-exam-progress span::after,
+        .nb-practice-track i::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          width: 42%;
+          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.38), transparent);
+          transform: translateX(-150%);
+          animation: nb-progress-shine 3.2s ease-in-out infinite;
+        }
+        @keyframes nb-progress-shine {
+          0%, 35% { transform: translateX(-150%); }
+          75%, 100% { transform: translateX(300%); }
+        }
+
+        .nb-modal-overlay { animation: nb-overlay-in 180ms ease both; }
+        .nb-modal { animation: nb-modal-in 240ms cubic-bezier(0.2,0.8,0.2,1) both; }
+        @keyframes nb-overlay-in {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes nb-modal-in {
+          from { opacity: 0; transform: translateY(18px) scale(0.97); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .nb-btn:not(:disabled):active,
+        .nb-icon-btn:not(:disabled):active {
+          transform: translateY(1px) scale(0.98);
+        }
+        .nb-btn:disabled,
+        .nb-icon-btn:disabled {
+          cursor: not-allowed;
+          opacity: 0.58;
+          transform: none !important;
+        }
+
+        .nb-skeleton {
+          position: relative;
+          overflow: hidden;
+          border-radius: 8px;
+          background: #E7F3F7;
+        }
+        .nb-skeleton::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          transform: translateX(-100%);
+          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.7), transparent);
+          animation: nb-skeleton-shimmer 1.4s infinite;
+        }
+        @keyframes nb-skeleton-shimmer {
+          to { transform: translateX(100%); }
+        }
+
+        @media (max-width: 600px) {
+          .nb-content { padding: 18px 14px 88px; }
+          .nb-main::before { display: none; }
+          .nb-home-hero,
+          .nb-exam-hero { align-items: flex-start; flex-direction: column; padding: 20px; }
+          .nb-home-hero-rank,
+          .nb-exam-hero-icon { width: 100%; }
+          .nb-h2 { font-size: 21px; }
+          .nb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+          .nb-table { min-width: 620px; }
+          .nb-modal-overlay { align-items: flex-end; padding: 0; }
+          .nb-modal {
+            max-height: 92vh;
+            border-radius: 18px 18px 0 0;
+            animation-name: nb-sheet-in;
+          }
+        }
+        @keyframes nb-sheet-in {
+          from { opacity: 0; transform: translateY(100%); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            scroll-behavior: auto !important;
+            transition-duration: 0.01ms !important;
+          }
         }
       `}</style>
 
