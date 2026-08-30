@@ -921,12 +921,20 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
   const modalBodyRef = useRef(null);
+  const editorColumnRef = useRef(null);
   const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      if (modalBodyRef.current) modalBodyRef.current.scrollTop = 0;
+      const body = modalBodyRef.current;
+      const editor = editorColumnRef.current;
+      if (!body || !editor) return;
+      const editorTop = editor.offsetTop;
+      const editorHeight = editor.offsetHeight;
+      const targetTop = editorTop - Math.max(0, (body.clientHeight - editorHeight) / 2);
+      body.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      editor.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [problem.id]);
@@ -985,7 +993,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
             </div>}
           </div>
 
-          <div className="nb-modal-col">
+          <div ref={editorColumnRef} className="nb-modal-col nb-solver-editor-column">
             <CodeEditor code={code} onChange={setCode} language={editorLanguage} onSubmit={handleSubmit} readOnly={readOnly} />
             <p className="nb-sub" style={{ marginTop: 6 }}>
               Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
@@ -2849,6 +2857,8 @@ function App() {
           align-self: start;
           min-width: 0;
         }
+        .nb-solver-editor-column { scroll-margin-block: 18px; }
+
 
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
