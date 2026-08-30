@@ -2312,7 +2312,7 @@ function App() {
           --ink-soft: #1B2432;
           --paper: #F7F4EA;
           --paper-line: #E1D9C0;
-          --red-pen: #B23A3A;
+          --red-pen: #04a6c7;
           --pen-blue: #2C4A8C;
           --gold: #B9822F;
           --ac-green: #2E9E6D;
@@ -3070,7 +3070,7 @@ function App() {
           <aside className="nb-sidebar nb-only-desktop">
             <div className="nb-brand">
               <div className="nb-brand-mark"><GraduationCap size={18} /></div>
-              <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>ÔN THI HSG · Mường Nhé</span></div>
+              <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>ÔN THI HSG · 2026</span></div>
             </div>
             <nav className="nb-nav">
               {navItems.map((n) => (
