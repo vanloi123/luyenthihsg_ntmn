@@ -2826,8 +2826,29 @@ function App() {
         .nb-checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--slate); }
         .nb-checklist { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; background: #F8FBFF; }
 
-        .nb-modal-overlay { position: fixed; inset: 0; background: rgba(11,23,54,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
-        .nb-modal { background: var(--paper); border-radius: 12px; max-width: 820px; width: 100%; max-height: 88vh; overflow-y: auto; }
+        .nb-modal-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(11,23,54,0.55);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 50;
+          padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+          overflow: hidden;
+          touch-action: pan-y;
+        }
+        .nb-modal {
+          background: var(--paper);
+          border-radius: 12px;
+          max-width: 820px;
+          width: 100%;
+          max-height: calc(100dvh - 32px);
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          -webkit-overflow-scrolling: touch;
+          scrollbar-gutter: stable;
+        }
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
         .nb-solver-editor-anchor { scroll-margin: 18px; }
@@ -2862,7 +2883,17 @@ function App() {
         .nb-syntax-number { color: #C99BE8; }
         .nb-syntax-keyword { color: #7DB7E8; font-weight: 600; }
         .nb-syntax-function { color: #82D4C1; }
-        .nb-modal-actions { margin-top: 10px; display: flex; }
+        .nb-modal-actions {
+          position: sticky;
+          bottom: 0;
+          z-index: 3;
+          margin-top: 10px;
+          display: flex;
+          padding: 10px 0 max(2px, env(safe-area-inset-bottom));
+          background: linear-gradient(180deg, rgba(244,248,253,0), var(--paper) 28%);
+        }
+        .nb-modal-actions .nb-btn { min-height: 42px; }
+        .nb-modal-actions .nb-btn-primary { box-shadow: 0 5px 14px rgba(4,166,199,0.24); }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
         .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
         .nb-history-panel { margin-top: 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; overflow: hidden; }
@@ -3077,7 +3108,11 @@ function App() {
           .nb-ranking-search { flex-basis: 100%; }
           .nb-ranking-controls { width: 100%; justify-content: space-between; }
           .nb-ranking-controls .nb-input { flex: 1; }
-          .nb-modal { max-height: 94vh; }
+          .nb-modal {
+            max-height: calc(100dvh - 16px);
+            width: min(100%, 820px);
+            overscroll-behavior: contain;
+          }
           .nb-exam-stat-grid { gap: 8px; }
           .nb-exam-stat { padding: 11px; }
           .nb-exam-stat strong { font-size: 16px; }
@@ -3124,6 +3159,8 @@ function App() {
           .nb-editor-workspace { min-height: 250px; }
           .nb-editor-toolbar, .nb-editor-status { font-size: 9px; }
           .nb-code-highlight, .nb-code-input { font-size: 12px; padding-left: 12px; padding-right: 12px; }
+          .nb-modal-actions { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
+          .nb-modal-actions .nb-btn-primary { flex: 1; justify-content: center; }
         }
 
         /* ------------------------------------------------------------------
@@ -3260,7 +3297,10 @@ function App() {
           .nb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
           .nb-table { min-width: 620px; }
           .nb-modal-body { display: flex; flex-direction: column; gap: 16px; }
-          .nb-modal-overlay { align-items: flex-end; padding: 0; }
+          .nb-modal-overlay {
+            align-items: flex-end;
+            padding: max(0px, env(safe-area-inset-top)) max(0px, env(safe-area-inset-right)) max(0px, env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left));
+          }
           .nb-modal {
             max-height: 92vh;
             border-radius: 18px 18px 0 0;
