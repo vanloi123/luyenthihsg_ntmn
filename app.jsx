@@ -920,25 +920,13 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [result, setResult] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
-  const modalBodyRef = useRef(null);
-  const editorColumnRef = useRef(null);
+  const editorRef = useRef(null);
   const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      const body = modalBodyRef.current;
-      const editor = editorColumnRef.current;
-      if (!body || !editor) return;
-      // Chỉ cuộn vùng nội dung của modal; không dùng scrollIntoView vì có thể
-      // cuộn nhầm document/overlay và làm input-output bị đẩy khỏi viewport.
-      const isCompact = window.matchMedia("(max-width: 900px), (max-height: 680px)").matches;
-      const editorTop = editor.offsetTop;
-      const editorHeight = editor.offsetHeight;
-      const targetTop = isCompact
-        ? 0
-        : editorTop - Math.max(0, (body.clientHeight - editorHeight) / 2);
-      body.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [problem.id]);
@@ -966,7 +954,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 
   return (
     <div className="nb-modal-overlay" onClick={onClose}>
-      <div className="nb-modal nb-solver-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="nb-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
           <div>
             <div className="nb-eyebrow">{problem.id} · {editorMeta.label} · {problem.points} điểm</div>
@@ -975,7 +963,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
         </div>
 
-        <div ref={modalBodyRef} className="nb-modal-body nb-solver-modal-body">
+        <div className="nb-modal-body">
           <div className="nb-modal-col">
             <DifficultyTag level={problem.difficulty} />
             {alreadySolved && <span className="nb-pill nb-pill-ac" style={{ marginLeft: 8 }}>Đã hoàn thành</span>}
@@ -997,7 +985,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
             </div>}
           </div>
 
-          <div ref={editorColumnRef} className="nb-modal-col nb-solver-editor-column">
+          <div ref={editorRef} className="nb-modal-col nb-solver-editor-anchor">
             <CodeEditor code={code} onChange={setCode} language={editorLanguage} onSubmit={handleSubmit} readOnly={readOnly} />
             <p className="nb-sub" style={{ marginTop: 6 }}>
               Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
@@ -2838,33 +2826,11 @@ function App() {
         .nb-checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--slate); }
         .nb-checklist { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; background: #F8FBFF; }
 
-        .nb-modal-overlay { position: fixed; inset: 0; background: rgba(11,23,54,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; overflow: hidden; }
+        .nb-modal-overlay { position: fixed; inset: 0; background: rgba(11,23,54,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
         .nb-modal { background: var(--paper); border-radius: 12px; max-width: 820px; width: 100%; max-height: 88vh; overflow-y: auto; }
-        .nb-solver-modal {
-          display: flex;
-          flex-direction: column;
-          height: min(760px, calc(100dvh - 32px));
-          max-height: calc(100dvh - 32px);
-          overflow: hidden;
-        }
-        .nb-solver-modal .nb-modal-head { flex: 0 0 auto; }
-        .nb-solver-modal-body {
-          flex: 1 1 auto;
-          min-height: 0;
-          overflow-y: auto;
-          overscroll-behavior: contain;
-          align-items: start;
-        }
-        .nb-solver-modal-body > .nb-modal-col:last-child {
-          position: relative;
-          align-self: start;
-          min-width: 0;
-        }
-        .nb-solver-editor-column { scroll-margin-block: 18px; }
-
-
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
+        .nb-solver-editor-anchor { scroll-margin: 18px; }
         .nb-modal-col { min-width: 0; }
 
         .nb-modal-col { display: flex; flex-direction: column; }
@@ -3042,13 +3008,6 @@ function App() {
         .nb-bottom-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: transparent; border: none; color: #9FB2CC; font-size: 10px; font-family: inherit; padding: 6px 2px; border-radius: 8px; white-space: nowrap; }
         .nb-bottom-nav-item.active { color: #fff; background: var(--pen-blue); }
 
-        @media (max-width: 900px), (max-height: 680px) {
-          .nb-solver-modal-body { display: flex; flex-direction: column; gap: 16px; }
-          .nb-solver-modal-body > .nb-modal-col:last-child { order: -1; width: 100%; }
-          .nb-solver-modal .nb-modal-body { padding: 16px; }
-          .nb-solver-modal .nb-sample-grid { grid-template-columns: 1fr 1fr; }
-        }
-
         @media (max-width: 860px) {
           .nb-only-desktop { display: none !important; }
           .nb-only-mobile { display: flex !important; }
@@ -3104,8 +3063,6 @@ function App() {
           .nb-management-actions .nb-btn { flex: 1; justify-content: center; }
           .nb-testcase-grid { grid-template-columns: 1fr; }
           .nb-sample-grid { grid-template-columns: 1fr; }
-          .nb-solver-modal .nb-sample { margin-top: 10px; }
-          .nb-solver-modal .nb-code-block pre { max-height: 180px; }
           .nb-two-col, .nb-modal-body { grid-template-columns: 1fr; }
           .nb-exam-hero { align-items: flex-start; padding: 20px; }
           .nb-exam-title { font-size: 24px; }
@@ -3303,17 +3260,6 @@ function App() {
           .nb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
           .nb-table { min-width: 620px; }
           .nb-modal-body { display: flex; flex-direction: column; gap: 16px; }
-          .nb-solver-modal-body > .nb-modal-col:last-child {
-            position: static;
-            order: -1;
-            width: 100%;
-          }
-          .nb-solver-modal-body { overflow-y: auto; }
-          .nb-solver-modal {
-            height: calc(100dvh - 10px);
-            max-height: calc(100dvh - 10px);
-            border-radius: 18px 18px 0 0;
-          }
           .nb-modal-overlay { align-items: flex-end; padding: 0; }
           .nb-modal {
             max-height: 92vh;
