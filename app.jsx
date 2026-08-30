@@ -930,11 +930,15 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
       const body = modalBodyRef.current;
       const editor = editorColumnRef.current;
       if (!body || !editor) return;
+      // Chỉ cuộn vùng nội dung của modal; không dùng scrollIntoView vì có thể
+      // cuộn nhầm document/overlay và làm input-output bị đẩy khỏi viewport.
+      const isCompact = window.matchMedia("(max-width: 900px), (max-height: 680px)").matches;
       const editorTop = editor.offsetTop;
       const editorHeight = editor.offsetHeight;
-      const targetTop = editorTop - Math.max(0, (body.clientHeight - editorHeight) / 2);
+      const targetTop = isCompact
+        ? 0
+        : editorTop - Math.max(0, (body.clientHeight - editorHeight) / 2);
       body.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-      editor.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [problem.id]);
@@ -2852,8 +2856,7 @@ function App() {
           align-items: start;
         }
         .nb-solver-modal-body > .nb-modal-col:last-child {
-          position: sticky;
-          top: 0;
+          position: relative;
           align-self: start;
           min-width: 0;
         }
@@ -3039,6 +3042,13 @@ function App() {
         .nb-bottom-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: transparent; border: none; color: #9FB2CC; font-size: 10px; font-family: inherit; padding: 6px 2px; border-radius: 8px; white-space: nowrap; }
         .nb-bottom-nav-item.active { color: #fff; background: var(--pen-blue); }
 
+        @media (max-width: 900px), (max-height: 680px) {
+          .nb-solver-modal-body { display: flex; flex-direction: column; gap: 16px; }
+          .nb-solver-modal-body > .nb-modal-col:last-child { order: -1; width: 100%; }
+          .nb-solver-modal .nb-modal-body { padding: 16px; }
+          .nb-solver-modal .nb-sample-grid { grid-template-columns: 1fr 1fr; }
+        }
+
         @media (max-width: 860px) {
           .nb-only-desktop { display: none !important; }
           .nb-only-mobile { display: flex !important; }
@@ -3094,6 +3104,8 @@ function App() {
           .nb-management-actions .nb-btn { flex: 1; justify-content: center; }
           .nb-testcase-grid { grid-template-columns: 1fr; }
           .nb-sample-grid { grid-template-columns: 1fr; }
+          .nb-solver-modal .nb-sample { margin-top: 10px; }
+          .nb-solver-modal .nb-code-block pre { max-height: 180px; }
           .nb-two-col, .nb-modal-body { grid-template-columns: 1fr; }
           .nb-exam-hero { align-items: flex-start; padding: 20px; }
           .nb-exam-title { font-size: 24px; }
