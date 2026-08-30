@@ -3070,7 +3070,7 @@ function App() {
           <aside className="nb-sidebar nb-only-desktop">
             <div className="nb-brand">
               <div className="nb-brand-mark"><GraduationCap size={18} /></div>
-              <div className="nb-brand-text"><b>Đội tuyển Tin học</b><span>ÔN THI HSG · 11 TIN</span></div>
+              <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>ÔN THI HSG · NT Mường Nhé</span></div>
             </div>
             <nav className="nb-nav">
               {navItems.map((n) => (
