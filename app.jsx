@@ -218,7 +218,6 @@ async function dbAddProblem(p) {
     language, is_python: language === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
-    created_at: p.createdAt || new Date().toISOString(),
   });
   if (error) throw error;
 }
@@ -1223,6 +1222,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const imageObjectUrlRef = useRef(null);
   const [form, setForm] = useState(() => createProblemForm(topics[0]?.id));
   const [collapsedMonths, setCollapsedMonths] = useState({});
+  const problemFormRef = useRef(null);
 
   const currentSubmissions = submissions.filter((s) => s.studentId === currentUser?.id);
   const completedCount = problems.filter((p) => solvedByCurrent(p.id)).length;
@@ -1259,7 +1259,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   }), [problems, languageFilter, progressFilter, query, topicById, currentSubmissions, solvedByCurrent]);
 
   function problemMonth(problem) {
-    const rawDate = problem.createdAt || problem.created_at;
+    const rawDate = problem.createdAt || problem.created_at || (String(problem.id || "").startsWith("PX") ? Number(String(problem.id).slice(2)) : null);
     if (!rawDate) return { key: "unknown", label: "Chưa phân tháng", sort: 0 };
     const date = new Date(rawDate);
     if (Number.isNaN(date.getTime())) return { key: "unknown", label: "Chưa phân tháng", sort: 0 };
@@ -1362,12 +1362,21 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       imageUrl: problem.imageUrl || "", imageFile: null,
       testCases: normalizeTestCases(problem.testCases).length > 0 ? normalizeTestCases(problem.testCases) : [createEmptyTestCase()],
       language: problemLanguage(problem), isPython: problemLanguage(problem) === "python",
+      createdAt: problem.createdAt || problem.created_at || null,
     });
     clearImagePreview();
     setImagePreview(problem.imageUrl || "");
     setFormError("");
     setShowForm(true);
   }
+
+  useEffect(() => {
+    if (!showForm) return;
+    const frame = window.requestAnimationFrame(() => {
+      problemFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [showForm, editingId]);
 
   function handleImageChange(e) {
     const file = e.target.files?.[0];
@@ -1436,6 +1445,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
         language: normalizeLanguage(form.language, form.isPython),
         isPython: normalizeLanguage(form.language, form.isPython) === "python",
         statement: form.statement.trim(),
+        createdAt: form.createdAt || (editingId ? null : new Date().toISOString()),
         imageUrl: uploadedImageUrl,
         sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" },
         testCases,
@@ -1488,7 +1498,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       )}
 
       {isTeacher && showForm && (
-        <form onSubmit={submit} className="nb-form nb-panel nb-problem-editor" style={{ marginBottom: 16 }}>
+        <form ref={problemFormRef} onSubmit={submit} className="nb-form nb-panel nb-problem-editor" style={{ marginBottom: 16, scrollMarginTop: 18 }}>
           <div className="nb-editor-head">
             <div>
               <div className="nb-eyebrow">{editingId ? "Chỉnh sửa" : "Tạo mới"}</div>
@@ -2812,6 +2822,8 @@ function App() {
         .nb-modal { background: var(--paper); border-radius: 12px; max-width: 820px; width: 100%; max-height: 88vh; overflow-y: auto; }
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
+        .nb-modal-col { min-width: 0; }
+
         .nb-modal-col { display: flex; flex-direction: column; }
         .nb-sample { background: #fff; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; margin-top: 14px; }
         .nb-sample-title { color: var(--ink); font-size: 12px; font-weight: 700; margin-bottom: 9px; }
@@ -3238,6 +3250,8 @@ function App() {
           .nb-h2 { font-size: 21px; }
           .nb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
           .nb-table { min-width: 620px; }
+          .nb-modal-body { display: flex; flex-direction: column; gap: 16px; }
+          .nb-modal-body > .nb-modal-col:last-child { order: -1; }
           .nb-modal-overlay { align-items: flex-end; padding: 0; }
           .nb-modal {
             max-height: 92vh;
