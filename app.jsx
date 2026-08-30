@@ -2352,7 +2352,7 @@ function App() {
           cursor: pointer; text-align: left; font-family: inherit; transition: background .15s, color .15s;
         }
         .nb-nav-item:hover { background: rgba(255,255,255,0.06); color: #fff; }
-        .nb-nav-item.active { background: var(--red-pen); color: #fff; }
+        .nb-nav-item.active { background: #04a6c7; color: #fff; }
 
         .nb-sidebar-foot { margin-top: auto; padding: 14px; border-top: 1px solid rgba(255,255,255,0.08); }
         .nb-btn-ghost-dark { background: transparent; color: #C6CDDA; border: 1px solid rgba(255,255,255,0.18); }
