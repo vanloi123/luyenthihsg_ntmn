@@ -954,7 +954,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 
   return (
     <div className="nb-modal-overlay" onClick={onClose}>
-      <div className="nb-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="nb-modal nb-solver-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
           <div>
             <div className="nb-eyebrow">{problem.id} · {editorMeta.label} · {problem.points} điểm</div>
@@ -963,7 +963,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
         </div>
 
-        <div className="nb-modal-body">
+        <div className="nb-modal-body nb-solver-modal-body">
           <div className="nb-modal-col">
             <DifficultyTag level={problem.difficulty} />
             {alreadySolved && <span className="nb-pill nb-pill-ac" style={{ marginLeft: 8 }}>Đã hoàn thành</span>}
@@ -2835,8 +2835,9 @@ function App() {
           justify-content: center;
           z-index: 50;
           padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-          overflow: hidden;
+          overflow: auto;
           touch-action: pan-y;
+          overscroll-behavior: contain;
         }
         .nb-modal {
           background: var(--paper);
@@ -2845,12 +2846,15 @@ function App() {
           width: 100%;
           max-height: calc(100dvh - 32px);
           overflow-y: auto;
+          overflow-x: hidden;
           overscroll-behavior: contain;
           -webkit-overflow-scrolling: touch;
           scrollbar-gutter: stable;
         }
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
-        .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
+        .nb-modal-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 20px 22px; }
+        .nb-solver-modal { display: flex; flex-direction: column; min-height: 0; }
+        .nb-solver-modal-body { min-width: 0; }
         .nb-solver-editor-anchor { scroll-margin: 18px; }
         .nb-modal-col { min-width: 0; }
 
@@ -3039,6 +3043,12 @@ function App() {
         .nb-bottom-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: transparent; border: none; color: #9FB2CC; font-size: 10px; font-family: inherit; padding: 6px 2px; border-radius: 8px; white-space: nowrap; }
         .nb-bottom-nav-item.active { color: #fff; background: var(--pen-blue); }
 
+        @media (max-width: 980px) and (max-height: 760px) {
+          .nb-solver-modal-body { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+          .nb-solver-modal .nb-modal-col { width: 100%; }
+          .nb-solver-modal .nb-editor-workspace { min-height: 260px; max-height: 44dvh; }
+        }
+
         @media (max-width: 860px) {
           .nb-only-desktop { display: none !important; }
           .nb-only-mobile { display: flex !important; }
@@ -3109,10 +3119,16 @@ function App() {
           .nb-ranking-controls { width: 100%; justify-content: space-between; }
           .nb-ranking-controls .nb-input { flex: 1; }
           .nb-modal {
-            max-height: calc(100dvh - 16px);
-            width: min(100%, 820px);
+            max-height: calc(100dvh - 8px);
+            width: 100%;
+            border-radius: 16px 16px 0 0;
             overscroll-behavior: contain;
           }
+          .nb-solver-modal .nb-modal-head { padding: 14px 16px; }
+          .nb-solver-modal .nb-modal-body { padding: 16px; gap: 16px; }
+          .nb-solver-modal .nb-sample-grid { grid-template-columns: 1fr; }
+          .nb-solver-modal .nb-editor-workspace { min-height: 230px; max-height: 42dvh; }
+          .nb-solver-modal .nb-code-block pre { max-height: 180px; }
           .nb-exam-stat-grid { gap: 8px; }
           .nb-exam-stat { padding: 11px; }
           .nb-exam-stat strong { font-size: 16px; }
