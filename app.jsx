@@ -897,10 +897,18 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
     }
   }
 
+  function handleEditorWheel(event) {
+    const editor = textareaRef.current;
+    if (!editor || (!event.deltaX && !event.deltaY)) return;
+    event.preventDefault();
+    editor.scrollTop += event.deltaY;
+    editor.scrollLeft += event.deltaX;
+  }
+
   return (
     <div className="nb-thonny-editor">
       <div className="nb-editor-toolbar"><span><Code2 size={14} /> {(LANGUAGE_META[language] || LANGUAGE_META.cpp).label} · Editor</span><span>Ln {Math.min(lines.length, 999)} · {code.length} ký tự</span></div>
-      <div className="nb-editor-workspace">
+      <div className="nb-editor-workspace" onWheel={handleEditorWheel}>
         <div className="nb-editor-gutter" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}>{lines.map((_, index) => <span key={index}>{index + 1}</span>)}</div>
         <div className="nb-editor-code-layer">
           <pre className="nb-code-highlight" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }} aria-hidden="true"><code>{lines.map((line, index) => <React.Fragment key={index}>{highlightCodeLine(line, language)}{index < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</code></pre>
@@ -3217,8 +3225,8 @@ function App() {
         }
         @media (max-width: 600px) {
           /* The fixed bottom navigation is ~70px tall; keep the sheet above it. */
-          .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(74px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
-          .nb-solver-modal { height: calc(100dvh - 74px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 74px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
+          .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(96px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
+          .nb-solver-modal { height: calc(100dvh - 96px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 96px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
           .nb-solver-modal .nb-modal-head { padding: 14px 16px 12px; }
           .nb-solver-modal .nb-modal-body { padding: 14px 16px max(16px, env(safe-area-inset-bottom)); gap: 18px; }
           .nb-solver-modal .nb-editor-workspace { height: clamp(230px, 43dvh, 420px); }
