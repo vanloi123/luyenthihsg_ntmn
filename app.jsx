@@ -2826,11 +2826,29 @@ function App() {
         .nb-checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--slate); }
         .nb-checklist { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; background: #F8FBFF; }
 
-        .nb-modal-overlay { position: fixed; inset: 0; background: rgba(11,23,54,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 20px; }
+        .nb-modal-overlay { position: fixed; inset: 0; background: rgba(11,23,54,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; overflow: hidden; }
         .nb-modal { background: var(--paper); border-radius: 12px; max-width: 820px; width: 100%; max-height: 88vh; overflow-y: auto; }
-        .nb-solver-modal { display: flex; flex-direction: column; overflow: hidden; }
-        .nb-solver-modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-        .nb-solver-modal-body > .nb-modal-col:last-child { align-self: start; min-width: 0; }
+        .nb-solver-modal {
+          display: flex;
+          flex-direction: column;
+          height: min(760px, calc(100dvh - 32px));
+          max-height: calc(100dvh - 32px);
+          overflow: hidden;
+        }
+        .nb-solver-modal .nb-modal-head { flex: 0 0 auto; }
+        .nb-solver-modal-body {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          align-items: start;
+        }
+        .nb-solver-modal-body > .nb-modal-col:last-child {
+          position: sticky;
+          top: 0;
+          align-self: start;
+          min-width: 0;
+        }
 
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
@@ -3263,9 +3281,17 @@ function App() {
           .nb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
           .nb-table { min-width: 620px; }
           .nb-modal-body { display: flex; flex-direction: column; gap: 16px; }
-          .nb-modal-body > .nb-modal-col:last-child { order: -1; width: 100%; }
+          .nb-solver-modal-body > .nb-modal-col:last-child {
+            position: static;
+            order: -1;
+            width: 100%;
+          }
           .nb-solver-modal-body { overflow-y: auto; }
-          .nb-solver-modal { max-height: 92vh; }
+          .nb-solver-modal {
+            height: calc(100dvh - 10px);
+            max-height: calc(100dvh - 10px);
+            border-radius: 18px 18px 0 0;
+          }
           .nb-modal-overlay { align-items: flex-end; padding: 0; }
           .nb-modal {
             max-height: 92vh;
