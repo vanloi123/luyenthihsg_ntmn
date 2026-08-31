@@ -1590,7 +1590,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   return (
     <div>
       <SectionHeading eyebrow="Lộ trình luyện tập" title="Luyện tập & Python"
-        sub="Bài tập được xếp theo chuyên đề đang học để học sinh biết bước tiếp theo, còn giáo viên nhìn được mức độ tham gia của cả lớp." />
+        sub="Bài tập được xếp theo chuyên đề đang học." />
 
       {!isTeacher && (
         <div className="nb-practice-progress-board">
