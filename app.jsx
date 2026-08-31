@@ -121,6 +121,7 @@ function mapProblem(row) {
     language, isPython: language === "python", statement: row.statement,
     sample: { input: row.sample_input, output: row.sample_output },
     imageUrl: row.statement_image_url || "",
+    createdAt: row.created_at || row.createdAt || (/^PX\d{10,}$/.test(String(row.id || "")) ? new Date(Number(String(row.id).slice(2))).toISOString() : null),
     testCases: normalizeTestCases(row.test_cases),
   };
 }
@@ -1222,6 +1223,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [progressFilter, setProgressFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(null);
+  const [collapsedMonths, setCollapsedMonths] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [formError, setFormError] = useState("");
@@ -1284,6 +1286,47 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     if (uncategorized.length > 0) groups.push({ id: "uncategorized", title: "Chưa phân chuyên đề", subtitle: "Cần giáo viên sắp xếp", problems: uncategorized });
     return groups;
   }, [topics, filtered, topicById]);
+
+  const practiceMonthGroups = useMemo(() => {
+    const monthFormatter = new Intl.DateTimeFormat("vi-VN", { month: "long", year: "numeric" });
+    const monthMap = new Map();
+
+    practiceGroups.forEach((group) => {
+      group.problems.forEach((problem) => {
+        const parsedDate = problem.createdAt ? new Date(problem.createdAt) : null;
+        const hasValidDate = parsedDate && !Number.isNaN(parsedDate.getTime());
+        const monthKey = hasValidDate
+          ? `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, "0")}`
+          : "undated";
+        const monthLabel = hasValidDate ? monthFormatter.format(parsedDate) : "Chưa xác định tháng";
+        let month = monthMap.get(monthKey);
+
+        if (!month) {
+          month = { key: monthKey, label: monthLabel, sortValue: hasValidDate ? parsedDate.getTime() : -Infinity, groups: [] };
+          monthMap.set(monthKey, month);
+        }
+
+        let monthTopicGroup = month.groups.find((item) => item.id === group.id);
+        if (!monthTopicGroup) {
+          monthTopicGroup = { ...group, problems: [] };
+          month.groups.push(monthTopicGroup);
+        }
+        monthTopicGroup.problems.push(problem);
+      });
+    });
+
+    return Array.from(monthMap.values())
+      .map((month) => ({
+        ...month,
+        problems: month.groups.reduce((total, group) => total + group.problems.length, 0),
+        attempts: month.groups.reduce((total, group) => total + group.problems.reduce((sum, problem) => sum + (isTeacher ? teacherProblemStats(problem.id).attempts : problemStats(problem.id).attempts), 0), 0),
+      }))
+      .sort((a, b) => b.sortValue - a.sortValue);
+  }, [practiceGroups, isTeacher, submissions, currentSubmissions, solvedByCurrent]);
+
+  function toggleMonth(monthKey) {
+    setCollapsedMonths((current) => ({ ...current, [monthKey]: !current[monthKey] }));
+  }
 
   function progressState(problem) {
     const solved = solvedByCurrent(problem.id);
@@ -1422,8 +1465,10 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     setUploadingImage(true);
     try {
       const uploadedImageUrl = form.imageFile ? await uploadProblemImage(form.imageFile) : form.imageUrl || "";
+      const originalProblem = editingId ? problems.find((item) => item.id === editingId) : null;
       const problem = {
         id: editingId || ("PX" + Date.now()),
+        createdAt: originalProblem?.createdAt || new Date().toISOString(),
         title: form.title.trim(),
         topic: form.topic || topics[0]?.id || "",
         difficulty: form.difficulty,
@@ -1558,20 +1603,39 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       )}
 
       <div className="nb-practice-roadmap">
-        <div className="nb-practice-roadmap-head"><div><div className="nb-eyebrow">Lộ trình hiện tại</div><h3 className="nb-h3">Bài tập theo chuyên đề</h3></div><span className="nb-sub">{filtered.length}/{problems.length} bài đang hiển thị</span></div>
-        {practiceGroups.map((group, groupIndex) => {
-          const groupSolved = group.problems.filter((problem) => solvedByCurrent(problem.id)).length;
-          const groupAttempts = group.problems.reduce((total, problem) => total + (isTeacher ? teacherProblemStats(problem.id).attempts : problemStats(problem.id).attempts), 0);
-          return <section className="nb-practice-group" key={group.id}>
-            <div className="nb-practice-group-rail"><span>{String(groupIndex + 1).padStart(2, "0")}</span><i /></div>
-            <div className="nb-practice-group-content">
-              <div className="nb-practice-group-head"><div><p>{group.subtitle}</p><h3>{group.title}</h3></div><div className="nb-practice-group-summary">{isTeacher ? <span>{group.problems.length} bài · {groupAttempts} lượt nộp</span> : <><span>{groupSolved}/{group.problems.length} đã xong</span><div><i style={{ width: `${group.problems.length ? Math.round(groupSolved / group.problems.length * 100) : 0}%` }} /></div></>}</div></div>
-              <div className="nb-practice-problem-list">{group.problems.map(renderPracticeProblem)}</div>
-              {isTeacher && <div className="nb-practice-group-actions"><button className="nb-btn nb-btn-ghost" type="button" onClick={() => beginAdd(group.id === "uncategorized" ? undefined : group.id)}><Plus size={14} /> Thêm bài vào chuyên đề</button></div>}
-            </div>
+        <div className="nb-practice-roadmap-head"><div><div className="nb-eyebrow">Lộ trình hiện tại</div><h3 className="nb-h3">Bài tập theo tháng & chuyên đề</h3><p className="nb-sub" style={{ marginTop: 4 }}>Bấm vào từng tháng để ẩn hoặc hiện danh sách bài tập.</p></div><span className="nb-sub">{filtered.length}/{problems.length} bài đang hiển thị</span></div>
+        {practiceMonthGroups.map((month, monthIndex) => {
+          const isCollapsed = Boolean(collapsedMonths[month.key]);
+          return <section className="nb-practice-month-group" key={month.key}>
+            <button
+              type="button"
+              className="nb-practice-month-head"
+              aria-expanded={!isCollapsed}
+              aria-controls={`nb-practice-month-${month.key}`}
+              onClick={() => toggleMonth(month.key)}
+            >
+              <span className="nb-practice-month-marker">{String(monthIndex + 1).padStart(2, "0")}</span>
+              <span className="nb-practice-month-title"><span>Kho bài theo thời gian</span><strong>{month.label}</strong></span>
+              <span className="nb-practice-month-summary">{month.problems} bài{isTeacher ? ` · ${month.attempts} lượt nộp` : ""}</span>
+              <ChevronRight size={17} className="nb-practice-month-chevron" />
+            </button>
+            {!isCollapsed && <div className="nb-practice-month-content" id={`nb-practice-month-${month.key}`}>
+              {month.groups.map((group, groupIndex) => {
+                const groupSolved = group.problems.filter((problem) => solvedByCurrent(problem.id)).length;
+                const groupAttempts = group.problems.reduce((total, problem) => total + (isTeacher ? teacherProblemStats(problem.id).attempts : problemStats(problem.id).attempts), 0);
+                return <section className="nb-practice-group" key={`${month.key}-${group.id}`}>
+                  <div className="nb-practice-group-rail"><span>{String(groupIndex + 1).padStart(2, "0")}</span><i /></div>
+                  <div className="nb-practice-group-content">
+                    <div className="nb-practice-group-head"><div><p>{group.subtitle}</p><h3>{group.title}</h3></div><div className="nb-practice-group-summary">{isTeacher ? <span>{group.problems.length} bài · {groupAttempts} lượt nộp</span> : <><span>{groupSolved}/{group.problems.length} đã xong</span><div><i style={{ width: `${group.problems.length ? Math.round(groupSolved / group.problems.length * 100) : 0}%` }} /></div></>}</div></div>
+                    <div className="nb-practice-problem-list">{group.problems.map(renderPracticeProblem)}</div>
+                    {isTeacher && <div className="nb-practice-group-actions"><button className="nb-btn nb-btn-ghost" type="button" onClick={() => beginAdd(group.id === "uncategorized" ? undefined : group.id)}><Plus size={14} /> Thêm bài vào chuyên đề</button></div>}
+                  </div>
+                </section>;
+              })}
+            </div>}
           </section>;
         })}
-        {practiceGroups.length === 0 && <div className="nb-practice-empty"><Search size={20} /><strong>Không tìm thấy bài tập phù hợp</strong><span>Hãy đổi bộ lọc, từ khóa tìm kiếm hoặc thêm bài mới.</span></div>}
+        {practiceMonthGroups.length === 0 && <div className="nb-practice-empty"><Search size={20} /><strong>Không tìm thấy bài tập phù hợp</strong><span>Hãy đổi bộ lọc, từ khóa tìm kiếm hoặc thêm bài mới.</span></div>}
       </div>
 
       {active && (
@@ -2619,6 +2683,20 @@ function App() {
         .nb-practice-roadmap { position: relative; padding: 19px 20px 20px; border: 1px solid var(--paper-line); border-radius: 12px; background: #fff; }
         .nb-practice-roadmap-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 15px; border-bottom: 1px solid var(--paper-line); }
         .nb-practice-roadmap-head h3 { margin: 3px 0 0; font-size: 18px; }
+        .nb-practice-month-group { margin-top: 14px; overflow: hidden; border: 1px solid var(--paper-line); border-radius: 10px; background: linear-gradient(135deg, #fff 0%, #F7FCFD 100%); }
+        .nb-practice-month-group:first-of-type { margin-top: 16px; }
+        .nb-practice-month-head { width: 100%; display: flex; align-items: center; gap: 11px; padding: 13px 15px; border: 0; border-bottom: 1px solid var(--paper-line); background: transparent; color: var(--ink); text-align: left; cursor: pointer; font-family: inherit; transition: background .15s ease, border-color .15s ease; }
+        .nb-practice-month-head:hover { background: rgba(4,166,199,0.06); }
+        .nb-practice-month-head:focus-visible { outline: 2px solid var(--pen-blue); outline-offset: -2px; }
+        .nb-practice-month-marker { display: grid; place-items: center; width: 29px; height: 29px; flex: 0 0 auto; border-radius: 8px; color: #fff; background: var(--pen-blue); box-shadow: 0 4px 10px rgba(4,166,199,0.18); font: 700 10px 'JetBrains Mono', monospace; }
+        .nb-practice-month-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+        .nb-practice-month-title > span { color: var(--slate); font: 10px 'JetBrains Mono', monospace; letter-spacing: .04em; text-transform: uppercase; }
+        .nb-practice-month-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: 15px; }
+        .nb-practice-month-summary { flex: 0 0 auto; color: var(--slate); font-size: 11px; }
+        .nb-practice-month-chevron { flex: 0 0 auto; color: var(--pen-blue); transition: transform .18s ease; }
+        .nb-practice-month-head[aria-expanded="true"] .nb-practice-month-chevron { transform: rotate(90deg); }
+        .nb-practice-month-content { padding: 0 14px 14px; }
+        .nb-practice-month-content .nb-practice-group { padding-top: 14px; }
         .nb-practice-group { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 10px; padding-top: 18px; }
         .nb-practice-group-rail { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 5px; }
         .nb-practice-group-rail span { z-index: 1; display: grid; place-items: center; width: 27px; height: 27px; border-radius: 50%; color: #fff; background: var(--pen-blue); box-shadow: 0 0 0 4px #EDF2FA; font: 700 10px 'JetBrains Mono', monospace; }
@@ -2996,6 +3074,9 @@ function App() {
           .nb-practice-teacher-stats { justify-content: space-between; }
           .nb-practice-teacher-board .nb-btn { justify-content: center; }
           .nb-practice-roadmap { padding: 15px 12px; }
+          .nb-practice-month-head { gap: 8px; padding: 11px 10px; }
+          .nb-practice-month-content { padding-left: 8px; padding-right: 8px; }
+          .nb-practice-month-summary { font-size: 10px; }
           .nb-practice-group { grid-template-columns: 27px minmax(0, 1fr); gap: 7px; }
           .nb-practice-group-head { align-items: flex-start; flex-direction: column; gap: 5px; }
           .nb-practice-group-summary { text-align: left; }
