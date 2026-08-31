@@ -920,7 +920,6 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [result, setResult] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
-  const editorRef = useRef(null);
   const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
@@ -936,13 +935,6 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
       document.body.style.overflow = previousOverflow;
     };
   }, [problem.id, onClose, judging]);
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [problem.id]);
 
   async function handleSubmit() {
     if (readOnly || judging) return;
@@ -998,7 +990,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
             </div>}
           </div>
 
-          <div ref={editorRef} className="nb-modal-col nb-solver-editor-anchor">
+          <div className="nb-modal-col nb-solver-editor-anchor">
             <CodeEditor code={code} onChange={setCode} language={editorLanguage} onSubmit={handleSubmit} readOnly={readOnly} />
             <p className="nb-sub" style={{ marginTop: 6 }}>
               Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
@@ -1680,7 +1672,7 @@ function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict,
   const doneCount = contestProblems.filter((p) => solvedByCurrent(p.id)).length;
 
   return (
-    <div>
+    <div className="nb-contest-runner">
       <div className="nb-contest-bar">
         <button className="nb-btn nb-btn-ghost" onClick={onExit}><ChevronLeft size={16} /> Rời khỏi đề thi</button>
         <div className="nb-contest-timer">
@@ -3388,7 +3380,10 @@ function App() {
         /* Final responsive overrides: these rules intentionally come last so
            legacy mobile rules cannot cover the solver actions or scroll areas. */
         .nb-solver-modal { height: min(900px, calc(100dvh - 32px)); max-height: min(900px, calc(100dvh - 32px)); overflow: hidden; }
-        .nb-solver-modal-body { display: grid; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+        .nb-solver-modal-body { display: grid; flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+        .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; z-index: 5; align-self: stretch; }
+        .nb-contest-runner { min-width: 0; width: 100%; }
+        .nb-contest-runner .nb-problem-grid { width: 100%; }
         .nb-editor-code-layer { overflow: hidden; }
         .nb-code-input { overflow: auto; pointer-events: auto; }
         @media (max-width: 860px) {
@@ -3398,11 +3393,12 @@ function App() {
         @media (max-width: 600px) {
           .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(68px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
           .nb-solver-modal { height: calc(100dvh - 68px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 68px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
-          .nb-solver-modal-body { display: flex; flex-direction: column; gap: 18px; padding: 14px 16px max(16px, env(safe-area-inset-bottom)); overflow-y: scroll; }
+          .nb-solver-modal-body { display: flex; flex-direction: column; gap: 18px; padding: 14px 16px max(24px, env(safe-area-inset-bottom)); overflow-y: auto; }
           .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
           .nb-contest-bar { align-items: stretch; gap: 8px; padding: 10px; }
           .nb-contest-bar > .nb-btn { width: 100%; justify-content: center; }
           .nb-contest-timer, .nb-contest-bar > .nb-sub { min-height: 34px; justify-content: center; }
+          .nb-contest-runner { padding-bottom: 8px; }
         }
       `}</style>
 
