@@ -925,6 +925,19 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
   useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const handleEscape = (event) => {
+      if (event.key === "Escape" && !judging) onClose();
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("keydown", handleEscape);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [problem.id, onClose, judging]);
+
+  useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       editorRef.current?.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
     });
@@ -953,12 +966,12 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   }
 
   return (
-    <div className="nb-modal-overlay" onClick={onClose}>
-      <div className="nb-modal nb-solver-modal" onClick={(e) => e.stopPropagation()}>
+    <div className="nb-modal-overlay" onClick={onClose} role="presentation">
+      <div className="nb-modal nb-solver-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="problem-solver-title">
         <div className="nb-modal-head">
           <div>
             <div className="nb-eyebrow">{problem.id} · {editorMeta.label} · {problem.points} điểm</div>
-            <h3 className="nb-h3">{problem.title}</h3>
+            <h3 id="problem-solver-title" className="nb-h3">{problem.title}</h3>
           </div>
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
         </div>
@@ -2898,6 +2911,23 @@ function App() {
         }
         .nb-modal-actions .nb-btn { min-height: 42px; }
         .nb-modal-actions .nb-btn-primary { box-shadow: 0 5px 14px rgba(4,166,199,0.24); }
+        /* Responsive solver surface: header stays visible while content scrolls. */
+        .nb-solver-modal { width: min(1180px, 100%); max-width: 1180px; height: min(900px, calc(100dvh - 32px)); max-height: min(900px, calc(100dvh - 32px)); overflow: hidden; }
+        .nb-solver-modal .nb-modal-head { flex: 0 0 auto; min-width: 0; }
+        .nb-solver-modal .nb-modal-head > div { min-width: 0; }
+        .nb-solver-modal .nb-modal-head .nb-h3 { overflow-wrap: anywhere; }
+        .nb-solver-modal-body { flex: 1 1 auto; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; align-items: start; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
+        .nb-solver-modal-body > .nb-modal-col { min-width: 0; width: 100%; }
+        .nb-problem-statement { overflow-wrap: anywhere; }
+        .nb-problem-statement-image { width: auto; height: auto; max-width: 100%; }
+        .nb-editor-toolbar, .nb-editor-status { min-width: 0; flex-wrap: wrap; }
+        .nb-editor-toolbar span, .nb-editor-status span { min-width: 0; overflow-wrap: anywhere; }
+        .nb-editor-workspace { min-width: 0; height: clamp(260px, 42dvh, 520px); max-height: none; }
+        .nb-editor-code-layer { overflow: hidden; }
+        .nb-code-input { width: 100%; min-width: 100%; overflow: auto; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
+        .nb-code-highlight { min-width: max-content; }
+        .nb-modal-actions { margin-top: 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+        .nb-modal-actions .nb-btn { touch-action: manipulation; }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
         .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
         .nb-history-panel { margin-top: 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; overflow: hidden; }
@@ -3179,6 +3209,25 @@ function App() {
           .nb-modal-actions .nb-btn-primary { flex: 1; justify-content: center; }
         }
 
+        @media (max-width: 860px) {
+          .nb-solver-modal { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
+          .nb-solver-modal-body { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+          .nb-solver-modal .nb-editor-workspace { height: clamp(260px, 46dvh, 500px); }
+          .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; }
+        }
+        @media (max-width: 600px) {
+          /* The fixed bottom navigation is ~70px tall; keep the sheet above it. */
+          .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(68px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
+          .nb-solver-modal { height: calc(100dvh - 68px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 68px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
+          .nb-solver-modal .nb-modal-head { padding: 14px 16px 12px; }
+          .nb-solver-modal .nb-modal-body { padding: 14px 16px max(16px, env(safe-area-inset-bottom)); gap: 18px; }
+          .nb-solver-modal .nb-editor-workspace { height: clamp(230px, 43dvh, 420px); }
+          .nb-solver-modal .nb-editor-toolbar, .nb-solver-modal .nb-editor-status { align-items: flex-start; gap: 5px 8px; }
+          .nb-solver-modal .nb-editor-toolbar span:last-child, .nb-solver-modal .nb-editor-status span:last-child { margin-left: auto; }
+          .nb-solver-modal .nb-modal-actions { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
+          .nb-solver-modal .nb-modal-actions .nb-btn { width: 100%; justify-content: center; }
+        }
+        .nb-code-input:focus-visible { outline: 2px solid #7DB7E8; outline-offset: -2px; }
         /* ------------------------------------------------------------------
            Motion & UX polish: subtle, purposeful, accessible interactions
         ------------------------------------------------------------------ */
@@ -3335,6 +3384,25 @@ function App() {
             scroll-behavior: auto !important;
             transition-duration: 0.01ms !important;
           }
+        }
+        /* Final responsive overrides: these rules intentionally come last so
+           legacy mobile rules cannot cover the solver actions or scroll areas. */
+        .nb-solver-modal { height: min(900px, calc(100dvh - 32px)); max-height: min(900px, calc(100dvh - 32px)); overflow: hidden; }
+        .nb-solver-modal-body { display: grid; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+        .nb-editor-code-layer { overflow: hidden; }
+        .nb-code-input { overflow: auto; pointer-events: auto; }
+        @media (max-width: 860px) {
+          .nb-solver-modal { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
+          .nb-solver-modal-body { grid-template-columns: minmax(0, 1fr); }
+        }
+        @media (max-width: 600px) {
+          .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(68px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
+          .nb-solver-modal { height: calc(100dvh - 68px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 68px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
+          .nb-solver-modal-body { display: flex; flex-direction: column; gap: 18px; padding: 14px 16px max(16px, env(safe-area-inset-bottom)); overflow-y: scroll; }
+          .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
+          .nb-contest-bar { align-items: stretch; gap: 8px; padding: 10px; }
+          .nb-contest-bar > .nb-btn { width: 100%; justify-content: center; }
+          .nb-contest-timer, .nb-contest-bar > .nb-sub { min-height: 34px; justify-content: center; }
         }
       `}</style>
 
