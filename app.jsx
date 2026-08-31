@@ -920,21 +920,16 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [result, setResult] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
+  const modalBodyRef = useRef(null);
   const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
   useEffect(() => {
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const handleEscape = (event) => {
-      if (event.key === "Escape" && !judging) onClose();
-    };
-    document.addEventListener("keydown", handleEscape);
-    return () => {
-      document.removeEventListener("keydown", handleEscape);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [problem.id, onClose, judging]);
+    const frame = window.requestAnimationFrame(() => {
+      if (modalBodyRef.current) modalBodyRef.current.scrollTop = 0;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [problem.id]);
 
   async function handleSubmit() {
     if (readOnly || judging) return;
@@ -958,17 +953,17 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   }
 
   return (
-    <div className="nb-modal-overlay" onClick={onClose} role="presentation">
-      <div className="nb-modal nb-solver-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="problem-solver-title">
+    <div className="nb-modal-overlay" onClick={onClose}>
+      <div className="nb-modal nb-solver-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
           <div>
             <div className="nb-eyebrow">{problem.id} · {editorMeta.label} · {problem.points} điểm</div>
-            <h3 id="problem-solver-title" className="nb-h3">{problem.title}</h3>
+            <h3 className="nb-h3">{problem.title}</h3>
           </div>
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
         </div>
 
-        <div className="nb-modal-body nb-solver-modal-body">
+        <div ref={modalBodyRef} className="nb-modal-body nb-solver-modal-body">
           <div className="nb-modal-col">
             <DifficultyTag level={problem.difficulty} />
             {alreadySolved && <span className="nb-pill nb-pill-ac" style={{ marginLeft: 8 }}>Đã hoàn thành</span>}
@@ -990,7 +985,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
             </div>}
           </div>
 
-          <div className="nb-modal-col nb-solver-editor-anchor">
+          <div className="nb-modal-col">
             <CodeEditor code={code} onChange={setCode} language={editorLanguage} onSubmit={handleSubmit} readOnly={readOnly} />
             <p className="nb-sub" style={{ marginTop: 6 }}>
               Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
@@ -1672,7 +1667,7 @@ function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict,
   const doneCount = contestProblems.filter((p) => solvedByCurrent(p.id)).length;
 
   return (
-    <div className="nb-contest-runner">
+    <div>
       <div className="nb-contest-bar">
         <button className="nb-btn nb-btn-ghost" onClick={onExit}><ChevronLeft size={16} /> Rời khỏi đề thi</button>
         <div className="nb-contest-timer">
@@ -2831,36 +2826,32 @@ function App() {
         .nb-checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--slate); }
         .nb-checklist { max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; background: #F8FBFF; }
 
-        .nb-modal-overlay {
-          position: fixed;
-          inset: 0;
-          background: rgba(11,23,54,0.55);
+        .nb-modal-overlay { position: fixed; inset: 0; background: rgba(11,23,54,0.55); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; overflow: hidden; }
+        .nb-modal { background: var(--paper); border-radius: 12px; max-width: 820px; width: 100%; max-height: 88vh; overflow-y: auto; }
+        .nb-solver-modal {
           display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 50;
-          padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-          overflow: auto;
-          touch-action: pan-y;
-          overscroll-behavior: contain;
-        }
-        .nb-modal {
-          background: var(--paper);
-          border-radius: 12px;
-          max-width: 820px;
-          width: 100%;
+          flex-direction: column;
+          height: min(760px, calc(100dvh - 32px));
           max-height: calc(100dvh - 32px);
-          overflow-y: auto;
-          overflow-x: hidden;
-          overscroll-behavior: contain;
-          -webkit-overflow-scrolling: touch;
-          scrollbar-gutter: stable;
+          overflow: hidden;
         }
+        .nb-solver-modal .nb-modal-head { flex: 0 0 auto; }
+        .nb-solver-modal-body {
+          flex: 1 1 auto;
+          min-height: 0;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          align-items: start;
+        }
+        .nb-solver-modal-body > .nb-modal-col:last-child {
+          position: sticky;
+          top: 0;
+          align-self: start;
+          min-width: 0;
+        }
+
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
-        .nb-modal-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 20px 22px; }
-        .nb-solver-modal { display: flex; flex-direction: column; min-height: 0; }
-        .nb-solver-modal-body { min-width: 0; }
-        .nb-solver-editor-anchor { scroll-margin: 18px; }
+        .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
         .nb-modal-col { min-width: 0; }
 
         .nb-modal-col { display: flex; flex-direction: column; }
@@ -2892,34 +2883,7 @@ function App() {
         .nb-syntax-number { color: #C99BE8; }
         .nb-syntax-keyword { color: #7DB7E8; font-weight: 600; }
         .nb-syntax-function { color: #82D4C1; }
-        .nb-modal-actions {
-          position: sticky;
-          bottom: 0;
-          z-index: 3;
-          margin-top: 10px;
-          display: flex;
-          padding: 10px 0 max(2px, env(safe-area-inset-bottom));
-          background: linear-gradient(180deg, rgba(244,248,253,0), var(--paper) 28%);
-        }
-        .nb-modal-actions .nb-btn { min-height: 42px; }
-        .nb-modal-actions .nb-btn-primary { box-shadow: 0 5px 14px rgba(4,166,199,0.24); }
-        /* Responsive solver surface: header stays visible while content scrolls. */
-        .nb-solver-modal { width: min(1180px, 100%); max-width: 1180px; height: min(900px, calc(100dvh - 32px)); max-height: min(900px, calc(100dvh - 32px)); overflow: hidden; }
-        .nb-solver-modal .nb-modal-head { flex: 0 0 auto; min-width: 0; }
-        .nb-solver-modal .nb-modal-head > div { min-width: 0; }
-        .nb-solver-modal .nb-modal-head .nb-h3 { overflow-wrap: anywhere; }
-        .nb-solver-modal-body { flex: 1 1 auto; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; align-items: start; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
-        .nb-solver-modal-body > .nb-modal-col { min-width: 0; width: 100%; }
-        .nb-problem-statement { overflow-wrap: anywhere; }
-        .nb-problem-statement-image { width: auto; height: auto; max-width: 100%; }
-        .nb-editor-toolbar, .nb-editor-status { min-width: 0; flex-wrap: wrap; }
-        .nb-editor-toolbar span, .nb-editor-status span { min-width: 0; overflow-wrap: anywhere; }
-        .nb-editor-workspace { min-width: 0; height: clamp(260px, 42dvh, 520px); max-height: none; }
-        .nb-editor-code-layer { overflow: hidden; }
-        .nb-code-input { width: 100%; min-width: 100%; overflow: auto; scrollbar-gutter: stable; -webkit-overflow-scrolling: touch; }
-        .nb-code-highlight { min-width: max-content; }
-        .nb-modal-actions { margin-top: 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
-        .nb-modal-actions .nb-btn { touch-action: manipulation; }
+        .nb-modal-actions { margin-top: 10px; display: flex; }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
         .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
         .nb-history-panel { margin-top: 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; overflow: hidden; }
@@ -3065,12 +3029,6 @@ function App() {
         .nb-bottom-nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; background: transparent; border: none; color: #9FB2CC; font-size: 10px; font-family: inherit; padding: 6px 2px; border-radius: 8px; white-space: nowrap; }
         .nb-bottom-nav-item.active { color: #fff; background: var(--pen-blue); }
 
-        @media (max-width: 980px) and (max-height: 760px) {
-          .nb-solver-modal-body { grid-template-columns: minmax(0, 1fr); gap: 16px; }
-          .nb-solver-modal .nb-modal-col { width: 100%; }
-          .nb-solver-modal .nb-editor-workspace { min-height: 260px; max-height: 44dvh; }
-        }
-
         @media (max-width: 860px) {
           .nb-only-desktop { display: none !important; }
           .nb-only-mobile { display: flex !important; }
@@ -3140,17 +3098,7 @@ function App() {
           .nb-ranking-search { flex-basis: 100%; }
           .nb-ranking-controls { width: 100%; justify-content: space-between; }
           .nb-ranking-controls .nb-input { flex: 1; }
-          .nb-modal {
-            max-height: calc(100dvh - 8px);
-            width: 100%;
-            border-radius: 16px 16px 0 0;
-            overscroll-behavior: contain;
-          }
-          .nb-solver-modal .nb-modal-head { padding: 14px 16px; }
-          .nb-solver-modal .nb-modal-body { padding: 16px; gap: 16px; }
-          .nb-solver-modal .nb-sample-grid { grid-template-columns: 1fr; }
-          .nb-solver-modal .nb-editor-workspace { min-height: 230px; max-height: 42dvh; }
-          .nb-solver-modal .nb-code-block pre { max-height: 180px; }
+          .nb-modal { max-height: 94vh; }
           .nb-exam-stat-grid { gap: 8px; }
           .nb-exam-stat { padding: 11px; }
           .nb-exam-stat strong { font-size: 16px; }
@@ -3197,29 +3145,8 @@ function App() {
           .nb-editor-workspace { min-height: 250px; }
           .nb-editor-toolbar, .nb-editor-status { font-size: 9px; }
           .nb-code-highlight, .nb-code-input { font-size: 12px; padding-left: 12px; padding-right: 12px; }
-          .nb-modal-actions { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
-          .nb-modal-actions .nb-btn-primary { flex: 1; justify-content: center; }
         }
 
-        @media (max-width: 860px) {
-          .nb-solver-modal { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
-          .nb-solver-modal-body { grid-template-columns: minmax(0, 1fr); gap: 18px; }
-          .nb-solver-modal .nb-editor-workspace { height: clamp(260px, 46dvh, 500px); }
-          .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; }
-        }
-        @media (max-width: 600px) {
-          /* The fixed bottom navigation is ~70px tall; keep the sheet above it. */
-          .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(68px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
-          .nb-solver-modal { height: calc(100dvh - 68px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 68px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
-          .nb-solver-modal .nb-modal-head { padding: 14px 16px 12px; }
-          .nb-solver-modal .nb-modal-body { padding: 14px 16px max(16px, env(safe-area-inset-bottom)); gap: 18px; }
-          .nb-solver-modal .nb-editor-workspace { height: clamp(230px, 43dvh, 420px); }
-          .nb-solver-modal .nb-editor-toolbar, .nb-solver-modal .nb-editor-status { align-items: flex-start; gap: 5px 8px; }
-          .nb-solver-modal .nb-editor-toolbar span:last-child, .nb-solver-modal .nb-editor-status span:last-child { margin-left: auto; }
-          .nb-solver-modal .nb-modal-actions { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
-          .nb-solver-modal .nb-modal-actions .nb-btn { width: 100%; justify-content: center; }
-        }
-        .nb-code-input:focus-visible { outline: 2px solid #7DB7E8; outline-offset: -2px; }
         /* ------------------------------------------------------------------
            Motion & UX polish: subtle, purposeful, accessible interactions
         ------------------------------------------------------------------ */
@@ -3354,10 +3281,18 @@ function App() {
           .nb-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
           .nb-table { min-width: 620px; }
           .nb-modal-body { display: flex; flex-direction: column; gap: 16px; }
-          .nb-modal-overlay {
-            align-items: flex-end;
-            padding: max(0px, env(safe-area-inset-top)) max(0px, env(safe-area-inset-right)) max(0px, env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left));
+          .nb-solver-modal-body > .nb-modal-col:last-child {
+            position: static;
+            order: -1;
+            width: 100%;
           }
+          .nb-solver-modal-body { overflow-y: auto; }
+          .nb-solver-modal {
+            height: calc(100dvh - 10px);
+            max-height: calc(100dvh - 10px);
+            border-radius: 18px 18px 0 0;
+          }
+          .nb-modal-overlay { align-items: flex-end; padding: 0; }
           .nb-modal {
             max-height: 92vh;
             border-radius: 18px 18px 0 0;
@@ -3376,29 +3311,6 @@ function App() {
             scroll-behavior: auto !important;
             transition-duration: 0.01ms !important;
           }
-        }
-        /* Final responsive overrides: these rules intentionally come last so
-           legacy mobile rules cannot cover the solver actions or scroll areas. */
-        .nb-solver-modal { height: min(900px, calc(100dvh - 32px)); max-height: min(900px, calc(100dvh - 32px)); overflow: hidden; }
-        .nb-solver-modal-body { display: grid; flex: 1 1 0; min-height: 0; overflow-y: auto; overflow-x: hidden; }
-        .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; z-index: 5; align-self: stretch; }
-        .nb-contest-runner { min-width: 0; width: 100%; }
-        .nb-contest-runner .nb-problem-grid { width: 100%; }
-        .nb-editor-code-layer { overflow: hidden; }
-        .nb-code-input { overflow: auto; pointer-events: auto; }
-        @media (max-width: 860px) {
-          .nb-solver-modal { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
-          .nb-solver-modal-body { grid-template-columns: minmax(0, 1fr); }
-        }
-        @media (max-width: 600px) {
-          .nb-modal-overlay { align-items: flex-end; padding: 0 max(0px, env(safe-area-inset-right)) calc(68px + env(safe-area-inset-bottom)) max(0px, env(safe-area-inset-left)); }
-          .nb-solver-modal { height: calc(100dvh - 68px - env(safe-area-inset-bottom)); max-height: calc(100dvh - 68px - env(safe-area-inset-bottom)); border-radius: 18px 18px 0 0; }
-          .nb-solver-modal-body { display: flex; flex-direction: column; gap: 18px; padding: 14px 16px max(24px, env(safe-area-inset-bottom)); overflow-y: auto; }
-          .nb-solver-modal .nb-modal-actions { position: sticky; bottom: 0; margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
-          .nb-contest-bar { align-items: stretch; gap: 8px; padding: 10px; }
-          .nb-contest-bar > .nb-btn { width: 100%; justify-content: center; }
-          .nb-contest-timer, .nb-contest-bar > .nb-sub { min-height: 34px; justify-content: center; }
-          .nb-contest-runner { padding-bottom: 8px; }
         }
       `}</style>
 
