@@ -1019,7 +1019,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 /*  VIEWS                                                                   */
 /* ---------------------------------------------------------------------- */
 
-function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, onNavigate }) {
+function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, problems, onNavigate }) {
   const isTeacher = currentUser.role === "teacher" || currentUser.role === "admin";
   const firstName = currentUser.name.split(" ").slice(-1)[0];
 
@@ -1044,17 +1044,103 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     );
   }
 
+  const safeProblems = problems || [];
+  const now = Date.now();
+  const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
+  const fourteenDaysAgo = now - (14 * 24 * 60 * 60 * 1000);
   const avgPoints = students.length ? Math.round(students.reduce((sum, student) => sum + points(student.id), 0) / students.length) : 0;
   const topThree = [...students].sort((a, b) => (points(b.id) - points(a.id)) || (solvedCount(b.id) - solvedCount(a.id))).slice(0, 3);
-  const behind = [...students].sort((a, b) => solvedCount(a.id) - solvedCount(b.id)).slice(0, 4);
-  const openThreads = discussions.filter((discussion) => discussion.replies.length === 0);
+  const openThreads = discussions.filter((discussion) => (discussion.replies || []).length === 0);
   const activeContest = contests.find((contest) => contest.status === "active");
-  const activeStudents = students.filter((student) => solvedCount(student.id) > 0).length;
+  const weeklySubmissions = submissions.filter((submission) => {
+    const timestamp = new Date(submission.createdAt || 0).getTime();
+    return timestamp >= sevenDaysAgo;
+  });
+  const weeklyActiveStudents = new Set(weeklySubmissions.map((submission) => submission.studentId)).size;
   const totalSolved = students.reduce((sum, student) => sum + solvedCount(student.id), 0);
-  const recentClassActivity = submissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 4);
+  const activityByStudent = new Map();
+  const activityByProblem = new Map();
+  submissions.forEach((submission) => {
+    if (!activityByStudent.has(submission.studentId)) activityByStudent.set(submission.studentId, []);
+    activityByStudent.get(submission.studentId).push(submission);
+    if (!activityByProblem.has(submission.problemId)) activityByProblem.set(submission.problemId, []);
+    activityByProblem.get(submission.problemId).push(submission);
+  });
+  const problemInsights = safeProblems.map((problem) => {
+    const attempts = activityByProblem.get(problem.id) || [];
+    const accepted = attempts.filter((submission) => submission.verdict === "AC").length;
+    return {
+      problem,
+      attempts: attempts.length,
+      accepted,
+      successRate: attempts.length ? Math.round((accepted / attempts.length) * 100) : 0,
+    };
+  }).filter((item) => item.attempts > 0)
+    .sort((a, b) => (a.successRate - b.successRate) || (b.attempts - a.attempts))
+    .slice(0, 5);
+  const studentSignals = students.map((student) => {
+    const studentSubmissions = activityByStudent.get(student.id) || [];
+    const recentSubmissions = studentSubmissions.filter((submission) => new Date(submission.createdAt || 0).getTime() >= fourteenDaysAgo);
+    const lastSubmission = studentSubmissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
+    const label = recentSubmissions.length === 0 ? "14 ngày chưa hoạt động" : `${solvedCount(student.id)} bài đã giải`;
+    return { student, attempts: studentSubmissions.length, recentAttempts: recentSubmissions.length, lastSubmission, label };
+  }).sort((a, b) => (a.recentAttempts - b.recentAttempts) || (solvedCount(a.student.id) - solvedCount(b.student.id)) || (a.attempts - b.attempts))
+    .slice(0, 5);
+  const recentClassActivity = submissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 5);
 
   return (
-    <div className="nb-home-page"><div className="nb-home-hero teacher"><div><div className="nb-eyebrow">Bảng điều khiển giáo viên · Đội tuyển Tin học</div><h1>Tổng quan đội tuyển</h1><p>Theo dõi nhịp học, kết quả và những điểm cần hỗ trợ của lớp.</p></div><div className="nb-home-hero-rank"><Users size={21} /><span><strong>{students.length}</strong><small>học sinh trong lớp</small></span></div></div><div className="nb-home-stat-grid"><div className="nb-home-stat"><span className="blue"><Users size={17} /></span><div><strong>{students.length}</strong><small>Học sinh</small></div></div><div className="nb-home-stat"><span className="green"><TrendingUp size={17} /></span><div><strong>{avgPoints}</strong><small>Điểm trung bình</small></div></div><div className="nb-home-stat"><span className="gold"><Code2 size={17} /></span><div><strong>{problemsCount}</strong><small>Bài trong ngân hàng</small></div></div><div className="nb-home-stat"><span className="red"><MessageSquare size={17} /></span><div><strong>{openThreads.length}</strong><small>Câu hỏi cần trả lời</small></div></div></div><div className="nb-home-main-grid"><section className="nb-home-class-card"><div className="nb-home-card-head"><div><div className="nb-eyebrow">Sức khỏe lớp học</div><h2>Nhịp luyện tập</h2></div><span className="nb-home-percent">{students.length ? Math.round((activeStudents / students.length) * 100) : 0}%</span></div><p className="nb-sub">{activeStudents}/{students.length} học sinh đã bắt đầu giải bài.</p><div className="nb-home-progress"><span style={{ width: `${students.length ? (activeStudents / students.length) * 100 : 0}%` }} /></div><div className="nb-home-progress-foot"><span>{totalSolved} lượt bài đã được giải</span><strong>{activeStudents} học sinh đang hoạt động</strong></div><div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("leaderboard")}><Trophy size={15} /> Xem bảng xếp hạng</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Quản lý bài tập</button></div></section><section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}><div className="nb-home-card-head"><div><div className="nb-eyebrow">Trạng thái kỳ thi</div><h2>{activeContest ? "Đang có đề mở" : "Chưa có đề đang mở"}</h2></div><Clock size={19} /></div>{activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemIds.length} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Eye size={15} /> Quản lý kỳ thi</button></> : <><p className="nb-sub">Tạo hoặc mở một kỳ thi để học sinh bắt đầu thử sức.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Plus size={15} /> Mở khu vực đề thi</button></>}</section></div><div className="nb-home-lower-grid"><section className="nb-panel nb-home-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Thành tích lớp</div><h2>Học sinh nổi bật</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("leaderboard")}>Xem bảng đầy đủ <ChevronRight size={14} /></button></div>{topThree.length === 0 ? <div className="nb-home-empty"><Users size={22} /><strong>Chưa có dữ liệu</strong><span>Thành tích sẽ xuất hiện khi học sinh bắt đầu nộp bài.</span></div> : <div className="nb-home-student-list">{topThree.map((student, index) => <div className="nb-home-student-row" key={student.id}><span className={`nb-home-rank rank-${index + 1}`}>{index + 1}</span><Avatar name={student.name} size={32} /><div><strong>{student.name}</strong><small>{solvedCount(student.id)} bài đã giải</small></div><b>{points(student.id)}<small>đ</small></b></div>)}</div>}</section><section className="nb-panel nb-home-attention"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo dõi hỗ trợ</div><h2>Cần quan tâm thêm</h2></div><AlertCircle size={18} style={{ color: "var(--gold)" }} /></div>{behind.length === 0 ? <p className="nb-sub">Chưa có dữ liệu để phân tích.</p> : <div className="nb-home-support-list">{behind.map((student) => <div key={student.id}><Avatar name={student.name} size={28} /><span><strong>{student.name}</strong><small>{solvedCount(student.id)} bài đã giải</small></span><button onClick={() => onNavigate?.("problems")} aria-label={`Xem bài tập của ${student.name}`}><ChevronRight size={15} /></button></div>)}</div>}</section></div><section className="nb-panel nb-home-class-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo thời gian thực</div><h2>Hoạt động gần đây của lớp</h2></div><span className="nb-pill nb-pill-ac">{recentClassActivity.length} cập nhật</span></div>{recentClassActivity.length === 0 ? <p className="nb-sub">Chưa có lượt nộp bài gần đây.</p> : <div className="nb-home-class-feed">{recentClassActivity.map((submission, index) => <div key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><span><strong>{submission.studentId}</strong> đã nộp <b>{submission.problemTitle || submission.problemId}</b><small>{submission.verdict} · {submission.score ?? 0} điểm</small></span></div>)}</div>}</section></div>
+    <div className="nb-home-page">
+      <div className="nb-home-hero teacher">
+        <div>
+          <div className="nb-eyebrow">Bảng điều khiển giáo viên · Đội tuyển Tin học</div>
+          <h1>Tổng quan đội tuyển</h1>
+          <p>Theo dõi nhịp học, phát hiện điểm nghẽn và xử lý việc cần làm trong một màn hình.</p>
+        </div>
+        <div className="nb-home-hero-tools">
+          <button className="nb-home-hero-action" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Quản lý bài</button>
+          <button className="nb-home-hero-action" onClick={() => onNavigate?.("contests")}><Clock size={15} /> Tạo đề thi</button>
+        </div>
+      </div>
+
+      <div className="nb-home-stat-grid">
+        <div className="nb-home-stat"><span className="blue"><Users size={17} /></span><div><strong>{students.length}</strong><small>Học sinh</small><em>{weeklyActiveStudents} hoạt động 7 ngày</em></div></div>
+        <div className="nb-home-stat"><span className="green"><TrendingUp size={17} /></span><div><strong>{weeklySubmissions.length}</strong><small>Lượt nộp tuần này</small><em>{weeklyActiveStudents} học sinh tham gia</em></div></div>
+        <div className="nb-home-stat"><span className="gold"><Award size={17} /></span><div><strong>{avgPoints}</strong><small>Điểm trung bình</small><em>{totalSolved} lượt giải đúng</em></div></div>
+        <div className="nb-home-stat"><span className="red"><MessageSquare size={17} /></span><div><strong>{openThreads.length}</strong><small>Câu hỏi chờ trả lời</small><em>{problemInsights.length} bài cần xem</em></div></div>
+      </div>
+
+      <div className="nb-home-main-grid">
+        <section className="nb-home-class-card">
+          <div className="nb-home-card-head"><div><div className="nb-eyebrow">Theo dõi 7 ngày</div><h2>Nhịp luyện tập của lớp</h2></div><span className="nb-home-percent">{students.length ? Math.round((weeklyActiveStudents / students.length) * 100) : 0}%</span></div>
+          <p className="nb-sub">{weeklyActiveStudents}/{students.length} học sinh đã có hoạt động trong 7 ngày qua.</p>
+          <div className="nb-home-progress"><span style={{ width: `${students.length ? (weeklyActiveStudents / students.length) * 100 : 0}%` }} /></div>
+          <div className="nb-home-progress-foot"><span>{weeklySubmissions.length} lượt nộp trong tuần</span><strong>{students.length - weeklyActiveStudents} học sinh chưa hoạt động</strong></div>
+          <div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Xem bài tập</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("leaderboard")}><Trophy size={15} /> Xem bảng xếp hạng</button></div>
+        </section>
+        <section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}>
+          <div className="nb-home-card-head"><div><div className="nb-eyebrow">Trạng thái kỳ thi</div><h2>{activeContest ? "Đang có đề mở" : "Chưa có đề đang mở"}</h2></div><Clock size={19} /></div>
+          {activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemIds.length} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Eye size={15} /> Quản lý kỳ thi</button></> : <><p className="nb-sub">Tạo hoặc mở một kỳ thi để học sinh bắt đầu thử sức.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Plus size={15} /> Mở khu vực đề thi</button></>}
+        </section>
+      </div>
+
+      <div className="nb-home-insight-grid">
+        <section className="nb-panel nb-home-insight-card">
+          <div className="nb-home-section-head"><div><div className="nb-eyebrow">Phân tích bài tập</div><h2>Bài có tỷ lệ đúng thấp</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("problems")}>Mở kho bài <ChevronRight size={14} /></button></div>
+          {problemInsights.length === 0 ? <div className="nb-home-empty"><Code2 size={22} /><strong>Chưa đủ dữ liệu</strong><span>Cần có lượt nộp bài để bắt đầu phân tích.</span></div> : <div className="nb-home-insight-list">{problemInsights.map((item) => <div className="nb-home-insight-row" key={item.problem.id}><span className={`nb-home-insight-icon ${item.successRate < 50 ? "warning" : "steady"}`}>{item.successRate < 50 ? <AlertCircle size={15} /> : <TrendingUp size={15} />}</span><div><strong>{item.problem.title}</strong><small>{item.accepted}/{item.attempts} lượt AC · {item.attempts} lượt nộp</small><div className="nb-home-insight-track"><span style={{ width: `${item.successRate}%` }} /></div></div><b>{item.successRate}%</b></div>)}</div>}
+        </section>
+        <section className="nb-panel nb-home-insight-card">
+          <div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo dõi cá nhân</div><h2>Học sinh cần hỗ trợ</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("leaderboard")}>Xem lớp <ChevronRight size={14} /></button></div>
+          {studentSignals.length === 0 ? <div className="nb-home-empty"><Users size={22} /><strong>Chưa có học sinh</strong><span>Dữ liệu sẽ xuất hiện khi lớp được thêm vào.</span></div> : <div className="nb-home-signal-list">{studentSignals.map((signal) => <div className="nb-home-signal-row" key={signal.student.id}><Avatar name={signal.student.name} size={30} /><div><strong>{signal.student.name}</strong><small>{signal.label}</small></div><span className={signal.recentAttempts === 0 ? "risk" : "watch"}>{signal.recentAttempts === 0 ? "Cần nhắc" : "Theo dõi"}</span></div>)}</div>}
+        </section>
+      </div>
+
+      <div className="nb-home-lower-grid">
+        <section className="nb-panel nb-home-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Thành tích lớp</div><h2>Học sinh nổi bật</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("leaderboard")}>Xem bảng đầy đủ <ChevronRight size={14} /></button></div>{topThree.length === 0 ? <div className="nb-home-empty"><Users size={22} /><strong>Chưa có dữ liệu</strong><span>Thành tích sẽ xuất hiện khi học sinh bắt đầu nộp bài.</span></div> : <div className="nb-home-student-list">{topThree.map((student, index) => <div className="nb-home-student-row" key={student.id}><span className={`nb-home-rank rank-${index + 1}`}>{index + 1}</span><Avatar name={student.name} size={32} /><div><strong>{student.name}</strong><small>{solvedCount(student.id)} bài đã giải · {points(student.id)} điểm</small></div><b>{points(student.id)}<small>đ</small></b></div>)}</div>}</section>
+        <section className="nb-panel nb-home-questions"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Hộp việc cần làm</div><h2>Câu hỏi chờ trả lời</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("discussion")}>Mở thảo luận <ChevronRight size={14} /></button></div>{openThreads.length === 0 ? <div className="nb-home-empty"><CheckCircle2 size={22} /><strong>Đã xử lý hết</strong><span>Hiện không có câu hỏi nào đang chờ giáo viên.</span></div> : <div className="nb-home-question-list">{openThreads.slice(0, 4).map((discussion) => <button className="nb-home-question-row" key={discussion.id} onClick={() => onNavigate?.("discussion")}><span className="nb-home-question-icon"><MessageSquare size={14} /></span><span><strong>{discussion.author}</strong><small>{String(discussion.content || "").slice(0, 72)}{String(discussion.content || "").length > 72 ? "…" : ""}</small></span><ChevronRight size={15} /></button>)}</div>}</section>
+      </div>
+
+      <section className="nb-panel nb-home-class-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo thời gian thực</div><h2>Hoạt động gần đây của lớp</h2></div><span className="nb-pill nb-pill-ac">{recentClassActivity.length} cập nhật</span></div>{recentClassActivity.length === 0 ? <p className="nb-sub">Chưa có lượt nộp bài gần đây.</p> : <div className="nb-home-class-feed">{recentClassActivity.map((submission, index) => <div key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><span><strong>{submission.studentId}</strong> đã nộp <b>{submission.problemTitle || submission.problemId}</b><small>{submission.verdict} · {submission.score ?? 0} điểm · {formatSubmissionDate(submission.createdAt)}</small></span></div>)}</div>}</section>
+    </div>
   );
 }
 
@@ -2496,6 +2582,37 @@ function App() {
         .nb-home-stat div { display: flex; flex-direction: column; gap: 2px; }
         .nb-home-stat strong { color: var(--ink); font: 700 20px 'JetBrains Mono', monospace; }
         .nb-home-stat small { color: var(--slate); font-size: 11px; }
+        .nb-home-stat em { display: block; margin-top: 3px; color: var(--pen-blue); font-size: 9px; font-style: normal; }
+        .nb-home-hero-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .nb-home-hero-action { display: inline-flex; align-items: center; gap: 6px; padding: 9px 11px; border: 1px solid rgba(255,255,255,0.24); border-radius: 8px; background: rgba(255,255,255,0.1); color: #fff; cursor: pointer; font: 600 11px inherit; transition: background .15s ease, transform .15s ease; }
+        .nb-home-hero-action:hover { background: rgba(255,255,255,0.18); transform: translateY(-1px); }
+        .nb-home-insight-grid { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 14px; }
+        .nb-home-insight-card { min-width: 0; }
+        .nb-home-insight-list, .nb-home-signal-list, .nb-home-question-list { display: flex; flex-direction: column; gap: 2px; }
+        .nb-home-insight-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 9px 0; border-bottom: 1px solid var(--paper-line); }
+        .nb-home-insight-row:last-child, .nb-home-signal-row:last-child, .nb-home-question-row:last-child { border-bottom: 0; }
+        .nb-home-insight-icon { display: inline-flex; align-items: center; justify-content: center; width: 27px; height: 27px; border-radius: 8px; }
+        .nb-home-insight-icon.warning { color: var(--gold); background: rgba(185,130,47,0.14); }
+        .nb-home-insight-icon.steady { color: var(--pen-blue); background: rgba(4,166,199,0.11); }
+        .nb-home-insight-row > div { min-width: 0; }
+        .nb-home-insight-row strong, .nb-home-signal-row strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+        .nb-home-insight-row small, .nb-home-signal-row small { display: block; margin-top: 2px; color: var(--slate); font-size: 10px; }
+        .nb-home-insight-row > b { color: var(--pen-blue); font: 700 12px 'JetBrains Mono', monospace; }
+        .nb-home-insight-track { height: 4px; margin-top: 5px; overflow: hidden; border-radius: 99px; background: var(--paper-line); }
+        .nb-home-insight-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--pen-blue), #63CFDF); }
+        .nb-home-signal-row { display: flex; align-items: center; gap: 9px; padding: 9px 0; border-bottom: 1px solid var(--paper-line); }
+        .nb-home-signal-row > div { min-width: 0; flex: 1; }
+        .nb-home-signal-row > span { flex: 0 0 auto; padding: 4px 7px; border-radius: 99px; font: 600 9px 'JetBrains Mono', monospace; }
+        .nb-home-signal-row > span.risk { color: var(--red-pen); background: rgba(178,58,58,0.1); }
+        .nb-home-signal-row > span.watch { color: var(--gold); background: rgba(185,130,47,0.14); }
+        .nb-home-questions { min-width: 0; }
+        .nb-home-question-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 0; border: 0; border-bottom: 1px solid var(--paper-line); background: transparent; color: var(--ink); cursor: pointer; font-family: inherit; text-align: left; }
+        .nb-home-question-row:hover { color: var(--pen-blue); }
+        .nb-home-question-row > span:nth-child(2) { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+        .nb-home-question-row strong { font-size: 11px; }
+        .nb-home-question-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--slate); font-size: 10px; }
+        .nb-home-question-icon { display: inline-flex; align-items: center; justify-content: center; width: 27px; height: 27px; flex: 0 0 auto; border-radius: 8px; color: var(--pen-blue); background: rgba(4,166,199,0.11); }
+        .nb-home-question-row > svg { flex: 0 0 auto; color: var(--slate); }
         .nb-home-main-grid { display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 14px; }
         .nb-home-progress-card, .nb-home-class-card, .nb-home-contest-card { display: flex; flex-direction: column; gap: 12px; padding: 21px; border: 1px solid var(--paper-line); border-radius: 11px; background: #fff; }
         .nb-home-progress-card, .nb-home-class-card { background: linear-gradient(135deg, #fff 0%, #F2FBFC 100%); }
@@ -3120,6 +3237,9 @@ function App() {
           .nb-exam-room-meta { gap: 8px; }
           .nb-exam-room-meta > .nb-exam-progress { flex-basis: 100%; max-width: none; }
           .nb-home-hero { align-items: flex-start; padding: 20px; }
+          .nb-home-hero-tools { width: 100%; }
+          .nb-home-hero-action { flex: 1; justify-content: center; }
+          .nb-home-insight-grid { grid-template-columns: 1fr; }
           .nb-home-hero h1 { font-size: 24px; }
           .nb-home-hero-rank { display: none; }
           .nb-home-stat { padding: 11px; }
@@ -3226,7 +3346,7 @@ function App() {
                 <OverviewView
                   currentUser={currentUser} students={students} submissions={submissions}
                   points={points} solvedCount={solvedCount} contests={contests} discussions={discussions}
-                  problemsCount={problems.length} onNavigate={setTab}
+                  problems={problems} problemsCount={problems.length} onNavigate={setTab}
                 />
               )}
               {tab === "lessons" && (
