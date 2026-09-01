@@ -3722,6 +3722,99 @@ function App() {
           .nb-contest-stats-summary span { font-size: 9px; }
           .nb-contest-stats-table { min-width: 500px; }
         }
+        /* -------------------------------------------------------------- */
+        /*  LEADERBOARD REDESIGN                                         */
+        /* -------------------------------------------------------------- */
+        .nb-ranking-page { gap: 21px; }
+        .nb-ranking-hero {
+          position: relative; overflow: hidden; min-height: 178px; padding: 32px 34px;
+          border-radius: 22px; background: linear-gradient(120deg, #182d55 0%, #245ac6 58%, #22a8ba 100%);
+          box-shadow: 0 18px 42px rgba(25,54,104,.16);
+        }
+        .nb-ranking-hero::after {
+          content: ""; position: absolute; width: 290px; height: 290px; right: 7%; top: -155px;
+          border: 1px solid rgba(255,255,255,.18); border-radius: 50%;
+          box-shadow: 0 0 0 30px rgba(255,255,255,.04), 0 0 0 62px rgba(255,255,255,.035); pointer-events: none;
+        }
+        .nb-ranking-hero > div { position: relative; z-index: 1; }
+        .nb-ranking-title { font-size: 33px; letter-spacing: -.035em; }
+        .nb-ranking-sub { font-size: 13.5px; }
+        .nb-ranking-hero-badge { border-radius: 12px; padding: 13px 16px; background: rgba(255,255,255,.12); backdrop-filter: blur(5px); }
+        .nb-ranking-stat-grid { gap: 14px; }
+        .nb-ranking-stat {
+          min-height: 90px; padding: 18px; border-color: #e5eaf2; border-radius: 15px;
+          box-shadow: 0 5px 15px rgba(31,52,86,.04); transition: transform .18s ease, box-shadow .18s ease;
+        }
+        .nb-ranking-stat:hover { transform: translateY(-2px); box-shadow: 0 11px 24px rgba(31,52,86,.09); }
+        .nb-ranking-stat-icon { width: 40px; height: 40px; flex-basis: 40px; border-radius: 12px; }
+        .nb-ranking-stat strong { font-size: 21px; }
+        .nb-ranking-stat small { font-size: 11.5px; }
+        .nb-ranking-podium { gap: 15px; min-height: 246px; }
+        .nb-podium-card {
+          padding: 22px 16px 18px; border-color: #e1e8f2; border-radius: 17px;
+          box-shadow: 0 7px 20px rgba(31,52,86,.06); transition: transform .18s ease, box-shadow .18s ease;
+        }
+        .nb-podium-card:hover { transform: translateY(-3px); box-shadow: 0 13px 28px rgba(31,52,86,.1); }
+        .nb-podium-card.rank-1 { min-height: 246px; padding-top: 27px; border-color: rgba(217,144,23,.5); background: linear-gradient(160deg, #fffdf8, #fff); box-shadow: 0 12px 27px rgba(185,130,47,.15); }
+        .nb-podium-card.rank-2, .nb-podium-card.rank-3 { min-height: 202px; }
+        .nb-podium-card.is-me { outline: 2px solid #2563eb; outline-offset: 3px; }
+        .nb-podium-card > strong { font-size: 14px; }
+        .nb-podium-card > b { font-size: 20px; }
+        .nb-ranking-insight-grid { gap: 18px; }
+        .nb-ranking-chart-panel, .nb-ranking-me-panel, .nb-ranking-table-panel { border-color: #e1e8f2; border-radius: 17px; box-shadow: 0 7px 22px rgba(31,52,86,.045); }
+        .nb-ranking-chart-panel, .nb-ranking-me-panel { padding: 22px; }
+        .nb-ranking-section-head h3 { font-size: 18px; letter-spacing: -.02em; }
+        .nb-ranking-me-score strong { font-size: 35px; }
+        .nb-ranking-progress, .nb-row-progress > div { height: 8px; background: #e7edf5; }
+        .nb-ranking-progress span, .nb-row-progress > div span { background: linear-gradient(90deg, #2563eb, #22b8c7); }
+        .nb-ranking-toolbar {
+          gap: 16px; padding: 14px; border: 1px solid #e1e8f2; border-radius: 15px;
+          background: rgba(255,255,255,.82); box-shadow: 0 6px 18px rgba(31,52,86,.04);
+        }
+        .nb-ranking-search { height: 42px; border-color: #dfe6f1; border-radius: 11px; }
+        .nb-ranking-search:focus-within { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.09); }
+        .nb-ranking-controls .nb-input { height: 42px; border-color: #dfe6f1; border-radius: 10px; }
+        .nb-ranking-controls .nb-chip { border-radius: 9px; padding: 7px 12px; }
+        .nb-ranking-table-panel { padding: 22px 22px 10px; }
+        .nb-ranking-table-title { margin-bottom: 15px; }
+        .nb-ranking-table th { padding: 10px 12px; color: #7a8aa2; border-bottom-color: #e7edf5; }
+        .nb-ranking-table td { height: 58px; padding: 11px 12px; border-bottom-color: #edf0f5; }
+        .nb-ranking-table tbody tr:hover { background: #f8fbff; }
+        .nb-ranking-table tr.me { background: #eef4ff; }
+        .nb-ranking-table tr.me td:first-child { box-shadow: inset 3px 0 #2563eb; }
+        .nb-rank-number { min-width: 29px; height: 29px; border-radius: 8px; }
+        .nb-ranking-student strong { font-size: 13px; }
+        .nb-barchart { height: 235px; gap: 12px; }
+        .nb-bar-fill { border-radius: 7px 7px 0 0; background: linear-gradient(180deg, #4f86f7, #2563eb); }
+        .nb-bar-fill.me { background: linear-gradient(180deg, #22b8c7, #12a36a); }
+        @media (max-width: 900px) {
+          .nb-ranking-hero { min-height: 160px; padding: 27px; }
+          .nb-ranking-podium { gap: 10px; }
+          .nb-ranking-chart-panel, .nb-ranking-me-panel { padding: 18px; }
+          .nb-ranking-table-panel { padding: 18px 14px 8px; }
+        }
+        @media (max-width: 560px) {
+          .nb-ranking-hero { padding: 23px 20px; border-radius: 18px; }
+          .nb-ranking-title { font-size: 27px; }
+          .nb-ranking-sub { font-size: 12.5px; }
+          .nb-ranking-stat-grid { gap: 8px; }
+          .nb-ranking-stat { min-height: 76px; padding: 12px; }
+          .nb-ranking-stat-icon { width: 34px; height: 34px; flex-basis: 34px; border-radius: 10px; }
+          .nb-ranking-stat strong { font-size: 17px; }
+          .nb-ranking-stat small { font-size: 10px; }
+          .nb-ranking-podium { gap: 5px; min-height: 188px; }
+          .nb-podium-card { padding: 14px 7px 13px; border-radius: 11px; }
+          .nb-podium-card.rank-1 { min-height: 188px; padding-top: 18px; }
+          .nb-podium-card.rank-2, .nb-podium-card.rank-3 { min-height: 162px; }
+          .nb-podium-card > strong { max-width: 90px; font-size: 10.5px; }
+          .nb-podium-card > b { font-size: 15px; }
+          .nb-ranking-toolbar { padding: 11px; }
+          .nb-ranking-controls { gap: 9px; }
+          .nb-ranking-controls .nb-input { width: 100%; }
+          .nb-ranking-controls .nb-filter-row { width: 100%; }
+          .nb-ranking-controls .nb-chip { flex: 1; padding-left: 6px; padding-right: 6px; }
+          .nb-barchart { height: 190px; gap: 7px; }
+        }
       `}</style>
 
       {loading ? (
