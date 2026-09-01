@@ -3567,6 +3567,100 @@ function App() {
           .nb-practice-problem.teacher .nb-practice-problem-actions { grid-column: 2; padding: 6px 0 0; border: 0; }
           .nb-practice-problem h4 { white-space: normal; line-height: 1.45; }
         }
+        /* -------------------------------------------------------------- */
+        /*  CONTESTS / MOCK EXAMS REDESIGN                              */
+        /* -------------------------------------------------------------- */
+        .nb-exam-page { gap: 20px; }
+        .nb-exam-hero {
+          position: relative; overflow: hidden; min-height: 178px; padding: 32px 34px;
+          border-radius: 22px; background: linear-gradient(120deg, #182d55 0%, #245ac6 58%, #22a8ba 100%);
+          box-shadow: 0 18px 42px rgba(25,54,104,.16);
+        }
+        .nb-exam-hero::after {
+          content: ""; position: absolute; width: 290px; height: 290px; right: 7%; top: -155px;
+          border: 1px solid rgba(255,255,255,.18); border-radius: 50%;
+          box-shadow: 0 0 0 30px rgba(255,255,255,.04), 0 0 0 62px rgba(255,255,255,.035); pointer-events: none;
+        }
+        .nb-exam-hero > div { position: relative; z-index: 1; }
+        .nb-exam-title { font-size: 33px; letter-spacing: -.035em; }
+        .nb-exam-sub { max-width: 620px; font-size: 13.5px; }
+        .nb-exam-hero-icon { border-radius: 12px; padding: 14px 17px; background: rgba(255,255,255,.12); backdrop-filter: blur(5px); }
+        .nb-exam-stat-grid { gap: 14px; }
+        .nb-exam-stat {
+          min-height: 90px; padding: 18px; border-color: #e5eaf2; border-radius: 15px;
+          box-shadow: 0 5px 15px rgba(31,52,86,.04); transition: transform .18s ease, box-shadow .18s ease;
+        }
+        .nb-exam-stat:hover { transform: translateY(-2px); box-shadow: 0 11px 24px rgba(31,52,86,.09); }
+        .nb-exam-stat > span { width: 40px; height: 40px; border-radius: 12px; }
+        .nb-exam-stat strong { font-size: 21px; }
+        .nb-exam-stat small { font-size: 11.5px; }
+        .nb-exam-create-panel, .nb-exam-toolbar {
+          border-color: #e1e8f2; border-radius: 15px; box-shadow: 0 6px 18px rgba(31,52,86,.04);
+        }
+        .nb-exam-create-panel { padding: 20px; }
+        .nb-exam-manage-head h3 { font-size: 18px; }
+        .nb-exam-form { margin-top: 20px; padding-top: 20px; gap: 17px; border-top-color: #e9edf4; }
+        .nb-exam-form-grid { gap: 12px; }
+        .nb-exam-form-grid label > span { font-size: 10px; }
+        .nb-exam-check { padding: 12px; border-color: #e1e8f2; border-radius: 10px; background: #fbfdff; transition: border-color .15s, background .15s; }
+        .nb-exam-check:hover { border-color: #9db9ed; }
+        .nb-exam-check.selected { border-color: #2563eb; background: #eef4ff; }
+        .nb-exam-toolbar { padding: 14px; background: rgba(255,255,255,.82); }
+        .nb-exam-search { height: 42px; border-color: #dfe6f1; border-radius: 11px; }
+        .nb-exam-search:focus-within { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.09); }
+        .nb-exam-list { gap: 15px; }
+        .nb-exam-card {
+          gap: 15px; padding: 22px 23px 20px 28px; border-color: #e1e8f2; border-radius: 16px;
+          box-shadow: 0 7px 22px rgba(31,52,86,.045); transition: transform .18s ease, box-shadow .18s ease;
+        }
+        .nb-exam-card:hover { transform: translateY(-2px); box-shadow: 0 13px 28px rgba(31,52,86,.09); }
+        .nb-exam-card-accent { width: 5px; }
+        .nb-exam-card-head h3 { font-size: 19px; letter-spacing: -.02em; }
+        .nb-exam-card-kicker { margin-bottom: 9px; }
+        .nb-exam-card-meta { gap: 16px; font-size: 11.5px; }
+        .nb-exam-card-progress { max-width: 600px; padding: 11px 13px; border: 1px solid #e7edf5; border-radius: 10px; background: #fbfdff; }
+        .nb-exam-progress { height: 8px; background: #e7edf5; }
+        .nb-exam-progress span { background: linear-gradient(90deg, #2563eb, #22b8c7); }
+        .nb-exam-card-actions { padding-top: 5px; }
+        .nb-exam-card-actions .nb-btn { border-radius: 10px; }
+        .nb-exam-empty { padding: 62px 15px; border-color: #dfe7f2; border-radius: 15px; }
+        .nb-contest-bar {
+          position: sticky; top: 0; z-index: 4; padding: 12px 14px; border: 1px solid #e1e8f2;
+          border-radius: 14px; background: rgba(255,255,255,.9); box-shadow: 0 7px 20px rgba(31,52,86,.08); backdrop-filter: blur(12px);
+        }
+        .nb-problem-card { border-color: #e1e8f2; border-radius: 14px; box-shadow: 0 5px 16px rgba(31,52,86,.04); }
+        .nb-problem-card:hover { border-color: #9db9ed; box-shadow: 0 10px 22px rgba(31,52,86,.1); }
+        .nb-exam-room-head, .nb-exam-navigator, .nb-exam-room-intro { border-color: #e1e8f2; border-radius: 15px; box-shadow: 0 6px 18px rgba(31,52,86,.04); }
+        .nb-exam-room-head { padding: 18px 20px; }
+        .nb-exam-navigator-head { padding: 16px; }
+        .nb-exam-nav-item { padding: 13px 12px; border-bottom-color: #edf0f5; }
+        .nb-exam-nav-item:hover, .nb-exam-nav-item.active { background: #eef4ff; box-shadow: inset 3px 0 #2563eb; }
+        @media (max-width: 900px) {
+          .nb-exam-hero { min-height: 160px; padding: 27px; }
+          .nb-exam-stat-grid { gap: 10px; }
+          .nb-exam-create-panel { padding: 17px; }
+          .nb-exam-card { padding: 20px 19px 18px 24px; }
+          .nb-exam-room-head { padding: 15px; }
+        }
+        @media (max-width: 560px) {
+          .nb-exam-hero { padding: 23px 20px; border-radius: 18px; }
+          .nb-exam-title { font-size: 27px; }
+          .nb-exam-sub { font-size: 12.5px; }
+          .nb-exam-stat { min-height: 76px; padding: 12px; }
+          .nb-exam-stat > span { width: 34px; height: 34px; border-radius: 10px; }
+          .nb-exam-stat strong { font-size: 17px; }
+          .nb-exam-stat small { font-size: 10px; }
+          .nb-exam-card-head { gap: 8px; }
+          .nb-exam-card-head h3 { font-size: 16px; }
+          .nb-exam-card-code { font-size: 9px; }
+          .nb-exam-card-meta { gap: 8px; font-size: 10px; }
+          .nb-exam-card-actions .nb-btn { flex: 1; justify-content: center; }
+          .nb-exam-room-head { border-radius: 12px; }
+          .nb-contest-bar { gap: 8px; flex-wrap: wrap; }
+          .nb-contest-bar .nb-btn { order: 1; }
+          .nb-contest-bar .nb-exam-timer { order: 2; margin-left: auto; }
+          .nb-contest-bar > .nb-sub { order: 3; flex-basis: 100%; }
+        }
       `}</style>
 
       {loading ? (
