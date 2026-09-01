@@ -1837,8 +1837,36 @@ function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict,
   );
 }
 
-function ContestsView({ contests, isTeacher, students, points, problems, addContest, setContestStatus, updateContest, removeContest, solvedByCurrent, onVerdict }) {
+function ContestStatsModal({ contest, students, problems, submissions, onClose }) {
+  const contestProblems = problems.filter((problem) => contest.problemIds.includes(problem.id));
+  const problemIds = new Set(contestProblems.map((problem) => problem.id));
+  const maxScore = contestProblems.reduce((sum, problem) => sum + (Number(problem.points) || 0), 0);
+  const rows = students.map((student) => {
+    const bestByProblem = new Map();
+    const ownSubmissions = submissions.filter((submission) => submission.studentId === student.id && problemIds.has(submission.problemId));
+    ownSubmissions.forEach((submission) => {
+      const score = Math.max(0, Number(submission.score ?? (submission.verdict === "AC" ? submission.problemPoints : 0)));
+      bestByProblem.set(submission.problemId, Math.max(bestByProblem.get(submission.problemId) || 0, score));
+    });
+    const score = [...bestByProblem.values()].reduce((sum, value) => sum + value, 0);
+    return { student, score, solved: [...bestByProblem.keys()].filter((problemId) => ownSubmissions.some((submission) => submission.problemId === problemId && submission.verdict === "AC")).length, attempts: ownSubmissions.length };
+  }).sort((a, b) => b.score - a.score || b.solved - a.solved || a.student.name.localeCompare(b.student.name, "vi"));
+  const participants = rows.filter((row) => row.attempts > 0).length;
+
+  return <div className="nb-modal-overlay" role="dialog" aria-modal="true" aria-label={`Thống kê ${contest.title}`}>
+    <div className="nb-modal nb-contest-stats-modal">
+      <div className="nb-modal-head"><div><div className="nb-eyebrow">Báo cáo kết quả</div><h3 className="nb-h3">{contest.title}</h3><p className="nb-sub">Thống kê theo các bài tập thuộc đề thi · Tối đa {maxScore} điểm</p></div><button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button></div>
+      <div className="nb-contest-stats-summary"><div><strong>{participants}</strong><span>Học sinh có bài nộp</span></div><div><strong>{contestProblems.length}</strong><span>Số bài trong đề</span></div><div><strong>{maxScore}</strong><span>Tổng điểm tối đa</span></div></div>
+      <div className="nb-contest-stats-table-wrap"><table className="nb-contest-stats-table"><thead><tr><th>Hạng</th><th>Học sinh</th><th>Đã giải</th><th>Lượt nộp</th><th>Điểm</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.student.id}><td><span className={`nb-contest-rank rank-${index + 1}`}>{index + 1}</span></td><td><div className="nb-contest-student"><Avatar name={row.student.name} size={30} /><strong>{row.student.name}</strong></div></td><td>{row.solved}/{contestProblems.length}</td><td>{row.attempts}</td><td><b>{row.score}</b><small>/{maxScore}</small></td></tr>)}</tbody></table></div>
+      {rows.length === 0 && <div className="nb-home-empty"><Users size={22} /><strong>Chưa có học sinh trong lớp</strong><span>Thống kê sẽ xuất hiện sau khi có dữ liệu.</span></div>}
+      <div className="nb-modal-actions"><button className="nb-btn nb-btn-ghost" onClick={onClose}>Đóng báo cáo</button></div>
+    </div>
+  </div>;
+}
+
+function ContestsView({ contests, isTeacher, students, submissions, points, problems, addContest, setContestStatus, updateContest, removeContest, solvedByCurrent, onVerdict }) {
   const [running, setRunning] = useState(null);
+  const [statsContest, setStatsContest] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [query, setQuery] = useState("");
@@ -1891,8 +1919,9 @@ function ContestsView({ contests, isTeacher, students, points, problems, addCont
 
       <div className="nb-exam-toolbar"><div className="nb-exam-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm đề thi hoặc ngày thi…" /></div><div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả"], ["active", "Đang mở"], ["upcoming", "Sắp diễn ra"], ["completed", "Đã kết thúc"]].map(([key, label]) => <button key={key} className={`nb-chip ${filter === key ? "active" : ""}`} onClick={() => setFilter(key)}>{label}</button>)}</div></div>
 
-      <div className="nb-exam-list">{visibleContests.map((contest) => { const meta = statusMeta[contest.status] || statusMeta.upcoming; const contestProblems = problems.filter((problem) => contest.problemIds.includes(problem.id)); const solved = contestProblems.filter((problem) => solvedByCurrent(problem.id)).length; const progress = contestProblems.length ? Math.round((solved / contestProblems.length) * 100) : 0; const totalPoints = contestProblems.reduce((sum, problem) => sum + (Number(problem.points) || 0), 0); return <article key={contest.id} className={`nb-exam-card ${meta.tone}`}><div className="nb-exam-card-accent" /><div className="nb-exam-card-head"><div><div className="nb-exam-card-kicker"><span className={`nb-pill ${meta.cls}`}>{meta.label}</span><span>{contest.date}</span></div><h3>{contest.title}</h3></div><div className="nb-exam-card-code">{contest.id}</div></div><div className="nb-exam-card-meta"><span><Clock size={14} /> {contest.duration} phút</span><span><ListChecks size={14} /> {contestProblems.length} bài</span><span><Award size={14} /> {totalPoints} điểm</span></div>{!isTeacher && contest.status !== "upcoming" && <div className="nb-exam-card-progress"><div className="nb-exam-progress-head"><span>Tiến độ của bạn</span><strong>{solved}/{contestProblems.length} bài · {progress}%</strong></div><div className="nb-exam-progress"><span style={{ width: `${progress}%` }} /></div></div>}{contest.status === "completed" && <div className="nb-mini-leaderboard">{[...students].sort((a, b) => points(b.id) - points(a.id)).slice(0, 3).map((student, index) => <div key={student.id} className="nb-mini-row"><span className="nb-eyebrow">#{index + 1}</span><Avatar name={student.name} size={22} /><span>{student.name}</span><span className="nb-sub" style={{ marginLeft: "auto" }}>{points(student.id)}đ</span></div>)}</div>}<div className="nb-exam-card-actions">{!isTeacher && contest.status === "upcoming" && <span className="nb-sub"><Lock size={13} /> Chưa mở đăng ký</span>}{(isTeacher || contest.status !== "upcoming") && <button className="nb-btn nb-btn-primary" onClick={() => setRunning(contest)}>{contest.status === "completed" ? <><Eye size={15} /> Xem lại đề</> : isTeacher ? <><Eye size={15} /> Xem trước</> : <><Play size={15} /> Vào thi</>}</button>}{isTeacher && <><button className="nb-btn nb-btn-ghost" onClick={() => openEdit(contest)}><Pencil size={15} /> Sửa</button><button className="nb-btn nb-btn-ghost" onClick={() => cloneContest(contest)}><RefreshCw size={15} /> Nhân bản</button><button className="nb-icon-btn nb-danger-icon" onClick={() => deleteContest(contest)} title="Xóa đề thi" aria-label="Xóa đề thi"><Trash2 size={15} /></button></>}{isTeacher && contest.status === "upcoming" && <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(contest.id, "active")}><Play size={15} /> Mở đề</button>}{isTeacher && contest.status === "active" && <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(contest.id, "completed")}><CheckCircle2 size={15} /> Đóng đề</button>}</div></article>; })}</div>
+      <div className="nb-exam-list">{visibleContests.map((contest) => { const meta = statusMeta[contest.status] || statusMeta.upcoming; const contestProblems = problems.filter((problem) => contest.problemIds.includes(problem.id)); const solved = contestProblems.filter((problem) => solvedByCurrent(problem.id)).length; const progress = contestProblems.length ? Math.round((solved / contestProblems.length) * 100) : 0; const totalPoints = contestProblems.reduce((sum, problem) => sum + (Number(problem.points) || 0), 0); return <article key={contest.id} className={`nb-exam-card ${meta.tone}`}><div className="nb-exam-card-accent" /><div className="nb-exam-card-head"><div><div className="nb-exam-card-kicker"><span className={`nb-pill ${meta.cls}`}>{meta.label}</span><span>{contest.date}</span></div><h3>{contest.title}</h3></div><div className="nb-exam-card-code">{contest.id}</div></div><div className="nb-exam-card-meta"><span><Clock size={14} /> {contest.duration} phút</span><span><ListChecks size={14} /> {contestProblems.length} bài</span><span><Award size={14} /> {totalPoints} điểm</span></div>{!isTeacher && contest.status !== "upcoming" && <div className="nb-exam-card-progress"><div className="nb-exam-progress-head"><span>Tiến độ của bạn</span><strong>{solved}/{contestProblems.length} bài · {progress}%</strong></div><div className="nb-exam-progress"><span style={{ width: `${progress}%` }} /></div></div>}{contest.status === "completed" && <div className="nb-mini-leaderboard">{[...students].sort((a, b) => points(b.id) - points(a.id)).slice(0, 3).map((student, index) => <div key={student.id} className="nb-mini-row"><span className="nb-eyebrow">#{index + 1}</span><Avatar name={student.name} size={22} /><span>{student.name}</span><span className="nb-sub" style={{ marginLeft: "auto" }}>{points(student.id)}đ</span></div>)}</div>}<div className="nb-exam-card-actions">{!isTeacher && contest.status === "upcoming" && <span className="nb-sub"><Lock size={13} /> Chưa mở đăng ký</span>}{(isTeacher || contest.status !== "upcoming") && <button className="nb-btn nb-btn-primary" onClick={() => setRunning(contest)}>{contest.status === "completed" ? <><Eye size={15} /> Xem lại đề</> : isTeacher ? <><Eye size={15} /> Xem trước</> : <><Play size={15} /> Vào thi</>}</button>}{isTeacher && <><button className="nb-btn nb-btn-ghost" onClick={() => setStatsContest(contest)}><TrendingUp size={15} /> Thống kê</button><button className="nb-btn nb-btn-ghost" onClick={() => openEdit(contest)}><Pencil size={15} /> Sửa</button><button className="nb-btn nb-btn-ghost" onClick={() => cloneContest(contest)}><RefreshCw size={15} /> Nhân bản</button><button className="nb-icon-btn nb-danger-icon" onClick={() => deleteContest(contest)} title="Xóa đề thi" aria-label="Xóa đề thi"><Trash2 size={15} /></button></>}{isTeacher && contest.status === "upcoming" && <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(contest.id, "active")}><Play size={15} /> Mở đề</button>}{isTeacher && contest.status === "active" && <button className="nb-btn nb-btn-ghost" onClick={() => setContestStatus(contest.id, "completed")}><CheckCircle2 size={15} /> Đóng đề</button>}</div></article>; })}</div>
       {visibleContests.length === 0 && <div className="nb-exam-empty"><Clock size={26} /><strong>Không tìm thấy đề thi</strong><span>Thử đổi bộ lọc hoặc tạo một kỳ thi mới.</span></div>}
+      {statsContest && <ContestStatsModal contest={statsContest} students={students} problems={problems} submissions={submissions} onClose={() => setStatsContest(null)} />}
     </div>
   );
 }
@@ -3661,6 +3690,38 @@ function App() {
           .nb-contest-bar .nb-exam-timer { order: 2; margin-left: auto; }
           .nb-contest-bar > .nb-sub { order: 3; flex-basis: 100%; }
         }
+        /* -------------------------------------------------------------- */
+        /*  CONTEST STATISTICS                                           */
+        /* -------------------------------------------------------------- */
+        .nb-contest-stats-modal { max-width: 820px; border: 1px solid #e1e8f2; box-shadow: 0 24px 70px rgba(18,35,70,.2); }
+        .nb-contest-stats-modal .nb-modal-head { padding-bottom: 18px; border-bottom: 1px solid #e9edf4; }
+        .nb-contest-stats-modal .nb-modal-head h3 { margin-top: 5px; font-size: 21px; }
+        .nb-contest-stats-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0; }
+        .nb-contest-stats-summary > div { display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid #e2e9f3; border-radius: 12px; background: #f8fbff; }
+        .nb-contest-stats-summary strong { color: #2563eb; font: 700 21px 'JetBrains Mono', monospace; }
+        .nb-contest-stats-summary span { color: #718096; font-size: 10.5px; }
+        .nb-contest-stats-table-wrap { overflow-x: auto; border: 1px solid #e2e9f3; border-radius: 13px; }
+        .nb-contest-stats-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 12px; }
+        .nb-contest-stats-table th { padding: 11px 13px; color: #7a8aa2; background: #f7f9fc; font: 600 10px 'JetBrains Mono', monospace; letter-spacing: .03em; text-align: left; text-transform: uppercase; }
+        .nb-contest-stats-table td { padding: 12px 13px; color: #52627a; border-top: 1px solid #edf0f5; }
+        .nb-contest-stats-table tbody tr:hover { background: #f8fbff; }
+        .nb-contest-stats-table td:last-child b { color: #2563eb; font: 700 14px 'JetBrains Mono', monospace; }
+        .nb-contest-stats-table td:last-child small { color: #8a98ac; font-size: 10px; }
+        .nb-contest-student { display: flex; align-items: center; gap: 9px; color: #17243d; }
+        .nb-contest-student strong { font-size: 12px; }
+        .nb-contest-rank { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; color: #718096; background: #edf1f6; font: 700 10px 'JetBrains Mono', monospace; }
+        .nb-contest-rank.rank-1 { color: #a66b0d; background: #fff1ce; }
+        .nb-contest-rank.rank-2 { color: #617084; background: #edf0f4; }
+        .nb-contest-rank.rank-3 { color: #8b5c3c; background: #f5e8df; }
+        .nb-contest-stats-modal .nb-modal-actions { justify-content: flex-end; margin-top: 18px; padding-top: 16px; border-top: 1px solid #e9edf4; }
+        @media (max-width: 560px) {
+          .nb-contest-stats-modal { max-height: 92vh; }
+          .nb-contest-stats-summary { gap: 7px; }
+          .nb-contest-stats-summary > div { padding: 11px 9px; }
+          .nb-contest-stats-summary strong { font-size: 17px; }
+          .nb-contest-stats-summary span { font-size: 9px; }
+          .nb-contest-stats-table { min-width: 500px; }
+        }
       `}</style>
 
       {loading ? (
@@ -3753,7 +3814,7 @@ function App() {
               )}
               {tab === "contests" && (
                 <ContestsView
-                  contests={contests} isTeacher={isTeacher} students={students} points={points} problems={problems}
+                  contests={contests} isTeacher={isTeacher} students={students} submissions={submissions} points={points} problems={problems}
                   addContest={addContest} setContestStatus={setContestStatus} updateContest={updateContest} removeContest={removeContest}
                   solvedByCurrent={solvedByCurrent} onVerdict={registerVerdict}
                 />
