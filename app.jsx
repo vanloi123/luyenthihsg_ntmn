@@ -3273,6 +3273,112 @@ function App() {
           .nb-editor-toolbar, .nb-editor-status { font-size: 9px; }
           .nb-code-highlight, .nb-code-input { font-size: 12px; padding-left: 12px; padding-right: 12px; }
         }
+      /* ------------------------------------------------------------------ */
+        /*  OVERVIEW REDESIGN — modern academic dashboard                  */
+        /* ------------------------------------------------------------------ */
+        .nb-root {
+          --paper: #f6f8fc;
+          --paper-line: #e5eaf2;
+          --ink: #17243d;
+          --ink-soft: #52627a;
+          --pen-blue: #2563eb;
+          --ac-green: #12a36a;
+          --gold: #d99017;
+          --red-pen: #dc5a67;
+          --slate: #718096;
+          background: #101a30;
+        }
+        .nb-sidebar {
+          width: 248px;
+          padding: 24px 16px;
+          background: linear-gradient(180deg, #111c35 0%, #172644 100%);
+          border-right: 1px solid rgba(255,255,255,.07);
+        }
+        .nb-sidebar::before { opacity: .28; }
+        .nb-brand { padding: 0 10px 26px 12px; }
+        .nb-brand-mark {
+          width: 38px; height: 38px; border-radius: 12px;
+          background: linear-gradient(135deg, #3b82f6, #22c1c3);
+          box-shadow: 0 8px 20px rgba(37,99,235,.28);
+        }
+        .nb-brand-text b { font-size: 14px; letter-spacing: -.01em; }
+        .nb-nav { gap: 5px; margin-top: 8px; }
+        .nb-nav-item {
+          min-height: 44px; padding: 11px 14px; border-radius: 11px;
+          color: #aab6cc; font-size: 13px; transition: all .18s ease;
+        }
+        .nb-nav-item:hover { background: rgba(96,165,250,.14); color: #fff; transform: translateX(2px); }
+        .nb-nav-item.active {
+          background: linear-gradient(90deg, rgba(59,130,246,.98), rgba(37,99,235,.75));
+          color: #fff; box-shadow: 0 7px 18px rgba(37,99,235,.22);
+        }
+        .nb-main {
+          background: var(--paper);
+          background-image: radial-gradient(circle at 85% -10%, rgba(37,99,235,.07), transparent 30%);
+        }
+        .nb-main::before { display: none; }
+        .nb-topbar {
+          padding: 18px 38px;
+          background: rgba(246,248,252,.88);
+          border-bottom: 1px solid rgba(229,234,242,.85);
+          backdrop-filter: blur(14px);
+        }
+        .nb-content { padding: 32px 38px 52px; max-width: 1560px; }
+        .nb-home-page { gap: 22px; }
+        .nb-home-hero {
+          position: relative; overflow: hidden; min-height: 172px; padding: 32px 34px;
+          border-radius: 22px; box-shadow: 0 18px 42px rgba(25,54,104,.16);
+        }
+        .nb-home-hero::after {
+          content: ""; position: absolute; width: 280px; height: 280px; right: 5%; top: -150px;
+          border: 1px solid rgba(255,255,255,.17); border-radius: 50%; box-shadow: 0 0 0 30px rgba(255,255,255,.04), 0 0 0 60px rgba(255,255,255,.035);
+          pointer-events: none;
+        }
+        .nb-home-hero.student, .nb-home-hero.teacher {
+          background: linear-gradient(120deg, #182d55 0%, #245ac6 57%, #22a8ba 100%);
+        }
+        .nb-home-hero > div, .nb-home-hero-tools, .nb-home-hero-rank { position: relative; z-index: 1; }
+        .nb-home-hero h1 { font-size: 32px; letter-spacing: -.035em; }
+        .nb-home-hero p { font-size: 13.5px; max-width: 620px; }
+        .nb-eyebrow { color: #7b8aa3; font-size: 10px; letter-spacing: .09em; }
+        .nb-home-stat-grid { gap: 14px; }
+        .nb-home-stat {
+          min-height: 92px; padding: 18px; border: 1px solid #e6ebf3; border-radius: 15px;
+          box-shadow: 0 5px 15px rgba(31,52,86,.04); transition: transform .18s ease, box-shadow .18s ease;
+        }
+        .nb-home-stat:hover { transform: translateY(-2px); box-shadow: 0 11px 24px rgba(31,52,86,.09); }
+        .nb-home-stat > span { width: 40px; height: 40px; border-radius: 12px; }
+        .nb-home-stat strong { font-size: 21px; }
+        .nb-home-stat small { font-size: 11.5px; }
+        .nb-home-stat em { color: #8290a5; font-size: 10px; }
+        .nb-home-main-grid, .nb-home-insight-grid, .nb-home-lower-grid { gap: 18px; }
+        .nb-home-progress-card, .nb-home-class-card, .nb-home-contest-card, .nb-panel {
+          border: 1px solid #e5eaf2; border-radius: 17px; box-shadow: 0 7px 22px rgba(31,52,86,.045);
+        }
+        .nb-home-progress-card, .nb-home-class-card { padding: 25px; background: linear-gradient(135deg, #fff 0%, #f3f8ff 100%); }
+        .nb-home-contest-card { padding: 25px; background: linear-gradient(145deg, #fff, #f2fbfa); }
+        .nb-home-contest-card.live { border-color: rgba(18,163,106,.3); background: linear-gradient(145deg, #fff, #effaf5); }
+        .nb-home-card-head h2, .nb-home-section-head h2 { font-size: 19px; letter-spacing: -.025em; }
+        .nb-home-percent { color: var(--pen-blue); font-size: 27px; }
+        .nb-home-progress { height: 10px; background: #e5edf7; }
+        .nb-home-progress span { background: linear-gradient(90deg, #2563eb, #22b8c7); }
+        .nb-home-insight-row, .nb-home-signal-row, .nb-home-question-row, .nb-home-activity-item, .nb-home-student-row, .nb-home-class-feed > div { padding: 12px 0; border-bottom-color: #edf0f5; }
+        .nb-home-insight-track { height: 5px; background: #edf1f6; }
+        .nb-home-insight-track span { background: linear-gradient(90deg, #2563eb, #50c8d4); }
+        .nb-home-next { background: linear-gradient(145deg, #fff, #f9fbff); }
+        .nb-home-next-links button { padding: 13px 0; border-top-color: #edf0f5; }
+        .nb-link-button { font-size: 11.5px; }
+        .nb-btn { border-radius: 10px; padding: 10px 15px; transition: transform .16s ease, box-shadow .16s ease; }
+        .nb-btn-primary { background: linear-gradient(135deg, #2563eb, #1d4ed8); box-shadow: 0 6px 14px rgba(37,99,235,.18); }
+        .nb-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 9px 18px rgba(37,99,235,.25); }
+        .nb-btn-ghost { border-style: solid; border-color: #cdd9eb; background: #fff; }
+        .nb-home-class-activity { padding: 21px 24px; }
+        .nb-pill { padding: 4px 10px; }
+        @media (max-width: 900px) {
+          .nb-content { padding: 24px 22px 40px; }
+          .nb-topbar { padding-left: 22px; padding-right: 22px; }
+          .nb-home-hero { padding: 26px; }
+        }
       `}</style>
 
       {loading ? (
