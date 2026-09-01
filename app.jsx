@@ -1208,6 +1208,7 @@ function LessonsView({ isTeacher, currentUser, topics, progress, onProgressChang
   const [formError, setFormError] = useState("");
   const [form, setForm] = useState({ code: "", title: "", weeks: "", summary: "", content: "" });
   const lessonEditorRef = useRef(null);
+  const lessonReaderRef = useRef(null);
   const safeProgress = progress || {};
 
   useEffect(() => {
@@ -1249,6 +1250,17 @@ function LessonsView({ isTeacher, currentUser, topics, progress, onProgressChang
     setForm({ code: topic.code || "", title: topic.title || "", weeks: topic.weeks || "", summary: topic.summary || "", content: topic.content || "" });
     setFormError("");
     setShowForm(true);
+  }
+
+  function handleSelectTopic(topicId) {
+    setSelectedId(topicId);
+    if (typeof window !== "undefined" && window.matchMedia?.("(max-width: 900px)").matches) {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          lessonReaderRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+    }
   }
 
   function changeProgress(topicId, patch) {
@@ -1295,10 +1307,11 @@ function LessonsView({ isTeacher, currentUser, topics, progress, onProgressChang
         <div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['todo', 'Chưa học'], ['completed', 'Đã học']].map(([key, label]) => <button key={key} className={"nb-chip " + (statusFilter === key ? "active" : "")} onClick={() => setStatusFilter(key)}>{label}</button>)}</div>
         {isTeacher && <button className="nb-btn nb-btn-primary" onClick={beginAdd}><Plus size={16} /> Thêm bài giảng</button>}
       </div>
+      <div className="nb-lesson-mobile-hint"><Eye size={14} /> <span>Trên điện thoại, sau khi chọn chuyên đề, nội dung sẽ tự động cuộn lên vùng đọc.</span></div>
       {isTeacher && showForm && <form ref={lessonEditorRef} onSubmit={submit} className="nb-panel nb-form nb-lesson-editor" style={{ marginBottom: 18, scrollMarginTop: 24 }}><div className="nb-editor-head"><div><div className="nb-eyebrow">{editingId ? "Chỉnh sửa" : "Tạo mới"}</div><h3 className="nb-h3">{editingId ? "Cập nhật bài giảng" : "Thêm bài giảng"}</h3></div><button type="button" className="nb-icon-btn" onClick={() => { resetForm(); setShowForm(false); }} aria-label="Đóng"><X size={18} /></button></div><div className="nb-lesson-form-grid"><input className="nb-input" placeholder="Mã chuyên đề" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} /><input className="nb-input" placeholder="Tên bài giảng" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /><input className="nb-input" placeholder="Lịch học" value={form.weeks} onChange={(e) => setForm({ ...form, weeks: e.target.value })} /></div><input className="nb-input" placeholder="Mô tả ngắn / mục tiêu bài học" value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} /><textarea className="nb-input" rows={10} placeholder="Nội dung bài giảng" value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />{formError && <div className="nb-login-error"><AlertCircle size={14} /> {formError}</div>}<div className="nb-editor-actions"><button className="nb-btn nb-btn-primary" type="submit"><Save size={15} /> {editingId ? "Lưu thay đổi" : "Tạo bài giảng"}</button><button className="nb-btn nb-btn-ghost" type="button" onClick={() => { resetForm(); setShowForm(false); }}>Hủy</button></div></form>}
       <div className="nb-lesson-layout">
-        <aside className="nb-lesson-catalog"><div className="nb-lesson-catalog-head"><div><div className="nb-eyebrow">Lộ trình</div><h3 className="nb-h3">Danh mục bài học</h3></div><span className="nb-sub">{filteredTopics.length}/{topics.length}</span></div><div className="nb-lesson-catalog-list">{filteredTopics.map((topic, index) => <div key={topic.id} className={"nb-lesson-catalog-item " + (selectedTopic?.id === topic.id ? "active" : "")}><button className="nb-lesson-catalog-main" onClick={() => setSelectedId(topic.id)}><span className="nb-lesson-index">{String(index + 1).padStart(2, "0")}</span><span className="nb-lesson-catalog-text"><strong>{topic.title}</strong><small>{topic.code} · {topic.weeks}</small></span>{safeProgress[topic.id]?.isCompleted && <CheckCircle2 size={15} style={{ color: "var(--ac-green)" }} />}</button>{isTeacher && <div className="nb-lesson-item-actions"><button className="nb-icon-btn" onClick={() => beginEdit(topic)} title="Sửa bài giảng" aria-label="Sửa bài giảng"><Pencil size={14} /></button><button className="nb-icon-btn" onClick={() => handleDelete(topic)} title="Xóa bài giảng" aria-label="Xóa bài giảng"><Trash2 size={14} /></button></div>}</div>)}{filteredTopics.length === 0 && <p className="nb-sub" style={{ padding: 14 }}>Không tìm thấy bài giảng phù hợp.</p>}</div></aside>
-        <article className="nb-lesson-reader">{selectedTopic ? <><div className="nb-lesson-reader-top"><span className="nb-eyebrow">{selectedTopic.code} · {selectedTopic.weeks}</span><div className="nb-lesson-status-badges">{safeProgress[selectedTopic.id]?.isRead && <span className="nb-pill nb-pill-pending">Đã đọc</span>}{safeProgress[selectedTopic.id]?.isCompleted && <span className="nb-pill nb-pill-ac">Đã hoàn thành</span>}</div></div><h1 className="nb-lesson-reader-title">{selectedTopic.title}</h1><div className="nb-lesson-callout"><BookOpen size={17} /><p>{selectedTopic.summary}</p></div><div className="nb-lesson-content">{String(selectedTopic.content || "").split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>{!isTeacher && <div className="nb-lesson-progress-actions"><button className={"nb-btn " + (safeProgress[selectedTopic.id]?.isRead ? "nb-btn-ghost" : "nb-btn-primary")} onClick={() => markRead(selectedTopic.id)}>{safeProgress[selectedTopic.id]?.isRead ? <><RefreshCw size={15} /> Bỏ đánh dấu đã đọc</> : <><Eye size={15} /> Đánh dấu đã đọc</>}</button><button className={"nb-btn " + (safeProgress[selectedTopic.id]?.isCompleted ? "nb-btn-ghost" : "nb-btn-primary")} onClick={() => markCompleted(selectedTopic.id)}>{safeProgress[selectedTopic.id]?.isCompleted ? <><RefreshCw size={15} /> Bỏ hoàn thành</> : <><CheckCircle2 size={15} /> Đánh dấu hoàn thành</>}</button></div>}<LessonDiscussion topic={selectedTopic} discussions={discussions} currentUser={currentUser} addThread={addThread} addReply={addReply} /></> : <div className="nb-lesson-empty"><BookOpen size={30} /><h3 className="nb-h3">Chưa có bài giảng</h3><p className="nb-sub">Hãy chọn một bài trong danh mục hoặc tạo bài giảng mới.</p></div>}</article>
+        <aside className="nb-lesson-catalog"><div className="nb-lesson-catalog-head"><div><div className="nb-eyebrow">Lộ trình</div><h3 className="nb-h3">Danh mục bài học</h3></div><span className="nb-sub">{filteredTopics.length}/{topics.length}</span></div><div className="nb-lesson-catalog-list">{filteredTopics.map((topic, index) => <div key={topic.id} className={"nb-lesson-catalog-item " + (selectedTopic?.id === topic.id ? "active" : "")}><button className="nb-lesson-catalog-main" onClick={() => handleSelectTopic(topic.id)}><span className="nb-lesson-index">{String(index + 1).padStart(2, "0")}</span><span className="nb-lesson-catalog-text"><strong>{topic.title}</strong><small>{topic.code} · {topic.weeks}</small></span>{safeProgress[topic.id]?.isCompleted && <CheckCircle2 size={15} style={{ color: "var(--ac-green)" }} />}</button>{isTeacher && <div className="nb-lesson-item-actions"><button className="nb-icon-btn" onClick={() => beginEdit(topic)} title="Sửa bài giảng" aria-label="Sửa bài giảng"><Pencil size={14} /></button><button className="nb-icon-btn" onClick={() => handleDelete(topic)} title="Xóa bài giảng" aria-label="Xóa bài giảng"><Trash2 size={14} /></button></div>}</div>)}{filteredTopics.length === 0 && <p className="nb-sub" style={{ padding: 14 }}>Không tìm thấy bài giảng phù hợp.</p>}</div></aside>
+        <article ref={lessonReaderRef} className="nb-lesson-reader">{selectedTopic ? <><div className="nb-lesson-reader-top"><span className="nb-eyebrow">{selectedTopic.code} · {selectedTopic.weeks}</span><div className="nb-lesson-status-badges">{safeProgress[selectedTopic.id]?.isRead && <span className="nb-pill nb-pill-pending">Đã đọc</span>}{safeProgress[selectedTopic.id]?.isCompleted && <span className="nb-pill nb-pill-ac">Đã hoàn thành</span>}</div></div><h1 className="nb-lesson-reader-title">{selectedTopic.title}</h1><div className="nb-lesson-callout"><BookOpen size={17} /><p>{selectedTopic.summary}</p></div><div className="nb-lesson-content">{String(selectedTopic.content || "").split(/\n{2,}/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>{!isTeacher && <div className="nb-lesson-progress-actions"><button className={"nb-btn " + (safeProgress[selectedTopic.id]?.isRead ? "nb-btn-ghost" : "nb-btn-primary")} onClick={() => markRead(selectedTopic.id)}>{safeProgress[selectedTopic.id]?.isRead ? <><RefreshCw size={15} /> Bỏ đánh dấu đã đọc</> : <><Eye size={15} /> Đánh dấu đã đọc</>}</button><button className={"nb-btn " + (safeProgress[selectedTopic.id]?.isCompleted ? "nb-btn-ghost" : "nb-btn-primary")} onClick={() => markCompleted(selectedTopic.id)}>{safeProgress[selectedTopic.id]?.isCompleted ? <><RefreshCw size={15} /> Bỏ hoàn thành</> : <><CheckCircle2 size={15} /> Đánh dấu hoàn thành</>}</button></div>}<LessonDiscussion topic={selectedTopic} discussions={discussions} currentUser={currentUser} addThread={addThread} addReply={addReply} /></> : <div className="nb-lesson-empty"><BookOpen size={30} /><h3 className="nb-h3">Chưa có bài giảng</h3><p className="nb-sub">Hãy chọn một bài trong danh mục hoặc tạo bài giảng mới.</p></div>}</article>
       </div>
     </div>
   );
@@ -3374,10 +3387,96 @@ function App() {
         .nb-btn-ghost { border-style: solid; border-color: #cdd9eb; background: #fff; }
         .nb-home-class-activity { padding: 21px 24px; }
         .nb-pill { padding: 4px 10px; }
+        /* -------------------------------------------------------------- */
+        /*  LESSONS REDESIGN                                             */
+        /* -------------------------------------------------------------- */
+        .nb-lesson-overview {
+          grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(150px, .65fr));
+          gap: 14px;
+        }
+        .nb-lesson-progress-card, .nb-lesson-stat-card, .nb-lesson-catalog, .nb-lesson-reader {
+          border-color: #e5eaf2;
+          border-radius: 16px;
+          box-shadow: 0 7px 22px rgba(31,52,86,.045);
+        }
+        .nb-lesson-progress-card {
+          padding: 20px 22px;
+          background: linear-gradient(135deg, #fff 0%, #f2f7ff 100%);
+        }
+        .nb-lesson-progress-head { margin-bottom: 12px; font-size: 12px; }
+        .nb-lesson-progress-head strong { color: var(--pen-blue); font-size: 24px; }
+        .nb-progress-track { height: 9px; background: #e5edf7; }
+        .nb-progress-fill { background: linear-gradient(90deg, #2563eb, #22b8c7); }
+        .nb-lesson-stat-card {
+          min-height: 86px; padding: 18px; background: #fff;
+          color: var(--pen-blue);
+        }
+        .nb-lesson-stat-card strong { margin-left: auto; font-size: 24px; }
+        .nb-lesson-stat-card span { font-size: 11px; }
+        .nb-lesson-toolbar {
+          padding: 13px; margin-bottom: 18px; border: 1px solid #e5eaf2;
+          border-radius: 14px; background: rgba(255,255,255,.72);
+          box-shadow: 0 5px 16px rgba(31,52,86,.035);
+        }
+        .nb-lesson-search .nb-input {
+          height: 42px; border-color: #dfe6f1; border-radius: 11px; background: #fff;
+        }
+        .nb-chip { padding: 7px 14px; border-color: #dfe6f1; background: #fff; border-radius: 10px; font-size: 11.5px; }
+        .nb-chip.active { background: #2563eb; border-color: #2563eb; box-shadow: 0 5px 12px rgba(37,99,235,.16); }
+        .nb-lesson-mobile-hint {
+          display: none; align-items: center; gap: 7px; margin: -6px 0 16px;
+          color: #58708f; font-size: 11px;
+        }
+        .nb-lesson-layout { grid-template-columns: minmax(260px, .82fr) minmax(0, 1.8fr); gap: 18px; }
+        .nb-lesson-catalog { overflow: hidden; background: #fff; }
+        .nb-lesson-catalog-head { padding: 18px; background: linear-gradient(180deg, #fbfdff, #fff); border-bottom-color: #edf0f5; }
+        .nb-lesson-catalog-list { padding: 6px; gap: 4px; }
+        .nb-lesson-catalog-item { border: 0; border-radius: 11px; }
+        .nb-lesson-catalog-item.active { background: #eef4ff; box-shadow: inset 3px 0 #2563eb; }
+        .nb-lesson-catalog-main { padding: 13px 12px; gap: 11px; }
+        .nb-lesson-index { width: 29px; color: #8b9ab0; font-size: 10px; }
+        .nb-lesson-catalog-item.active .nb-lesson-index { color: #2563eb; }
+        .nb-lesson-catalog-text strong { font-size: 12px; }
+        .nb-lesson-catalog-text small { color: #8190a5; font-size: 10px; }
+        .nb-lesson-item-actions { padding-right: 5px; }
+        .nb-lesson-reader {
+          min-height: 560px; padding: 32px 38px 34px; background: #fff;
+          scroll-margin-top: 88px;
+        }
+        .nb-lesson-reader-top { padding-bottom: 13px; border-bottom: 1px solid #edf0f5; }
+        .nb-lesson-reader-title { margin: 18px 0 20px; max-width: 850px; color: #17243d; font-size: 34px; letter-spacing: -.035em; }
+        .nb-lesson-callout { margin-bottom: 27px; padding: 15px 17px; border-left-width: 4px; border-radius: 0 11px 11px 0; background: #eff6ff; }
+        .nb-lesson-callout p { font-size: 13px; line-height: 1.7; }
+        .nb-lesson-content { max-width: 860px; color: #34445b; font-size: 14px; line-height: 1.9; }
+        .nb-lesson-content p { margin-bottom: 18px; }
+        .nb-lesson-progress-actions { gap: 10px; padding-top: 4px; }
+        .nb-lesson-discussion { max-width: 860px; margin-top: 30px; padding-top: 24px; }
         @media (max-width: 900px) {
           .nb-content { padding: 24px 22px 40px; }
           .nb-topbar { padding-left: 22px; padding-right: 22px; }
           .nb-home-hero { padding: 26px; }
+          .nb-lesson-overview { grid-template-columns: 1fr 1fr; }
+          .nb-lesson-progress-card { grid-column: 1 / -1; }
+          .nb-lesson-toolbar { align-items: stretch; padding: 11px; }
+          .nb-lesson-search { flex-basis: 100%; }
+          .nb-lesson-mobile-hint { display: flex; }
+          .nb-lesson-layout { display: flex; flex-direction: column; gap: 14px; }
+          .nb-lesson-catalog, .nb-lesson-reader { width: 100%; }
+          .nb-lesson-catalog { max-height: 310px; overflow-y: auto; }
+          .nb-lesson-reader { min-height: 0; padding: 25px 20px 28px; scroll-margin-top: 76px; }
+          .nb-lesson-reader-title { font-size: 28px; }
+          .nb-lesson-content { font-size: 13.5px; }
+          .nb-lesson-progress-actions .nb-btn { flex: 1; justify-content: center; }
+        }
+        @media (max-width: 560px) {
+          .nb-lesson-overview { grid-template-columns: 1fr; }
+          .nb-lesson-progress-card { grid-column: auto; }
+          .nb-lesson-stat-card { min-height: 70px; }
+          .nb-lesson-stat-card strong { font-size: 20px; }
+          .nb-lesson-reader-title { font-size: 25px; }
+          .nb-lesson-callout { padding: 13px 14px; }
+          .nb-lesson-progress-actions { flex-direction: column; }
+          .nb-lesson-progress-actions .nb-btn { width: 100%; }
         }
       `}</style>
 
