@@ -3478,6 +3478,95 @@ function App() {
           .nb-lesson-progress-actions { flex-direction: column; }
           .nb-lesson-progress-actions .nb-btn { width: 100%; }
         }
+        /* -------------------------------------------------------------- */
+        /*  PRACTICE & PYTHON REDESIGN                                  */
+        /* -------------------------------------------------------------- */
+        .nb-practice-progress-board {
+          grid-template-columns: minmax(260px, 1fr) minmax(280px, 1.2fr);
+          margin-bottom: 20px; border: 1px solid #dfe7f3; border-radius: 17px;
+          box-shadow: 0 8px 24px rgba(31,52,86,.06);
+        }
+        .nb-practice-progress-copy {
+          min-height: 112px; padding: 22px 24px;
+          background: linear-gradient(125deg, #182d55 0%, #2563eb 62%, #22a8ba 100%);
+        }
+        .nb-practice-progress-copy strong { font-size: 30px; }
+        .nb-practice-track { height: 8px; margin-top: 4px; }
+        .nb-practice-summary { background: #e8edf5; }
+        .nb-practice-summary-card { padding: 18px 21px; background: #fff; }
+        .nb-practice-summary-card strong { font-size: 21px; }
+        .nb-practice-toolbar {
+          align-items: stretch; gap: 16px; padding: 14px; margin-bottom: 20px;
+          border: 1px solid #e1e8f2; border-radius: 15px; background: rgba(255,255,255,.82);
+          box-shadow: 0 6px 18px rgba(31,52,86,.04);
+        }
+        .nb-practice-search {
+          min-height: 42px; padding: 0 12px; border-color: #dfe6f1; border-radius: 11px; background: #fff;
+        }
+        .nb-practice-search:focus-within { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.09); }
+        .nb-practice-filter-stack { gap: 6px; }
+        .nb-practice-filter-stack > span { color: #7d8ca4; font-size: 9px; }
+        .nb-practice-toolbar .nb-chip { padding: 7px 12px; border-radius: 9px; font-size: 10.5px; }
+        .nb-practice-teacher-board {
+          margin-bottom: 20px; padding: 19px 21px; border: 1px solid #dce6f5; border-left: 4px solid #2563eb;
+          border-radius: 0 15px 15px 0; background: linear-gradient(100deg, #eef5ff, #fff);
+          box-shadow: 0 6px 18px rgba(31,52,86,.04);
+        }
+        .nb-practice-teacher-board h3 { font-size: 17px; }
+        .nb-practice-roadmap {
+          padding: 22px 23px 24px; border: 1px solid #e1e8f2; border-radius: 17px;
+          box-shadow: 0 7px 22px rgba(31,52,86,.045);
+        }
+        .nb-practice-roadmap-head { padding-bottom: 18px; border-bottom-color: #e9edf4; }
+        .nb-practice-roadmap-head h3 { font-size: 19px; letter-spacing: -.02em; }
+        .nb-practice-month-group { margin-top: 16px; border-color: #e0e7f1; border-radius: 13px; background: #fbfdff; }
+        .nb-practice-month-head { padding: 15px 17px; border-bottom-color: #e9edf4; }
+        .nb-practice-month-head:hover { background: #f0f6ff; }
+        .nb-practice-month-marker { width: 32px; height: 32px; border-radius: 10px; background: linear-gradient(135deg, #2563eb, #22a8ba); box-shadow: 0 5px 12px rgba(37,99,235,.18); }
+        .nb-practice-month-title > span { color: #8a98ac; font-size: 9px; }
+        .nb-practice-month-title strong { font-size: 15px; }
+        .nb-practice-month-summary { color: #718096; font-size: 10.5px; }
+        .nb-practice-month-content { padding: 0 16px 16px; }
+        .nb-practice-group { grid-template-columns: 40px minmax(0, 1fr); gap: 12px; padding-top: 20px; }
+        .nb-practice-group-rail span { width: 29px; height: 29px; background: #eef4ff; color: #2563eb; box-shadow: 0 0 0 4px #fbfdff; }
+        .nb-practice-group-rail i { background: #dce6f5; }
+        .nb-practice-group-head { margin-bottom: 11px; }
+        .nb-practice-group-head p { color: #8795aa; font-size: 9px; }
+        .nb-practice-group-head h3 { font-size: 17px; letter-spacing: -.015em; }
+        .nb-practice-problem-list { border-top-color: #e8edf4; }
+        .nb-practice-problem {
+          min-height: 66px; padding: 13px 8px 13px 0; border-bottom-color: #edf0f5; border-radius: 9px;
+        }
+        .nb-practice-problem:hover { padding-left: 10px; background: #f4f8ff; }
+        .nb-practice-problem-index { color: #8b9ab0; }
+        .nb-practice-problem h4 { font-size: 13px; }
+        .nb-practice-problem-meta { color: #7d8ca4; font-size: 10px; }
+        .nb-practice-status { padding: 3px 8px; }
+        .nb-practice-problem-score strong { font-size: 12px; }
+        .nb-practice-manage-action { border-radius: 8px; }
+        @media (max-width: 900px) {
+          .nb-practice-progress-board { grid-template-columns: 1fr; }
+          .nb-practice-toolbar { gap: 12px; }
+          .nb-practice-roadmap { padding: 18px 14px 20px; }
+          .nb-practice-month-content { padding-left: 8px; padding-right: 8px; }
+        }
+        @media (max-width: 560px) {
+          .nb-practice-progress-copy { min-height: 104px; padding: 19px; }
+          .nb-practice-summary-card { padding: 15px; }
+          .nb-practice-toolbar { padding: 11px; }
+          .nb-practice-filter-stack { width: 100%; }
+          .nb-practice-filter-stack .nb-filter-row { width: 100%; }
+          .nb-practice-filter-stack .nb-chip { flex: 1; padding-left: 6px; padding-right: 6px; }
+          .nb-practice-roadmap-head { flex-direction: column; gap: 7px; }
+          .nb-practice-month-head { gap: 8px; padding: 13px 11px; }
+          .nb-practice-month-summary { margin-left: auto; }
+          .nb-practice-group { grid-template-columns: 28px minmax(0, 1fr); gap: 8px; }
+          .nb-practice-problem { grid-template-columns: 24px minmax(0, 1fr); gap: 8px; padding-right: 0; }
+          .nb-practice-problem-score { grid-column: 2; justify-content: flex-start; min-width: 0; padding-top: 3px; }
+          .nb-practice-problem.teacher { grid-template-columns: 24px minmax(0, 1fr); }
+          .nb-practice-problem.teacher .nb-practice-problem-actions { grid-column: 2; padding: 6px 0 0; border: 0; }
+          .nb-practice-problem h4 { white-space: normal; line-height: 1.45; }
+        }
       `}</style>
 
       {loading ? (
