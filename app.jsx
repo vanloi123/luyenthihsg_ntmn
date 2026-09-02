@@ -1296,7 +1296,7 @@ function LessonsView({ isTeacher, currentUser, topics, progress, onProgressChang
 
   return (
     <div>
-      <SectionHeading eyebrow="Không gian học tập" title="Bài giảng & tài liệu" sub="Học theo lộ trình, đọc tài liệu tập trung và lưu lại tiến độ ôn luyện của em." />
+      <SectionHeading eyebrow="Không gian học tập" title="Bài giảng & tài liệu" />
       <div className="nb-lesson-overview">
         <div className="nb-lesson-progress-card"><div className="nb-lesson-progress-head"><span>Tiến độ hoàn thành</span><strong>{progressPercent}%</strong></div><div className="nb-progress-track"><div className="nb-progress-fill" style={{ width: `${progressPercent}%` }} /></div><p className="nb-sub">Đã hoàn thành {completedCount}/{topics.length} chuyên đề · Đã đọc {readCount}/{topics.length}</p></div>
         <div className="nb-lesson-stat-card"><BookOpen size={18} /><strong>{topics.length}</strong><span>Chuyên đề</span></div>
