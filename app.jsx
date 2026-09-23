@@ -3826,12 +3826,14 @@ function App() {
         .nb-review-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0; }
         .nb-review-list { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
         .nb-review-item { border: 1px solid var(--paper-line); border-radius: 10px; overflow: hidden; }
-        .nb-review-item-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: none; cursor: pointer; text-align: left; font: inherit; }
+        .nb-review-item-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: none; cursor: pointer; text-align: left; font: inherit; min-height: 52px; box-sizing: border-box; }
         .nb-review-item-head:hover { background: #f8fafc; }
-        .nb-review-item-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-        .nb-review-item-info strong { font-size: 12.5px; color: var(--ink); }
-        .nb-review-item-info small { color: #8a98ac; font-size: 10.5px; }
-        .nb-review-item-score { font: 700 13px 'JetBrains Mono', monospace; color: var(--pen-blue); white-space: nowrap; }
+        .nb-review-item-head .nb-pill { flex-shrink: 0; white-space: nowrap; }
+        .nb-review-item-head > .nb-avatar { flex-shrink: 0; }
+        .nb-review-item-info { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; }
+        .nb-review-item-info strong { font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-review-item-info small { color: #8a98ac; font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-review-item-score { font: 700 13px 'JetBrains Mono', monospace; color: var(--pen-blue); white-space: nowrap; flex-shrink: 0; }
         .nb-review-item-chevron { transition: transform .15s; color: #9aa6ba; flex-shrink: 0; }
         .nb-review-item-chevron.open { transform: rotate(90deg); }
         .nb-history-code-wrap { border-top: 1px dashed var(--paper-line); padding: 10px 12px; background: #fafbfd; }
