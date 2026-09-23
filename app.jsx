@@ -4,10 +4,10 @@ import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
-  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud,
+  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config.js";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, SISTER_SITE_URL, SISTER_SITE_LABEL } from "./config.js";
 
 /* ---------------------------------------------------------------------- */
 /*  SUPABASE DATA LAYER                                                     */
@@ -1038,6 +1038,16 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 /*  VIEWS                                                                   */
 /* ---------------------------------------------------------------------- */
 
+function SisterSiteBanner() {
+  if (!SISTER_SITE_URL) return null;
+  return (
+    <a className="nb-sister-link" href={SISTER_SITE_URL} target="_blank" rel="noopener noreferrer">
+      <ExternalLink size={14} />
+      <span>{SISTER_SITE_LABEL || "Mở trang liên kết"}</span>
+    </a>
+  );
+}
+
 function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, problems, onNavigate }) {
   const isTeacher = currentUser.role === "teacher" || currentUser.role === "admin";
   const firstName = currentUser.name.split(" ").slice(-1)[0];
@@ -1053,6 +1063,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
 
     return (
       <div className="nb-home-page">
+        <SisterSiteBanner />
         <div className="nb-home-hero student"><div><div className="nb-eyebrow">Bảng điều khiển cá nhân · Đội tuyển Tin học</div><h1>Chào {firstName}</h1><p>Tiếp tục nhịp học hôm nay và tiến gần hơn đến mục tiêu của em.</p></div><div className="nb-home-hero-rank"><Award size={21} /><span><strong>#{rank > 0 ? rank : "—"}</strong><small>thứ hạng hiện tại</small></span></div></div>
         <div className="nb-home-stat-grid"><div className="nb-home-stat"><span className="blue"><TrendingUp size={17} /></span><div><strong>{points(currentUser.id)}</strong><small>Tổng điểm</small></div></div><div className="nb-home-stat"><span className="gold"><Award size={17} /></span><div><strong>#{rank > 0 ? rank : "—"}</strong><small>Xếp hạng lớp</small></div></div><div className="nb-home-stat"><span className="green"><ListChecks size={17} /></span><div><strong>{solved}/{problemsCount}</strong><small>Bài đã giải</small></div></div><div className="nb-home-stat"><span className="red"><Flame size={17} /></span><div><strong>{currentUser.streak || 0}</strong><small>Ngày liên tục</small></div></div></div>
 
@@ -1109,6 +1120,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
 
   return (
     <div className="nb-home-page">
+      <SisterSiteBanner />
       <div className="nb-home-hero teacher">
         <div>
           <div className="nb-eyebrow">Bảng điều khiển giáo viên · Đội tuyển Tin học</div>
@@ -2711,6 +2723,8 @@ function App() {
         }
 
         .nb-home-page { display: flex; flex-direction: column; gap: 18px; }
+        .nb-sister-link { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border: 1px solid var(--paper-line); border-radius: 99px; background: #fff; color: var(--pen-blue); font: 600 12px inherit; text-decoration: none; transition: border-color .12s, background .12s; }
+        .nb-sister-link:hover { border-color: var(--pen-blue); background: rgba(4,166,199,0.07); }
         .nb-home-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 25px 27px; border-radius: 14px; color: #fff; box-shadow: 0 10px 24px rgba(4,166,199,0.16); }
         .nb-home-hero.student { background: linear-gradient(120deg, #0B4657 0%, #04A6C7 62%, #66D3E4 100%); }
         .nb-home-hero.teacher { background: linear-gradient(120deg, #0C3E4D 0%, #087C95 58%, #5BC9D9 100%); }
