@@ -3825,7 +3825,7 @@ function App() {
         .nb-review-modal .nb-modal-head { padding: 0 0 16px; border-bottom: 1px solid var(--paper-line); }
         .nb-review-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0; }
         .nb-review-list { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
-        .nb-review-item { border: 1px solid var(--paper-line); border-radius: 10px; overflow: hidden; }
+        .nb-review-item { border: 1px solid var(--paper-line); border-radius: 10px; overflow: hidden; flex-shrink: 0; }
         .nb-review-item-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: none; cursor: pointer; text-align: left; font: inherit; min-height: 52px; box-sizing: border-box; }
         .nb-review-item-head:hover { background: #f8fafc; }
         .nb-review-item-head .nb-pill { flex-shrink: 0; white-space: nowrap; }
