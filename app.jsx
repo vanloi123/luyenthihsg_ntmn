@@ -164,14 +164,33 @@ async function dbSetLessonProgress(studentId, topicId, progress) {
   if (error) throw error;
 }
 
+// Tải TOÀN BỘ dòng của một bảng bằng cách gọi nhiều trang (range) liên tiếp,
+// tránh bị cắt mất dữ liệu khi bảng vượt quá giới hạn "Max Rows" của Supabase
+// (mặc định 1000 dòng/lần gọi), bất kể sau này bảng phình to đến đâu.
+async function fetchAllRows(table, { order, pageSize = 1000 } = {}) {
+  let allRows = [];
+  let from = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let query = supabase.from(table).select("*").range(from, from + pageSize - 1);
+    if (order) query = query.order(order.column, { ascending: order.ascending });
+    const { data, error } = await query;
+    if (error) return { data: null, error };
+    allRows = allRows.concat(data || []);
+    if (!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+  return { data: allRows, error: null };
+}
+
 async function fetchAll() {
   const [topicsR, problemsR, contestsR, submissionsR, discussionsR, repliesR, accountsR] = await Promise.all([
     supabase.from("topics").select("*"),
     supabase.from("problems").select("*"),
     supabase.from("contests").select("*"),
-    supabase.from("submissions").select("*"),
+    fetchAllRows("submissions", { order: { column: "created_at", ascending: true } }),
     supabase.from("discussions").select("*").order("created_at", { ascending: false }),
-    supabase.from("discussion_replies").select("*").order("created_at", { ascending: true }),
+    fetchAllRows("discussion_replies", { order: { column: "created_at", ascending: true } }),
     supabase.from("accounts").select("*"),
   ]);
   const results = [topicsR, problemsR, contestsR, submissionsR, discussionsR, repliesR, accountsR];
@@ -214,7 +233,7 @@ async function dbAddProblem(p) {
   // Schema hiện tại đã có cột language; lưu cả language và is_python để tương thích dữ liệu cũ.
   const language = normalizeLanguage(p.language, p.isPython);
   const { error } = await supabase.from("problems").insert({
-    id: p.id, title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
+    id: p.id, title: p.title, topic: p.topic || null, difficulty: p.difficulty, points: p.points,
     language, is_python: language === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
@@ -225,7 +244,7 @@ async function dbUpdateProblem(p) {
   // Cập nhật language để lần mở lại biểu mẫu giữ đúng Python, C hoặc C++ đã chọn.
   const language = normalizeLanguage(p.language, p.isPython);
   const { error } = await supabase.from("problems").update({
-    title: p.title, topic: p.topic, difficulty: p.difficulty, points: p.points,
+    title: p.title, topic: p.topic || null, difficulty: p.difficulty, points: p.points,
     language, is_python: language === "python", statement: p.statement, statement_image_url: p.imageUrl || null,
     sample_input: p.sample.input, sample_output: p.sample.output,
     test_cases: normalizeTestCases(p.testCases),
@@ -1317,11 +1336,12 @@ function LessonsView({ isTeacher, currentUser, topics, progress, onProgressChang
   );
 }
 
-function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics }) {
+function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics, students }) {
   const [languageFilter, setLanguageFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(null);
+  const [reviewProblem, setReviewProblem] = useState(null);
   const [collapsedMonths, setCollapsedMonths] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -1460,7 +1480,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           {!isTeacher && <strong>{studentStats.bestScore}/{problem.points}</strong>}
           {isTeacher && <span>Quản lý <ChevronRight size={16} /></span>}
         </div>
-        {isTeacher && <div className="nb-practice-problem-actions"><button type="button" className="nb-practice-manage-action edit" onClick={(event) => { event.stopPropagation(); beginEdit(problem); }}><Pencil size={14} /> Sửa</button><button type="button" className="nb-practice-manage-action delete" onClick={(event) => { event.stopPropagation(); handleDelete(problem); }}><Trash2 size={14} /> Xóa</button></div>}
+        {isTeacher && <div className="nb-practice-problem-actions"><button type="button" className="nb-practice-manage-action" onClick={(event) => { event.stopPropagation(); setReviewProblem(problem); }}><Eye size={14} /> Bài nộp</button><button type="button" className="nb-practice-manage-action edit" onClick={(event) => { event.stopPropagation(); beginEdit(problem); }}><Pencil size={14} /> Sửa</button><button type="button" className="nb-practice-manage-action delete" onClick={(event) => { event.stopPropagation(); handleDelete(problem); }}><Trash2 size={14} /> Xóa</button></div>}
       </div>
     );
   }
@@ -1750,6 +1770,93 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           onVerdict={(problemId, result, sourceCode) => onVerdict(problemId, result, sourceCode)}
         />
       )}
+
+      {reviewProblem && (
+        <SubmissionReviewModal
+          problem={reviewProblem}
+          submissions={submissions.filter((s) => s.problemId === reviewProblem.id)}
+          students={students}
+          onClose={() => setReviewProblem(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SubmissionReviewModal({ problem, submissions, students, onClose }) {
+  const [query, setQuery] = useState("");
+  const [verdictFilter, setVerdictFilter] = useState("all");
+  const [openId, setOpenId] = useState(null);
+
+  const studentById = useMemo(() => new Map(students.map((s) => [s.id, s])), [students]);
+
+  const sorted = useMemo(() => {
+    return [...submissions]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+      .filter((s) => verdictFilter === "all" || s.verdict === verdictFilter)
+      .filter((s) => {
+        if (!query.trim()) return true;
+        const student = studentById.get(s.studentId);
+        const text = `${student?.name || ""} ${student?.username || ""} ${s.studentId}`.toLocaleLowerCase("vi-VN");
+        return text.includes(query.trim().toLocaleLowerCase("vi-VN"));
+      });
+  }, [submissions, verdictFilter, query, studentById]);
+
+  const verdictOptions = useMemo(() => {
+    const set = new Set(submissions.map((s) => s.verdict));
+    return ["all", ...Array.from(set)];
+  }, [submissions]);
+
+  return (
+    <div className="nb-modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={`Bài nộp — ${problem.title}`}>
+      <div className="nb-modal nb-review-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="nb-modal-head">
+          <div>
+            <div className="nb-eyebrow">Kiểm tra bài nộp</div>
+            <h3 className="nb-h3">{problem.title}</h3>
+            <p className="nb-sub">{submissions.length} lượt nộp · {new Set(submissions.map((s) => s.studentId)).size} học sinh đã nộp</p>
+          </div>
+          <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
+        </div>
+
+        <div className="nb-review-toolbar">
+          <label className="nb-practice-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm theo tên hoặc tài khoản học sinh…" /></label>
+          <div className="nb-filter-row" style={{ margin: 0 }}>
+            {verdictOptions.map((v) => <button key={v} className={`nb-chip ${verdictFilter === v ? "active" : ""}`} onClick={() => setVerdictFilter(v)}>{v === "all" ? "Tất cả" : v}</button>)}
+          </div>
+        </div>
+
+        <div className="nb-review-list">
+          {sorted.length === 0 && <p className="nb-sub" style={{ padding: 14 }}>Không có lượt nộp nào phù hợp.</p>}
+          {sorted.map((submission) => {
+            const student = studentById.get(submission.studentId);
+            const isOpen = openId === submission.id;
+            return (
+              <div className="nb-review-item" key={submission.id}>
+                <button type="button" className="nb-review-item-head" onClick={() => setOpenId(isOpen ? null : submission.id)}>
+                  <Avatar name={student?.name || submission.studentId} size={30} />
+                  <div className="nb-review-item-info">
+                    <strong>{student?.name || submission.studentId}</strong>
+                    <small>{student?.username ? `@${student.username} · ` : ""}{formatSubmissionDate(submission.createdAt)}</small>
+                  </div>
+                  <VerdictPill verdict={submission.verdict} />
+                  <span className="nb-review-item-score">{submission.score ?? 0}đ</span>
+                  <ChevronRight size={16} className={`nb-review-item-chevron ${isOpen ? "open" : ""}`} />
+                </button>
+                {isOpen && (
+                  <div className="nb-history-code-wrap">
+                    {submission.sourceCode
+                      ? <pre className="nb-history-code">{submission.sourceCode}</pre>
+                      : <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Lượt nộp này không có lưu source code (nộp trước khi tính năng lưu code được bật).</p>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="nb-modal-actions"><button className="nb-btn nb-btn-ghost" onClick={onClose}>Đóng</button></div>
+      </div>
     </div>
   );
 }
@@ -3714,6 +3821,25 @@ function App() {
         .nb-contest-rank.rank-2 { color: #617084; background: #edf0f4; }
         .nb-contest-rank.rank-3 { color: #8b5c3c; background: #f5e8df; }
         .nb-contest-stats-modal .nb-modal-actions { justify-content: flex-end; margin-top: 18px; padding-top: 16px; border-top: 1px solid #e9edf4; }
+        .nb-review-modal { padding: 22px; max-width: 720px; }
+        .nb-review-modal .nb-modal-head { padding: 0 0 16px; border-bottom: 1px solid var(--paper-line); }
+        .nb-review-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 16px 0; }
+        .nb-review-list { display: flex; flex-direction: column; gap: 8px; max-height: 52vh; overflow-y: auto; }
+        .nb-review-item { border: 1px solid var(--paper-line); border-radius: 10px; overflow: hidden; }
+        .nb-review-item-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: none; cursor: pointer; text-align: left; font: inherit; }
+        .nb-review-item-head:hover { background: #f8fafc; }
+        .nb-review-item-info { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+        .nb-review-item-info strong { font-size: 12.5px; color: var(--ink); }
+        .nb-review-item-info small { color: #8a98ac; font-size: 10.5px; }
+        .nb-review-item-score { font: 700 13px 'JetBrains Mono', monospace; color: var(--pen-blue); white-space: nowrap; }
+        .nb-review-item-chevron { transition: transform .15s; color: #9aa6ba; flex-shrink: 0; }
+        .nb-review-item-chevron.open { transform: rotate(90deg); }
+        .nb-history-code-wrap { border-top: 1px dashed var(--paper-line); padding: 10px 12px; background: #fafbfd; }
+        .nb-history-code-wrap .nb-history-code { max-height: 320px; }
+        @media (max-width: 560px) {
+          .nb-review-item-head { flex-wrap: wrap; }
+          .nb-review-item-info { order: 1; width: 100%; }
+        }
         @media (max-width: 560px) {
           .nb-contest-stats-modal { max-height: 92vh; }
           .nb-contest-stats-summary { gap: 7px; }
@@ -3958,7 +4084,7 @@ function App() {
                 <ProblemsView
                   isTeacher={isTeacher} currentUser={currentUser} problems={problems} submissions={submissions}
                   points={points} addProblem={addProblem} updateProblem={updateProblem} removeProblem={removeProblem} topics={topics}
-                  solvedByCurrent={solvedByCurrent} onVerdict={registerVerdict}
+                  solvedByCurrent={solvedByCurrent} onVerdict={registerVerdict} students={students}
                 />
               )}
               {tab === "contests" && (
