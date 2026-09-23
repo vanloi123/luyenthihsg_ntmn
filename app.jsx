@@ -790,7 +790,7 @@ const CPP_KEYWORDS = new Set("alignas alignof auto bool break case catch char cl
 
 function highlightCodeLine(line, language) {
   const keywords = language === "python" ? PYTHON_KEYWORDS : language === "c" ? C_KEYWORDS : CPP_KEYWORDS;
-  const tokenPattern = /(#.*|\/\/.*|\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b)/g;
+  const tokenPattern = /(#.*|\/\/.*|\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b|==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|->|::|\/\/|[+\-*/%=<>!&|^~])/g;
   const parts = [];
   let cursor = 0;
   let match;
@@ -800,9 +800,10 @@ function highlightCodeLine(line, language) {
     let className = "";
     if (token.startsWith("#") || token.startsWith("//")) className = "nb-syntax-comment";
     else if (token.startsWith("\"") || token.startsWith("'")) className = "nb-syntax-string";
-    else if (/^\\d/.test(token)) className = "nb-syntax-number";
+    else if (/^\d/.test(token)) className = "nb-syntax-number";
     else if (keywords.has(token)) className = "nb-syntax-keyword";
     else if (/^(print|input|len|range|int|float|str|sum|cout|cin|std)$/.test(token)) className = "nb-syntax-function";
+    else if (/^(==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|->|::|[+\-*/%=<>!&|^~])$/.test(token)) className = "nb-syntax-operator";
     parts.push({ value: token, className });
     cursor = match.index + token.length;
   }
@@ -812,9 +813,17 @@ function highlightCodeLine(line, language) {
 
 function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
   const [scroll, setScroll] = useState({ top: 0, left: 0 });
+  const [activeLine, setActiveLine] = useState(0);
   const lines = String(code || "").split("\n");
   const textareaRef = useRef(null);
   const INDENT = "    ";
+  const LINE_HEIGHT = 22;
+
+  function syncActiveLine(event) {
+    const target = event.currentTarget;
+    const before = target.value.slice(0, target.selectionStart);
+    setActiveLine(before.split("\n").length - 1);
+  }
 
   function applyEdit(nextCode, nextStart, nextEnd = nextStart) {
     onChange(nextCode);
@@ -920,10 +929,11 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
     <div className="nb-thonny-editor">
       <div className="nb-editor-toolbar"><span><Code2 size={14} /> {(LANGUAGE_META[language] || LANGUAGE_META.cpp).label} · Editor</span><span>Ln {Math.min(lines.length, 999)} · {code.length} ký tự</span></div>
       <div className="nb-editor-workspace">
-        <div className="nb-editor-gutter" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}>{lines.map((_, index) => <span key={index}>{index + 1}</span>)}</div>
+        <div className="nb-editor-gutter" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}>{lines.map((_, index) => <span key={index} className={index === activeLine ? "active" : ""}>{index + 1}</span>)}</div>
         <div className="nb-editor-code-layer">
+          <div className="nb-editor-active-line" style={{ transform: `translateY(${activeLine * LINE_HEIGHT - scroll.top}px)` }} aria-hidden="true" />
           <pre className="nb-code-highlight" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }} aria-hidden="true"><code>{lines.map((line, index) => <React.Fragment key={index}>{highlightCodeLine(line, language)}{index < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</code></pre>
-          <textarea ref={textareaRef} className="nb-code-input" value={code} onChange={(event) => onChange(event.target.value)} onKeyDown={handleKeyDown} onScroll={(event) => setScroll({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} spellCheck={false} readOnly={readOnly} aria-label="Trình soạn thảo mã nguồn" />
+          <textarea ref={textareaRef} className="nb-code-input" value={code} onChange={(event) => onChange(event.target.value)} onKeyDown={handleKeyDown} onKeyUp={syncActiveLine} onClick={syncActiveLine} onSelect={syncActiveLine} onScroll={(event) => setScroll({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} spellCheck={false} readOnly={readOnly} aria-label="Trình soạn thảo mã nguồn" />
         </div>
       </div>
       <div className="nb-editor-status"><span>{readOnly ? "Chế độ chỉ xem" : "Enter sau : tự thụt 4 khoảng · Shift+Tab lùi dòng · Ctrl/Cmd + Enter nộp bài"}</span><span>{(LANGUAGE_META[language] || LANGUAGE_META.cpp).label}</span></div>
@@ -3149,24 +3159,31 @@ function App() {
         .nb-problem-statement p { margin: 0 0 10px; white-space: pre-wrap; }
         .nb-problem-statement-image { display: block; max-width: 100%; max-height: 360px; object-fit: contain; margin: 0 0 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; padding: 5px; }
         .nb-code-editor { width: 100%; min-height: 200px; background: var(--ink); color: #D7F1F5; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; border-radius: 8px; border: none; padding: 14px; resize: vertical; box-sizing: border-box; }
-        .nb-thonny-editor { border: 1px solid #1A455B; border-radius: 9px; overflow: hidden; background: #0B2534; box-shadow: 0 6px 16px rgba(16,32,47,0.16); }
-        .nb-editor-toolbar, .nb-editor-status { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 10px; color: #B4D1D8; background: #12384C; font: 11px/1.2 'JetBrains Mono', monospace; }
-        .nb-editor-toolbar span:first-child { display: flex; align-items: center; gap: 6px; color: #E7F7FA; font-weight: 600; }
-        .nb-editor-status { color: #91B8C4; background: #0E2C3E; border-top: 1px solid #1A455B; font-size: 10px; }
-        .nb-editor-workspace { display: flex; position: relative; min-height: 330px; max-height: 480px; overflow: hidden; background: #0B2534; }
-        .nb-editor-gutter { flex: 0 0 46px; padding: 14px 7px 14px 0; color: #6EA5B5; background: #071B28; text-align: right; user-select: none; font: 13px/1.55 'JetBrains Mono', monospace; }
-        .nb-editor-gutter span { display: block; height: 20px; }
+        .nb-thonny-editor { border: 1px solid #181a1f; border-radius: 9px; overflow: hidden; background: #282c34; box-shadow: 0 6px 18px rgba(10,12,16,0.28); }
+        .nb-editor-toolbar, .nb-editor-status { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 12px; color: #9da5b4; background: #21252b; font: 11px/1.2 'JetBrains Mono', monospace; letter-spacing: .01em; }
+        .nb-editor-toolbar span:first-child { display: flex; align-items: center; gap: 6px; color: #61afef; font-weight: 600; }
+        .nb-editor-status { color: #6b7385; background: #21252b; border-top: 1px solid #181a1f; font-size: 10px; }
+        .nb-editor-workspace { display: flex; position: relative; min-height: 330px; max-height: 480px; overflow: hidden; background: #282c34; }
+        .nb-editor-gutter { flex: 0 0 46px; padding: 14px 7px 14px 0; color: #495162; background: #282c34; border-right: 1px solid #21252b; text-align: right; user-select: none; font: 14px/22px 'JetBrains Mono', monospace; }
+        .nb-editor-gutter span { display: block; height: 22px; transition: color .1s; }
+        .nb-editor-gutter span.active { color: #abb2bf; font-weight: 600; }
         .nb-editor-code-layer { position: relative; flex: 1; min-width: 0; overflow: hidden; }
-        .nb-code-highlight, .nb-code-input { position: absolute; inset: 0; width: max-content; min-width: 100%; min-height: 100%; margin: 0; padding: 14px 16px; border: 0; box-sizing: border-box; font: 13px/1.55 'JetBrains Mono', monospace; letter-spacing: 0; tab-size: 4; white-space: pre; }
-        .nb-code-highlight { pointer-events: none; color: #E7F7FA; background: transparent; }
+        .nb-editor-active-line { position: absolute; left: 0; right: 0; top: 0; height: 22px; background: rgba(255,255,255,0.045); pointer-events: none; z-index: 0; }
+        .nb-code-highlight, .nb-code-input {
+          position: absolute; inset: 0; width: max-content; min-width: 100%; min-height: 100%; margin: 0; padding: 14px 16px; border: 0; box-sizing: border-box;
+          font: 14px/22px 'JetBrains Mono', monospace; letter-spacing: .2px; tab-size: 4; white-space: pre;
+          font-feature-settings: "calt" 1, "liga" 1; font-variant-ligatures: contextual;
+        }
+        .nb-code-highlight { pointer-events: none; color: #abb2bf; background: transparent; z-index: 1; }
         .nb-code-highlight code { font: inherit; }
-        .nb-code-input { z-index: 2; resize: none; overflow: auto; color: transparent; caret-color: #F7C873; background: transparent; outline: none; -webkit-text-fill-color: transparent; }
-        .nb-code-input::selection { background: rgba(4,166,199,0.38); }
-        .nb-syntax-comment { color: #6FA47C; font-style: italic; }
-        .nb-syntax-string { color: #E6B36A; }
-        .nb-syntax-number { color: #C99BE8; }
-        .nb-syntax-keyword { color: #7DD7E5; font-weight: 600; }
-        .nb-syntax-function { color: #82D4C1; }
+        .nb-code-input { z-index: 2; resize: none; overflow: auto; color: transparent; caret-color: #528bff; background: transparent; outline: none; -webkit-text-fill-color: transparent; }
+        .nb-code-input::selection { background: rgba(97,175,239,0.28); }
+        .nb-syntax-comment { color: #5c6370; font-style: italic; }
+        .nb-syntax-string { color: #98c379; }
+        .nb-syntax-number { color: #d19a66; }
+        .nb-syntax-keyword { color: #c678dd; }
+        .nb-syntax-function { color: #61afef; }
+        .nb-syntax-operator { color: #56b6c2; }
         .nb-modal-actions { margin-top: 10px; display: flex; }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
         .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
