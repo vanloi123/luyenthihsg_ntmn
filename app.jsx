@@ -3172,7 +3172,7 @@ function App() {
         .nb-editor-gutter span { display: block; height: 22px; transition: color .1s; }
         .nb-editor-gutter span.active { color: #abb2bf; font-weight: 600; }
         .nb-editor-code-layer { position: relative; flex: 1; min-width: 0; overflow: hidden; }
-        .nb-editor-active-line { position: absolute; left: 0; right: 0; top: 0; height: 22px; background: rgba(255,255,255,0.045); pointer-events: none; z-index: 0; }
+        .nb-editor-active-line { position: absolute; left: 0; right: 0; top: 14px; height: 22px; background: rgba(255,255,255,0.045); pointer-events: none; z-index: 0; }
         .nb-code-highlight, .nb-code-input {
           position: absolute; inset: 0; width: max-content; min-width: 100%; min-height: 100%; margin: 0; padding: 14px 16px; border: 0; box-sizing: border-box;
           font: 14px/22px 'JetBrains Mono', monospace; letter-spacing: .2px; tab-size: 4; white-space: pre;
