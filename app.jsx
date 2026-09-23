@@ -790,7 +790,11 @@ const CPP_KEYWORDS = new Set("alignas alignof auto bool break case catch char cl
 
 function highlightCodeLine(line, language) {
   const keywords = language === "python" ? PYTHON_KEYWORDS : language === "c" ? C_KEYWORDS : CPP_KEYWORDS;
-  const tokenPattern = /(#.*|\/\/.*|\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b|==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|->|::|\/\/|[+\-*/%=<>!&|^~])/g;
+  const commentPattern = language === "python" ? "#.*" : "\\/\\/.*";
+  const tokenPattern = new RegExp(
+    `(${commentPattern}|\\"(?:\\\\.|[^\\"])*\\"|'(?:\\\\.|[^'])*'|\\b\\d+(?:\\.\\d+)?\\b|\\b[A-Za-z_][A-Za-z0-9_]*\\b|==|!=|<=|>=|&&|\\|\\||\\+\\+|--|\\+=|-=|\\*=|\\/=|%=|->|::|\\/\\/|[+\\-*/%=<>!&|^~])`,
+    "g"
+  );
   const parts = [];
   let cursor = 0;
   let match;
@@ -798,12 +802,12 @@ function highlightCodeLine(line, language) {
     if (match.index > cursor) parts.push({ value: line.slice(cursor, match.index), className: "" });
     const token = match[0];
     let className = "";
-    if (token.startsWith("#") || token.startsWith("//")) className = "nb-syntax-comment";
+    if ((language === "python" && token.startsWith("#")) || (language !== "python" && token.startsWith("//"))) className = "nb-syntax-comment";
     else if (token.startsWith("\"") || token.startsWith("'")) className = "nb-syntax-string";
     else if (/^\d/.test(token)) className = "nb-syntax-number";
     else if (keywords.has(token)) className = "nb-syntax-keyword";
     else if (/^(print|input|len|range|int|float|str|sum|cout|cin|std)$/.test(token)) className = "nb-syntax-function";
-    else if (/^(==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|->|::|[+\-*/%=<>!&|^~])$/.test(token)) className = "nb-syntax-operator";
+    else if (/^(==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|->|::|\/\/|[+\-*/%=<>!&|^~])$/.test(token)) className = "nb-syntax-operator";
     parts.push({ value: token, className });
     cursor = match.index + token.length;
   }
