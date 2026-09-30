@@ -2333,8 +2333,8 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
 const BASE_NAV = [
   { key: "overview", label: "Tổng quan", shortLabel: "Tổng quan", icon: Home },
   { key: "lessons", label: "Bài giảng", shortLabel: "Bài giảng", icon: BookOpen },
-  { key: "problems", label: "Luyện tập & Python", shortLabel: "Luyện tập", icon: Code2 },
-  { key: "contests", label: "Đề thi thử", shortLabel: "Đề thi", icon: Clock },
+  { key: "problems", label: "Luyện tập", shortLabel: "Luyện tập", icon: Code2 },
+  { key: "contests", label: "Thi thử", shortLabel: "Đề thi", icon: Clock },
   { key: "leaderboard", label: "Bảng xếp hạng", shortLabel: "Xếp hạng", icon: Trophy },
   { key: "discussion", label: "Thảo luận", shortLabel: "Thảo luận", icon: MessageSquare },
 ];
