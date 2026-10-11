@@ -706,10 +706,10 @@ function SetupErrorScreen({ onRetry }) {
         <div className="nb-brand-mark" style={{ width: 44, height: 44, margin: "0 auto 14px", background: "var(--red-pen)" }}>
           <AlertCircle size={22} />
         </div>
-        <h2 className="nb-h2">Chưa kết nối được cơ sở dữ liệu</h2>
+        <h2 className="nb-h2">THÔNG BÁO TẠM DỪNG HỆ THỐNG ĐỂ NÂNG CẤP & BẢO TRÌ</h2>
         <p className="nb-para" style={{ marginTop: 10 }}>
-          Kiểm tra lại: đã dán đúng <strong>SUPABASE_URL</strong> và <strong>SUPABASE_ANON_KEY</strong> vào file <code>config.js</code> chưa,
-          và đã chạy file <code>schema.sql</code> trong Supabase SQL Editor chưa (xem <code>huong-dan-trien-khai.md</code>).
+          <strong>Thời gian dự kiến hoàn thành: 14/10/2026</strong> Nhằm nâng cao chất lượng dịch vụ, tối ưu hóa trải nghiệm sử dụng và bổ sung thêm các tính năng mới, 
+          chúng tôi xin thông báo về kế hoạch tạm dừng hoạt động website để tiến hành nâng cấp hệ thống.
         </p>
         <button className="nb-btn nb-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 16 }} onClick={onRetry}>Thử lại</button>
       </div>
