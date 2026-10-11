@@ -709,7 +709,7 @@ function SetupErrorScreen({ onRetry }) {
         <h2 className="nb-h2">THÔNG BÁO TẠM DỪNG HỆ THỐNG ĐỂ NÂNG CẤP & BẢO TRÌ</h2>
         <p className="nb-para" style={{ marginTop: 10 }}>
           <strong>Thời gian dự kiến hoàn thành: 14/10/2026</strong> Nhằm nâng cao chất lượng dịch vụ, tối ưu hóa trải nghiệm sử dụng và bổ sung thêm các tính năng mới, 
-          chúng tôi xin thông báo về kế hoạch tạm dừng hoạt động website để tiến hành nâng cấp hệ thống.
+          chúng tôi thông báo về kế hoạch tạm dừng hoạt động website để tiến hành nâng cấp hệ thống. Mọi thông tin liên hệ Thầy Lợi - 0386165165
         </p>
         <button className="nb-btn nb-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 16 }} onClick={onRetry}>Thử lại</button>
       </div>
