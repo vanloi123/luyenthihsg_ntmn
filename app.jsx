@@ -143,6 +143,16 @@ function mapSubmission(row) {
     createdAt: row.created_at || null,
   };
 }
+function mapAssignment(row) {
+  return {
+    id: row.id,
+    problemId: row.problem_id,
+    studentId: row.student_id,
+    assignedBy: row.assigned_by || "",
+    note: row.note || "",
+    createdAt: row.created_at || null,
+  };
+}
 
 async function fetchLessonProgress(studentId) {
   const { data, error } = await supabase.from("lesson_progress").select("*").eq("student_id", studentId);
@@ -167,12 +177,12 @@ async function dbSetLessonProgress(studentId, topicId, progress) {
 // Tải TOÀN BỘ dòng của một bảng bằng cách gọi nhiều trang (range) liên tiếp,
 // tránh bị cắt mất dữ liệu khi bảng vượt quá giới hạn "Max Rows" của Supabase
 // (mặc định 1000 dòng/lần gọi), bất kể sau này bảng phình to đến đâu.
-async function fetchAllRows(table, { order, pageSize = 1000 } = {}) {
+async function fetchAllRows(table, { order, pageSize = 1000, columns = "*" } = {}) {
   let allRows = [];
   let from = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    let query = supabase.from(table).select("*").range(from, from + pageSize - 1);
+    let query = supabase.from(table).select(columns).range(from, from + pageSize - 1);
     if (order) query = query.order(order.column, { ascending: order.ascending });
     const { data, error } = await query;
     if (error) return { data: null, error };
@@ -183,17 +193,30 @@ async function fetchAllRows(table, { order, pageSize = 1000 } = {}) {
   return { data: allRows, error: null };
 }
 
-async function fetchAll() {
-  const [topicsR, problemsR, contestsR, submissionsR, discussionsR, repliesR, accountsR] = await Promise.all([
-    supabase.from("topics").select("*"),
-    supabase.from("problems").select("*"),
+const SUBMISSION_LIST_COLUMNS = "id,student_id,problem_id,verdict,score,passed_tests,total_tests,problem_title,problem_points,created_at";
+// Giữ lại source code đã có trong bộ nhớ (bài vừa nộp / đã tải) khi danh sách mới về không kèm code.
+function mergeLocalCode(prev, next) {
+  const codeById = new Map((prev || []).filter((x) => x.sourceCode).map((x) => [x.id, x.sourceCode]));
+  return next.map((x) => (codeById.has(x.id) ? { ...x, sourceCode: codeById.get(x.id) } : x));
+}
+async function fetchSourceCode(submissionId) {
+  const { data, error } = await supabase.from("submissions").select("source_code").eq("id", submissionId).maybeSingle();
+  if (error) throw error;
+  return data?.source_code || "";
+}
+// light=true: bỏ qua topics + problems (nặng, ít thay đổi) để tiết kiệm băng thông; trả về null cho 2 mục đó.
+async function fetchAll({ light = false } = {}) {
+  const [topicsR, problemsR, contestsR, submissionsR, discussionsR, repliesR, accountsR, assignmentsR] = await Promise.all([
+    light ? { data: null, error: null } : supabase.from("topics").select("*"),
+    light ? { data: null, error: null } : supabase.from("problems").select("*"),
     supabase.from("contests").select("*"),
-    fetchAllRows("submissions", { order: { column: "created_at", ascending: true } }),
+    fetchAllRows("submissions", { order: { column: "created_at", ascending: true }, columns: SUBMISSION_LIST_COLUMNS }),
     supabase.from("discussions").select("*").order("created_at", { ascending: false }),
     fetchAllRows("discussion_replies", { order: { column: "created_at", ascending: true } }),
     supabase.from("accounts").select("*"),
+    fetchAllRows("assignments", { order: { column: "created_at", ascending: true } }),
   ]);
-  const results = [topicsR, problemsR, contestsR, submissionsR, discussionsR, repliesR, accountsR];
+  const results = [topicsR, problemsR, contestsR, submissionsR, discussionsR, repliesR, accountsR, assignmentsR];
   const firstError = results.find((r) => r.error);
   if (firstError) throw firstError.error;
 
@@ -208,12 +231,13 @@ async function fetchAll() {
   }));
 
   return {
-    topics: (topicsR.data || []).map(mapTopic),
-    problems: (problemsR.data || []).map(mapProblem),
+    topics: topicsR.data ? topicsR.data.map(mapTopic) : null,
+    problems: problemsR.data ? problemsR.data.map(mapProblem) : null,
     contests: (contestsR.data || []).map(mapContest),
     submissions: (submissionsR.data || []).map(mapSubmission),
     discussions,
     accounts: (accountsR.data || []).map(mapAccount),
+    assignments: (assignmentsR.data || []).map(mapAssignment),
   };
 }
 
@@ -253,6 +277,19 @@ async function dbUpdateProblem(p) {
 }
 async function dbRemoveProblem(id) {
   const { error } = await supabase.from("problems").delete().eq("id", id);
+  if (error) throw error;
+}
+
+async function dbAddAssignments(rows) {
+  if (!rows.length) return;
+  const { error } = await supabase.from("assignments").upsert(
+    rows.map((a) => ({ id: a.id, problem_id: a.problemId, student_id: a.studentId, assigned_by: a.assignedBy || null, note: a.note || null })),
+    { onConflict: "problem_id,student_id", ignoreDuplicates: true }
+  );
+  if (error) throw error;
+}
+async function dbRemoveAssignment(id) {
+  const { error } = await supabase.from("assignments").delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -706,10 +743,10 @@ function SetupErrorScreen({ onRetry }) {
         <div className="nb-brand-mark" style={{ width: 44, height: 44, margin: "0 auto 14px", background: "var(--red-pen)" }}>
           <AlertCircle size={22} />
         </div>
-        <h2 className="nb-h2">THÔNG BÁO TẠM DỪNG HỆ THỐNG ĐỂ NÂNG CẤP & BẢO TRÌ</h2>
+        <h2 className="nb-h2">Chưa kết nối được cơ sở dữ liệu</h2>
         <p className="nb-para" style={{ marginTop: 10 }}>
-          <strong>Thời gian dự kiến hoàn thành: 14/10/2026</strong> Nhằm nâng cao chất lượng dịch vụ, tối ưu hóa trải nghiệm sử dụng và bổ sung thêm các tính năng mới, 
-          chúng tôi thông báo về kế hoạch tạm dừng hoạt động website để tiến hành nâng cấp hệ thống. Mọi thông tin liên hệ Thầy Lợi - 0386165165
+          Kiểm tra lại: đã dán đúng <strong>SUPABASE_URL</strong> và <strong>SUPABASE_ANON_KEY</strong> vào file <code>config.js</code> chưa,
+          và đã chạy file <code>schema.sql</code> trong Supabase SQL Editor chưa (xem <code>huong-dan-trien-khai.md</code>).
         </p>
         <button className="nb-btn nb-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 16 }} onClick={onRetry}>Thử lại</button>
       </div>
@@ -1005,7 +1042,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
               <button type="button" className="nb-history-toggle" onClick={() => setHistoryOpen((open) => !open)}><RefreshCw size={14} /> Lịch sử code đã nộp ({orderedHistory.length})<ChevronRight size={14} className={historyOpen ? "nb-history-chevron open" : "nb-history-chevron"} /></button>
               {historyOpen && <div className="nb-history-body">
                 <div className="nb-history-list">{orderedHistory.map((submission) => <button type="button" key={submission.id} className={"nb-history-item " + (selectedHistory?.id === submission.id ? "active" : "")} onClick={() => setSelectedHistoryId(submission.id)}><div><VerdictPill verdict={submission.verdict} /><span className="nb-history-date">{formatSubmissionDate(submission.createdAt)}</span></div><strong>{submission.score ?? 0}/{submission.problemPoints ?? problem.points}đ</strong><small>{submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test đạt` : "Bản nộp cũ"}</small></button>)}</div>
-                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" disabled={!selectedHistory.sourceCode} onClick={() => { setCode(selectedHistory.sourceCode); setResult(null); setHistoryOpen(false); }}><Code2 size={14} /> Khôi phục vào editor</button></div>{selectedHistory.sourceCode ? <pre className="nb-history-code">{selectedHistory.sourceCode}</pre> : <p className="nb-sub">Lượt nộp này được tạo trước khi hệ thống lưu source code.</p>}</div>}
+                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" onClick={async () => { try { const c = selectedHistory.sourceCode || await fetchSourceCode(selectedHistory.id); if (c) { setCode(c); setResult(null); setHistoryOpen(false); } } catch (e) { /* ignore */ } }}><Code2 size={14} /> Khôi phục vào editor</button></div><LazySourceCode submission={selectedHistory} emptyMessage="Lượt nộp này được tạo trước khi hệ thống lưu source code." /></div>}
               </div>}
             </div>}
           </div>
@@ -1081,7 +1118,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
         <div className="nb-home-hero student"><div><div className="nb-eyebrow">Bảng điều khiển cá nhân · Đội tuyển Tin học</div><h1>Chào {firstName}</h1><p>Tiếp tục nhịp học hôm nay và tiến gần hơn đến mục tiêu của em.</p></div><div className="nb-home-hero-rank"><Award size={21} /><span><strong>#{rank > 0 ? rank : "—"}</strong><small>thứ hạng hiện tại</small></span></div></div>
         <div className="nb-home-stat-grid"><div className="nb-home-stat"><span className="blue"><TrendingUp size={17} /></span><div><strong>{points(currentUser.id)}</strong><small>Tổng điểm</small></div></div><div className="nb-home-stat"><span className="gold"><Award size={17} /></span><div><strong>#{rank > 0 ? rank : "—"}</strong><small>Xếp hạng lớp</small></div></div><div className="nb-home-stat"><span className="green"><ListChecks size={17} /></span><div><strong>{solved}/{problemsCount}</strong><small>Bài đã giải</small></div></div><div className="nb-home-stat"><span className="red"><Flame size={17} /></span><div><strong>{currentUser.streak || 0}</strong><small>Ngày liên tục</small></div></div></div>
 
-        <div className="nb-home-main-grid"><section className="nb-home-progress-card"><div className="nb-home-card-head"><div><div className="nb-eyebrow">Mục tiêu học tập</div><h2>Tiến độ luyện tập</h2></div><span className="nb-home-percent">{progress}%</span></div><p className="nb-sub">Em đã hoàn thành {solved} trên tổng số {problemsCount} bài tập trong ngân hàng.</p><div className="nb-home-progress"><span style={{ width: `${progress}%` }} /></div><div className="nb-home-progress-foot"><span>Tiếp tục duy trì nhịp học đều đặn</span><strong>{problemsCount - solved > 0 ? `${problemsCount - solved} bài còn lại` : "Đã hoàn thành tất cả"}</strong></div><div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Luyện tập ngay</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("lessons")}><BookOpen size={15} /> Xem bài giảng</button></div></section><section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}><div className="nb-home-card-head"><div><div className="nb-eyebrow">Thi thử</div><h2>{activeContest ? "Kỳ thi đang mở" : "Sẵn sàng cho thử thách?"}</h2></div><span className={activeContest ? "nb-home-live-dot" : "nb-home-clock-icon"}>{activeContest ? <span /> : <Clock size={19} />}</span></div>{activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemIds.length} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Play size={15} /> Vào thi thử</button></> : <><p className="nb-sub">Hiện chưa có đề đang mở. Em có thể xem lịch và chuẩn bị trước cho kỳ thi tiếp theo.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Clock size={15} /> Xem lịch đề thi</button></>}</section></div>
+        <div className="nb-home-main-grid"><section className="nb-home-progress-card"><div className="nb-home-card-head"><div><div className="nb-eyebrow">Mục tiêu học tập</div><h2>Tiến độ luyện tập</h2></div><span className="nb-home-percent">{progress}%</span></div><p className="nb-sub">Em đã hoàn thành {solved} trên tổng số {problemsCount} bài tập trong ngân hàng.</p><div className="nb-home-progress"><span style={{ width: `${progress}%` }} /></div><div className="nb-home-progress-foot"><span>Tiếp tục duy trì nhịp học đều đặn</span><strong>{problemsCount - solved > 0 ? `${problemsCount - solved} bài còn lại` : "Đã hoàn thành tất cả"}</strong></div><div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Luyện tập ngay</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("lessons")}><BookOpen size={15} /> Xem bài giảng</button></div></section><section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}><div className="nb-home-card-head"><div><div className="nb-eyebrow">Đề thi thử</div><h2>{activeContest ? "Kỳ thi đang mở" : "Sẵn sàng cho thử thách?"}</h2></div><span className={activeContest ? "nb-home-live-dot" : "nb-home-clock-icon"}>{activeContest ? <span /> : <Clock size={19} />}</span></div>{activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemIds.length} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Play size={15} /> Vào thi thử</button></> : <><p className="nb-sub">Hiện chưa có đề đang mở. Em có thể xem lịch và chuẩn bị trước cho kỳ thi tiếp theo.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Clock size={15} /> Xem lịch đề thi</button></>}</section></div>
 
         <div className="nb-home-lower-grid"><section className="nb-panel nb-home-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Nhật ký học tập</div><h2>Hoạt động gần đây</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("problems")}>Xem tất cả <ChevronRight size={14} /></button></div>{recentActivity.length === 0 ? <div className="nb-home-empty"><Code2 size={22} /><strong>Chưa có hoạt động</strong><span>Bắt đầu giải bài đầu tiên để theo dõi tiến độ.</span></div> : <div className="nb-home-activity-list">{recentActivity.map((submission, index) => <div className="nb-home-activity-item" key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><div><strong>{submission.verdict === "AC" ? "Đã giải thành công" : "Đã nộp bài"}</strong><small>{submission.problemTitle || submission.problemId} · {submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test` : submission.verdict}</small></div><span className="nb-home-activity-score">{submission.score ?? 0}đ</span></div>)}</div>}</section><section className="nb-panel nb-home-next"><div className="nb-eyebrow">Gợi ý tiếp theo</div><h2>{bestRecent ? "Duy trì đà tiến bộ" : "Bắt đầu hành trình"}</h2><p className="nb-sub">{bestRecent ? `Bài gần nhất em giải tốt là ${bestRecent.problemTitle || bestRecent.problemId}. Hãy thử một bài khó hơn.` : "Hãy chọn một bài giảng hoặc bài tập để bắt đầu xây dựng thành tích."}</p><div className="nb-home-next-links"><button onClick={() => onNavigate?.("problems")}><span><Code2 size={15} /> Bài tập đề xuất</span><ChevronRight size={15} /></button><button onClick={() => onNavigate?.("lessons")}><span><BookOpen size={15} /> Học lý thuyết</span><ChevronRight size={15} /></button><button onClick={() => onNavigate?.("leaderboard")}><span><Trophy size={15} /> Xem bảng xếp hạng</span><ChevronRight size={15} /></button></div></section></div>
       </div>
@@ -1809,6 +1846,23 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   );
 }
 
+function LazySourceCode({ submission, emptyMessage }) {
+  const [code, setCode] = useState(submission.sourceCode || "");
+  const [state, setState] = useState(submission.sourceCode ? "ready" : "loading");
+  useEffect(() => {
+    if (submission.sourceCode) { setCode(submission.sourceCode); setState("ready"); return undefined; }
+    let cancelled = false;
+    setState("loading");
+    fetchSourceCode(submission.id)
+      .then((c) => { if (!cancelled) { setCode(c); setState("ready"); } })
+      .catch(() => { if (!cancelled) setState("error"); });
+    return () => { cancelled = true; };
+  }, [submission.id, submission.sourceCode]);
+  if (state === "loading") return <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Đang tải code…</p>;
+  if (state === "error") return <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Không tải được code, thử lại sau.</p>;
+  return code ? <pre className="nb-history-code">{code}</pre> : <p className="nb-sub" style={{ padding: "0 14px 14px" }}>{emptyMessage}</p>;
+}
+
 function SubmissionReviewModal({ problem, submissions, students, onClose }) {
   const [query, setQuery] = useState("");
   const [verdictFilter, setVerdictFilter] = useState("all");
@@ -1871,9 +1925,7 @@ function SubmissionReviewModal({ problem, submissions, students, onClose }) {
                 </button>
                 {isOpen && (
                   <div className="nb-history-code-wrap">
-                    {submission.sourceCode
-                      ? <pre className="nb-history-code">{submission.sourceCode}</pre>
-                      : <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Lượt nộp này không có lưu source code (nộp trước khi tính năng lưu code được bật).</p>}
+                    <LazySourceCode submission={submission} emptyMessage="Lượt nộp này không có lưu source code (nộp trước khi tính năng lưu code được bật)." />
                   </div>
                 )}
               </div>
@@ -1886,6 +1938,258 @@ function SubmissionReviewModal({ problem, submissions, students, onClose }) {
     </div>
   );
 }
+
+function assignmentStatus(submissions, studentId, problemId) {
+  const subs = submissions.filter((s) => s.studentId === studentId && s.problemId === problemId);
+  if (subs.some((s) => s.verdict === "AC")) return "done";
+  if (subs.length > 0) return "attempted";
+  return "todo";
+}
+
+const ASSIGNMENT_STATUS_META = {
+  todo: { label: "Chưa làm", cls: "nb-pill-pending" },
+  attempted: { label: "Đã nộp, chưa đạt", cls: "nb-pill-wa" },
+  done: { label: "Đã hoàn thành", cls: "nb-pill-ac" },
+};
+
+function AssignedView({ isTeacher, currentUser, problems, students, assignments, submissions, addAssignments, removeAssignment, solvedByCurrent, onVerdict, topics }) {
+  const [active, setActive] = useState(null);
+  const problemById = useMemo(() => new Map(problems.map((p) => [p.id, p])), [problems]);
+  const studentById = useMemo(() => new Map(students.map((s) => [s.id, s])), [students]);
+  const topicById = useMemo(() => new Map(topics.map((t) => [t.id, t])), [topics]);
+
+  if (!isTeacher) {
+    const myAssignments = assignments
+      .filter((a) => a.studentId === currentUser.id)
+      .map((a) => ({ ...a, problem: problemById.get(a.problemId), status: assignmentStatus(submissions, currentUser.id, a.problemId) }))
+      .filter((a) => a.problem)
+      .sort((a, b) => (a.status === "done") - (b.status === "done") || new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    const todoCount = myAssignments.filter((a) => a.status !== "done").length;
+    const mySubmissions = submissions.filter((s) => s.studentId === currentUser.id);
+
+    function problemStatsFor(problemId) {
+      const attempts = mySubmissions.filter((s) => s.problemId === problemId);
+      return { attempts: attempts.length, bestScore: attempts.reduce((best, s) => Math.max(best, Number(s.score ?? (s.verdict === "AC" ? s.problemPoints : 0))), 0) };
+    }
+
+    return (
+      <div>
+        <SectionHeading eyebrow="Nhiệm vụ cá nhân" title="Bài được giao" sub={myAssignments.length === 0 ? "Giáo viên chưa giao riêng bài nào cho em." : `Còn ${todoCount} bài chưa hoàn thành trên tổng số ${myAssignments.length} bài được giao.`} />
+        {myAssignments.length === 0 ? (
+          <div className="nb-practice-empty"><ListChecks size={20} /><strong>Chưa có bài được giao riêng</strong><span>Em vẫn có thể luyện tập tự do ở mục Luyện tập &amp; Python.</span></div>
+        ) : (
+          <div className="nb-assigned-list">
+            {myAssignments.map((a) => {
+              const meta = ASSIGNMENT_STATUS_META[a.status];
+              const language = LANGUAGE_META[problemLanguage(a.problem)] || LANGUAGE_META.cpp;
+              return (
+                <button type="button" key={a.id} className="nb-assigned-row" onClick={() => setActive(a.problem)}>
+                  <div className="nb-assigned-row-main">
+                    <strong>{a.problem.title}</strong>
+                    <small>{language.label} · {a.problem.points} điểm{a.assignedBy ? ` · Giao bởi ${a.assignedBy}` : ""}</small>
+                  </div>
+                  <span className={`nb-pill ${meta.cls}`}>{meta.label}</span>
+                  <ChevronRight size={16} />
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {active && (
+          <ProblemSolverModal
+            problem={active}
+            onClose={() => setActive(null)}
+            alreadySolved={solvedByCurrent(active.id)}
+            bestScore={problemStatsFor(active.id).bestScore}
+            attemptCount={problemStatsFor(active.id).attempts}
+            submissionHistory={mySubmissions}
+            onVerdict={(problemId, result, sourceCode) => onVerdict(problemId, result, sourceCode)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return <TeacherAssignmentConsole problems={problems} students={students} assignments={assignments} submissions={submissions} addAssignments={addAssignments} removeAssignment={removeAssignment} problemById={problemById} studentById={studentById} topicById={topicById} />;
+}
+
+function TeacherAssignmentConsole({ problems, students, assignments, submissions, addAssignments, removeAssignment, problemById, studentById, topicById }) {
+  const [mode, setMode] = useState("byProblem");
+  const [selectedProblem, setSelectedProblem] = useState("");
+  const [selectedStudent, setSelectedStudent] = useState("");
+  const [pickedStudents, setPickedStudents] = useState(() => new Set());
+  const [pickedProblems, setPickedProblems] = useState(() => new Set());
+  const [confirmMsg, setConfirmMsg] = useState("");
+  const [filterStudent, setFilterStudent] = useState("all");
+  const [filterProblem, setFilterProblem] = useState("all");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [reviewRow, setReviewRow] = useState(null);
+
+  const assignedKeySet = useMemo(() => new Set(assignments.map((a) => `${a.problemId}::${a.studentId}`)), [assignments]);
+
+  function toggleStudent(id) {
+    setPickedStudents((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }
+  function toggleProblem(id) {
+    setPickedProblems((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }
+
+  function submitByProblem() {
+    if (!selectedProblem || pickedStudents.size === 0) return;
+    addAssignments([...pickedStudents].map((studentId) => ({ problemId: selectedProblem, studentId })));
+    setConfirmMsg(`Đã giao bài cho ${pickedStudents.size} học sinh.`);
+    setPickedStudents(new Set());
+  }
+  function submitByStudent() {
+    if (!selectedStudent || pickedProblems.size === 0) return;
+    addAssignments([...pickedProblems].map((problemId) => ({ problemId, studentId: selectedStudent })));
+    setConfirmMsg(`Đã giao ${pickedProblems.size} bài tập.`);
+    setPickedProblems(new Set());
+  }
+
+  const rows = useMemo(() => {
+    return assignments
+      .map((a) => ({ ...a, problem: problemById.get(a.problemId), student: studentById.get(a.studentId), status: assignmentStatus(submissions, a.studentId, a.problemId) }))
+      .filter((a) => a.problem && a.student)
+      .filter((a) => filterStudent === "all" || a.studentId === filterStudent)
+      .filter((a) => filterProblem === "all" || a.problemId === filterProblem)
+      .filter((a) => filterStatus === "all" || a.status === filterStatus)
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  }, [assignments, problemById, studentById, submissions, filterStudent, filterProblem, filterStatus]);
+
+  const totalCount = assignments.length;
+  const doneCount = assignments.filter((a) => assignmentStatus(submissions, a.studentId, a.problemId) === "done").length;
+
+  return (
+    <div>
+      <SectionHeading eyebrow="Theo dõi nhận thức từng học sinh" title="Giao bài riêng" sub="Chọn bài tập để giao cho nhiều học sinh, hoặc chọn học sinh để giao nhiều bài tập cùng lúc." />
+
+      <div className="nb-assign-stats">
+        <div><strong>{totalCount}</strong><span>Lượt giao bài</span></div>
+        <div><strong>{doneCount}</strong><span>Đã hoàn thành</span></div>
+        <div><strong>{totalCount ? Math.round((doneCount / totalCount) * 100) : 0}%</strong><span>Tỉ lệ hoàn thành</span></div>
+      </div>
+
+      <div className="nb-assign-mode-toggle">
+        <button type="button" className={mode === "byProblem" ? "active" : ""} onClick={() => setMode("byProblem")}>Theo bài tập</button>
+        <button type="button" className={mode === "byStudent" ? "active" : ""} onClick={() => setMode("byStudent")}>Theo học sinh</button>
+      </div>
+
+      {mode === "byProblem" ? (
+        <div className="nb-panel nb-assign-panel">
+          <label className="nb-field-label">Chọn bài tập</label>
+          <select className="nb-input" value={selectedProblem} onChange={(e) => { setSelectedProblem(e.target.value); setPickedStudents(new Set()); setConfirmMsg(""); }}>
+            <option value="">— Chọn một bài tập —</option>
+            {problems.map((p) => <option key={p.id} value={p.id}>{p.title} ({topicById.get(p.topic)?.title || "Chưa phân chuyên đề"})</option>)}
+          </select>
+          {selectedProblem && (
+            <>
+              <label className="nb-field-label" style={{ marginTop: 12 }}>Chọn học sinh nhận bài</label>
+              <div className="nb-assign-checklist">
+                {students.map((s) => {
+                  const already = assignedKeySet.has(`${selectedProblem}::${s.id}`);
+                  return (
+                    <label key={s.id} className={`nb-assign-check ${pickedStudents.has(s.id) ? "selected" : ""} ${already ? "already" : ""}`}>
+                      <input type="checkbox" checked={pickedStudents.has(s.id)} disabled={already} onChange={() => toggleStudent(s.id)} />
+                      <Avatar name={s.name} size={26} />
+                      <span>{s.name}</span>
+                      {already && <small>Đã giao</small>}
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="nb-editor-actions">
+                <button className="nb-btn nb-btn-primary" type="button" disabled={pickedStudents.size === 0} onClick={submitByProblem}><Send size={14} /> Giao cho {pickedStudents.size || ""} học sinh</button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="nb-panel nb-assign-panel">
+          <label className="nb-field-label">Chọn học sinh</label>
+          <select className="nb-input" value={selectedStudent} onChange={(e) => { setSelectedStudent(e.target.value); setPickedProblems(new Set()); setConfirmMsg(""); }}>
+            <option value="">— Chọn một học sinh —</option>
+            {students.map((s) => <option key={s.id} value={s.id}>{s.name} (@{s.username})</option>)}
+          </select>
+          {selectedStudent && (
+            <>
+              <label className="nb-field-label" style={{ marginTop: 12 }}>Chọn bài tập giao</label>
+              <div className="nb-assign-checklist">
+                {problems.map((p) => {
+                  const already = assignedKeySet.has(`${p.id}::${selectedStudent}`);
+                  return (
+                    <label key={p.id} className={`nb-assign-check ${pickedProblems.has(p.id) ? "selected" : ""} ${already ? "already" : ""}`}>
+                      <input type="checkbox" checked={pickedProblems.has(p.id)} disabled={already} onChange={() => toggleProblem(p.id)} />
+                      <span><strong>{p.title}</strong><small>{topicById.get(p.topic)?.title || "Chưa phân chuyên đề"} · {p.points} điểm</small></span>
+                      {already && <small>Đã giao</small>}
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="nb-editor-actions">
+                <button className="nb-btn nb-btn-primary" type="button" disabled={pickedProblems.size === 0} onClick={submitByStudent}><Send size={14} /> Giao {pickedProblems.size || ""} bài tập</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {confirmMsg && <div className="nb-login-error" style={{ color: "var(--ac-green)", background: "rgba(46,158,109,0.1)", marginTop: 10 }}><CheckCircle2 size={14} /> {confirmMsg}</div>}
+
+      <div className="nb-assign-overview">
+        <div className="nb-editor-head" style={{ padding: 0, border: 0, marginTop: 26, marginBottom: 10 }}>
+          <h3 className="nb-h3">Tổng quan bài đã giao</h3>
+        </div>
+        <div className="nb-assign-filters">
+          <select className="nb-input" value={filterStudent} onChange={(e) => setFilterStudent(e.target.value)}>
+            <option value="all">Tất cả học sinh</option>
+            {students.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <select className="nb-input" value={filterProblem} onChange={(e) => setFilterProblem(e.target.value)}>
+            <option value="all">Tất cả bài tập</option>
+            {problems.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+          </select>
+          <div className="nb-filter-row" style={{ margin: 0 }}>
+            {[["all", "Tất cả"], ["todo", "Chưa làm"], ["attempted", "Chưa đạt"], ["done", "Hoàn thành"]].map(([key, label]) => (
+              <button key={key} className={`nb-chip ${filterStatus === key ? "active" : ""}`} onClick={() => setFilterStatus(key)}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {rows.length === 0 ? (
+          <p className="nb-sub" style={{ padding: 14 }}>Chưa có bài nào được giao phù hợp bộ lọc.</p>
+        ) : (
+          <div className="nb-assign-rows">
+            {rows.map((row) => {
+              const meta = ASSIGNMENT_STATUS_META[row.status];
+              return (
+                <div className="nb-assign-row" key={row.id}>
+                  <Avatar name={row.student.name} size={28} />
+                  <div className="nb-assign-row-info">
+                    <strong>{row.student.name}</strong>
+                    <small>{row.problem.title}</small>
+                  </div>
+                  <span className={`nb-pill ${meta.cls}`}>{meta.label}</span>
+                  <button type="button" className="nb-icon-btn" title="Xem bài nộp" aria-label="Xem bài nộp" onClick={() => setReviewRow(row)}><Eye size={14} /></button>
+                  <button type="button" className="nb-icon-btn nb-danger-icon" title="Hủy giao bài" aria-label="Hủy giao bài" onClick={() => removeAssignment(row.id)}><Trash2 size={14} /></button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {reviewRow && (
+        <SubmissionReviewModal
+          problem={reviewRow.problem}
+          submissions={submissions.filter((s) => s.problemId === reviewRow.problemId && s.studentId === reviewRow.studentId)}
+          students={[reviewRow.student]}
+          onClose={() => setReviewRow(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 
 function ContestRunner({ contest, onExit, isTeacher, solvedByCurrent, onVerdict, problems }) {
   const [remaining, setRemaining] = useState(0);
@@ -2333,8 +2637,9 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
 const BASE_NAV = [
   { key: "overview", label: "Tổng quan", shortLabel: "Tổng quan", icon: Home },
   { key: "lessons", label: "Bài giảng", shortLabel: "Bài giảng", icon: BookOpen },
-  { key: "problems", label: "Luyện tập", shortLabel: "Luyện tập", icon: Code2 },
-  { key: "contests", label: "Thi thử", shortLabel: "Đề thi", icon: Clock },
+  { key: "problems", label: "Luyện tập & Python", shortLabel: "Luyện tập", icon: Code2 },
+  { key: "assignments", label: "Bài được giao", shortLabel: "Được giao", icon: ListChecks },
+  { key: "contests", label: "Đề thi thử", shortLabel: "Đề thi", icon: Clock },
   { key: "leaderboard", label: "Bảng xếp hạng", shortLabel: "Xếp hạng", icon: Trophy },
   { key: "discussion", label: "Thảo luận", shortLabel: "Thảo luận", icon: MessageSquare },
 ];
@@ -2348,6 +2653,7 @@ function App() {
   const [discussions, setDiscussions] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [lessonProgress, setLessonProgress] = useState({});
   const [authUserId, setAuthUserId] = useState(null);
   const [loginError, setLoginError] = useState("");
@@ -2382,9 +2688,10 @@ function App() {
       setTopics(data.topics);
       setProblems(data.problems);
       setContests(data.contests);
-      setSubmissions(data.submissions);
+      setSubmissions((prev) => mergeLocalCode(prev, data.submissions));
       setDiscussions(data.discussions);
       setAccounts(data.accounts);
+      setAssignments(data.assignments);
       const sessionUserId = lsGet("session-user");
       if (sessionUserId && data.accounts.some((a) => a.id === sessionUserId)) setAuthUserId(sessionUserId);
     } catch (e) {
@@ -2408,18 +2715,22 @@ function App() {
   }, [currentUser?.id, isTeacher]);
 
   useEffect(() => {
+    let tick = 0;
     const interval = setInterval(async () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      tick += 1;
       try {
-        const data = await fetchAll();
-        setTopics(data.topics);
-        setProblems(data.problems);
+        const data = await fetchAll({ light: tick % 5 !== 0 });
+        if (data.topics) setTopics(data.topics);
+        if (data.problems) setProblems(data.problems);
         setContests(data.contests);
-        setSubmissions(data.submissions);
+        setSubmissions((prev) => mergeLocalCode(prev, data.submissions));
         setDiscussions(data.discussions);
         setAccounts(data.accounts);
+        setAssignments(data.assignments);
         setStorageError(false);
       } catch (e) { /* transient network hiccup, ignore silently */ }
-    }, 20000);
+    }, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -2430,9 +2741,10 @@ function App() {
       setTopics(data.topics);
       setProblems(data.problems);
       setContests(data.contests);
-      setSubmissions(data.submissions);
+      setSubmissions((prev) => mergeLocalCode(prev, data.submissions));
       setDiscussions(data.discussions);
       setAccounts(data.accounts);
+      setAssignments(data.assignments);
       const retryResult = await retryPendingProblemWrites();
       if (retryResult.failed === 0) setStorageError(false);
     } catch (e) {
@@ -2607,6 +2919,24 @@ function App() {
     setDiscussions((prev) => prev.map((d) => (d.id === threadId ? { ...d, replies: [...d.replies, reply] } : d)));
     dbAddReply(threadId, reply).catch(() => setStorageError(true));
   }
+  function addAssignments(pairs) {
+    if (!isTeacher || pairs.length === 0) return;
+    const existingKeys = new Set(assignments.map((a) => `${a.problemId}::${a.studentId}`));
+    const newRows = pairs
+      .filter(({ problemId, studentId }) => !existingKeys.has(`${problemId}::${studentId}`))
+      .map(({ problemId, studentId }) => ({
+        id: "asg" + Date.now() + Math.random().toString(36).slice(2, 7),
+        problemId, studentId, assignedBy: currentUser?.name || "", note: "", createdAt: new Date().toISOString(),
+      }));
+    if (newRows.length === 0) return;
+    setAssignments((prev) => [...prev, ...newRows]);
+    dbAddAssignments(newRows).catch(() => setStorageError(true));
+  }
+  function removeAssignment(id) {
+    if (!isTeacher) return;
+    setAssignments((prev) => prev.filter((a) => a.id !== id));
+    dbRemoveAssignment(id).catch(() => setStorageError(true));
+  }
   function resetPassword(id, newPassword) {
     if (!isTeacher) return;
     const target = accounts.find((account) => account.id === id);
@@ -2641,7 +2971,9 @@ function App() {
     dbUpdatePassword(currentUser.id, hash).catch(() => setStorageError(true));
   }
 
-  const navItems = isTeacher ? [...BASE_NAV, ACCOUNTS_NAV] : BASE_NAV;
+  const navItems = (isTeacher ? [...BASE_NAV, ACCOUNTS_NAV] : BASE_NAV).map((item) =>
+    item.key === "assignments" && isTeacher ? { ...item, label: "Giao bài", shortLabel: "Giao bài" } : item
+  );
   const activeTabLabel = navItems.find((n) => n.key === tab)?.label;
 
   return (
@@ -2882,6 +3214,40 @@ function App() {
         .nb-exam-check small { color: var(--slate); font-size: 10px; }
         .nb-exam-check > svg { color: var(--pen-blue); opacity: 0; }
         .nb-exam-check.selected > svg { opacity: 1; }
+        .nb-assigned-list { display: flex; flex-direction: column; gap: 8px; }
+        .nb-assigned-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 15px; border: 1px solid var(--paper-line); border-radius: 10px; background: #fff; cursor: pointer; text-align: left; font-family: inherit; transition: border-color .12s, background .12s; }
+        .nb-assigned-row:hover { border-color: var(--pen-blue); background: rgba(4,166,199,0.04); }
+        .nb-assigned-row-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+        .nb-assigned-row-main strong { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-assigned-row-main small { color: var(--slate); font-size: 11px; }
+        .nb-assign-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+        .nb-assign-stats > div { display: flex; flex-direction: column; gap: 3px; padding: 14px; border: 1px solid var(--paper-line); border-radius: 10px; background: #fff; }
+        .nb-assign-stats strong { font: 700 22px 'JetBrains Mono', monospace; color: var(--pen-blue); }
+        .nb-assign-stats span { color: var(--slate); font-size: 11px; }
+        .nb-assign-mode-toggle { display: inline-flex; gap: 4px; padding: 4px; border-radius: 10px; background: var(--paper-line); margin-bottom: 14px; }
+        .nb-assign-mode-toggle button { padding: 8px 16px; border: 0; border-radius: 7px; background: transparent; color: var(--slate); font: 600 12.5px inherit; cursor: pointer; }
+        .nb-assign-mode-toggle button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(16,42,67,0.12); }
+        .nb-assign-panel { display: flex; flex-direction: column; gap: 4px; }
+        .nb-assign-checklist { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; max-height: 260px; overflow-y: auto; padding: 3px; margin-top: 8px; }
+        .nb-assign-check { display: flex; align-items: center; gap: 9px; padding: 10px; border: 1px solid var(--paper-line); border-radius: 8px; background: #FBFEFE; cursor: pointer; }
+        .nb-assign-check.selected { border-color: var(--pen-blue); background: rgba(4,166,199,0.06); }
+        .nb-assign-check.already { opacity: 0.55; cursor: not-allowed; }
+        .nb-assign-check input { accent-color: var(--pen-blue); }
+        .nb-assign-check > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+        .nb-assign-check strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+        .nb-assign-check small { color: var(--slate); font-size: 10px; margin-left: auto; }
+        .nb-assign-overview { margin-top: 8px; }
+        .nb-assign-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+        .nb-assign-filters select { width: auto; min-width: 180px; }
+        .nb-assign-rows { display: flex; flex-direction: column; gap: 7px; }
+        .nb-assign-row { display: flex; align-items: center; gap: 11px; padding: 10px 13px; border: 1px solid var(--paper-line); border-radius: 9px; background: #fff; }
+        .nb-assign-row-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+        .nb-assign-row-info strong { font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-assign-row-info small { color: var(--slate); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        @media (max-width: 640px) {
+          .nb-assign-checklist { grid-template-columns: 1fr; }
+          .nb-assign-stats { grid-template-columns: 1fr; }
+        }
         .nb-exam-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
         .nb-exam-search { display: flex; align-items: center; gap: 8px; flex: 1 1 240px; height: 40px; padding: 0 11px; background: #fff; border: 1px solid var(--paper-line); border-radius: 8px; color: var(--slate); }
         .nb-exam-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: 13px inherit; }
@@ -4050,7 +4416,7 @@ function App() {
           <aside className="nb-sidebar nb-only-desktop">
             <div className="nb-brand">
               <div className="nb-brand-mark"><GraduationCap size={18} /></div>
-              <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>ÔN THI HSG · 2026</span></div>
+              <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>Nội trú Mường Nhé</span></div>
             </div>
             <nav className="nb-nav">
               {navItems.map((n) => (
@@ -4122,6 +4488,14 @@ function App() {
                   isTeacher={isTeacher} currentUser={currentUser} problems={problems} submissions={submissions}
                   points={points} addProblem={addProblem} updateProblem={updateProblem} removeProblem={removeProblem} topics={topics}
                   solvedByCurrent={solvedByCurrent} onVerdict={registerVerdict} students={students}
+                />
+              )}
+              {tab === "assignments" && (
+                <AssignedView
+                  isTeacher={isTeacher} currentUser={currentUser} problems={problems} students={students}
+                  assignments={assignments} submissions={submissions} addAssignments={addAssignments}
+                  removeAssignment={removeAssignment} solvedByCurrent={solvedByCurrent} onVerdict={registerVerdict}
+                  topics={topics}
                 />
               )}
               {tab === "contests" && (
