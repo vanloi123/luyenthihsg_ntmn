@@ -1,7 +1,7 @@
 
 
-export const SUPABASE_URL = "https://hghfdtjgnehqangobkls.supabase.co";
-export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhnaGZkdGpnbmVocWFuZ29ia2xzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAwMjAyMDMsImV4cCI6MjEwNTU5NjIwM30.1wqP80DOmpni5gknkoDQCXJeUsICxs9sHLMPsgphtHA";
+export const SUPABASE_URL = "https://eukkftecjmxpvzzziejc.supabase.co";
+export const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1a2tmdGVjam14cHZ6enppZWpjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY2NTU4NTcsImV4cCI6MjEwMjIzMTg1N30.lkrOMtAv-X2VD-_OJzxDBeK6P9iHnKRLbK27LdNUbbQ";
 
 
 export const SISTER_SITE_URL = "https://vanloi123.info.vn/";
