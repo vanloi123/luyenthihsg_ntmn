@@ -668,18 +668,12 @@ function StorageBanner({ visible, message, onDismiss, onRetry }) {
   );
 }
 
-function BrandLogoSvg({ full = false }) {
+function BrandLogoSvg() {
   return (
-    <svg viewBox={full ? "297 292 1340 1340" : "615 385 615 615"} role="img" aria-label="Logo Lợi - Informatics | Mường Nhé" xmlns="http://www.w3.org/2000/svg">
+    <svg viewBox="615 385 615 615" role="img" aria-label="Logo Lợi" xmlns="http://www.w3.org/2000/svg">
       <path d="M665 437 V960 H1192" fill="none" stroke="#00D4FF" strokeWidth="60" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M815 698 L1003 453 L1192 698" fill="none" stroke="#10B981" strokeWidth="52" strokeLinecap="round" strokeLinejoin="round" />
       <circle cx="1003" cy="453" r="39" fill="#00D4FF" />
-      {full && (
-        <>
-          <text x="985" y="1360" textAnchor="middle" fill="#FFFFFF" fontFamily="'DejaVu Sans', 'Segoe UI', Arial, sans-serif" fontWeight="800" fontSize="172" textLength="470" lengthAdjust="spacing">LỢI</text>
-          <text x="967" y="1517" textAnchor="middle" fill="#38BDF8" fontFamily="'DejaVu Sans', 'Segoe UI', Arial, sans-serif" fontWeight="700" fontSize="46" textLength="960" lengthAdjust="spacing">INFORMATICS | MƯỜNG NHÉ</text>
-        </>
-      )}
     </svg>
   );
 }
@@ -724,7 +718,7 @@ function LoginScreen({ onLogin, error, busy }) {
   return (
     <div className="nb-login-wrap">
       <form className="nb-login-card" onSubmit={submit}>
-        <div className="nb-brand-mark nb-brand-logo nb-brand-logo-full" style={{ width: 128, height: 128, margin: "0 auto 14px", borderRadius: 20 }}><BrandLogoSvg full /></div>
+        <div className="nb-brand-mark nb-brand-logo" style={{ width: 52, height: 52, margin: "0 auto 14px" }}><BrandLogoSvg /></div>
         <h2 className="nb-h2" style={{ textAlign: "center" }}>Đội tuyển Tin học</h2>
         <p className="nb-sub" style={{ textAlign: "center", marginBottom: 22 }}>Đăng nhập bằng tài khoản được giáo viên cấp</p>
 
@@ -4436,11 +4430,6 @@ function App() {
 
         .nb-brand-mark.nb-brand-logo { background: #0F172A; padding: 0; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 6px 16px rgba(15,23,42,.28); box-sizing: border-box; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         .nb-brand-mark.nb-brand-logo svg { display: block; width: 72%; height: 72%; flex: none; }
-        .nb-brand-mark.nb-brand-logo.nb-brand-logo-full { width: 64px; height: 64px; border-radius: 14px; }
-        .nb-brand-mark.nb-brand-logo.nb-brand-logo-full svg { width: 100%; height: 100%; }
-        .nb-sidebar .nb-brand-text { min-width: 0; }
-        .nb-sidebar .nb-brand-text b { font-size: 13.5px; }
-        .nb-sidebar .nb-brand-text span { font-size: 10px; }
         /* --- Cập nhật: biểu đồ đường đua điểm (không tràn trên điện thoại) + chuyên đề thu gọn --- */
         .nb-bar-fill { height: var(--pct, 0%); }
         .nb-bar-value { max-width: 100%; white-space: nowrap; font-size: 10.5px; }
@@ -4479,7 +4468,7 @@ function App() {
         <>
           <aside className="nb-sidebar nb-only-desktop">
             <div className="nb-brand">
-              <div className="nb-brand-mark nb-brand-logo nb-brand-logo-full"><BrandLogoSvg full /></div>
+              <div className="nb-brand-mark nb-brand-logo"><BrandLogoSvg /></div>
               <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>Nội trú Mường Nhé</span></div>
             </div>
             <nav className="nb-nav">
