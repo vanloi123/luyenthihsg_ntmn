@@ -1109,6 +1109,156 @@ function SisterSiteBanner() {
   );
 }
 
+function localDayKey(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function formatDayLabel(key) {
+  const [y, m, d] = key.split("-");
+  return `${d}/${m}`;
+}
+function formatTimeOnly(value) {
+  try { return new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
+  catch (e) { return ""; }
+}
+
+function DailyActivityPanel({ submissions, students }) {
+  const todayKey = localDayKey(Date.now());
+  const [range, setRange] = useState(14);
+  const [selectedDay, setSelectedDay] = useState(todayKey);
+  const [openStudent, setOpenStudent] = useState(null);
+  const [openSubId, setOpenSubId] = useState(null);
+  const chartRef = useRef(null);
+  useEffect(() => { const el = chartRef.current; if (el) el.scrollLeft = el.scrollWidth; }, [range]);
+
+  const studentById = useMemo(() => new Map(students.map((st) => [st.id, st])), [students]);
+
+  const byDay = useMemo(() => {
+    const map = new Map();
+    submissions.forEach((sub) => {
+      const key = localDayKey(sub.createdAt);
+      if (!key) return;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(sub);
+    });
+    return map;
+  }, [submissions]);
+
+  const days = useMemo(() => {
+    const list = [];
+    for (let i = range - 1; i >= 0; i -= 1) {
+      const d = new Date();
+      d.setHours(12, 0, 0, 0);
+      d.setDate(d.getDate() - i);
+      const key = localDayKey(d);
+      const subs = byDay.get(key) || [];
+      list.push({ key, count: subs.length, active: new Set(subs.map((x) => x.studentId)).size });
+    }
+    return list;
+  }, [byDay, range]);
+  const maxCount = Math.max(1, ...days.map((d) => d.count));
+
+  const daySubs = byDay.get(selectedDay) || [];
+  const perStudent = useMemo(() => {
+    const map = new Map();
+    daySubs.forEach((sub) => {
+      if (!map.has(sub.studentId)) map.set(sub.studentId, []);
+      map.get(sub.studentId).push(sub);
+    });
+    return Array.from(map.entries()).map(([studentId, subs]) => {
+      const ordered = subs.slice().sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+      return {
+        studentId,
+        student: studentById.get(studentId),
+        subs: ordered,
+        problems: new Set(ordered.map((x) => x.problemId)).size,
+        solved: new Set(ordered.filter((x) => x.verdict === "AC").map((x) => x.problemId)).size,
+      };
+    }).sort((a, b) => b.subs.length - a.subs.length || String(a.student?.name || "").localeCompare(String(b.student?.name || ""), "vi"));
+  }, [daySubs, studentById]);
+
+  const activeCount = perStudent.length;
+  const avgPerStudent = activeCount ? (daySubs.length / activeCount).toFixed(1) : "0";
+  const inactiveCount = Math.max(0, students.length - activeCount);
+
+  function pickDay(key) {
+    setSelectedDay(key);
+    setOpenStudent(null);
+    setOpenSubId(null);
+  }
+
+  return (
+    <section className="nb-panel nb-daily-panel">
+      <div className="nb-home-section-head">
+        <div><div className="nb-eyebrow">Thống kê theo ngày</div><h2>Số lượt làm bài mỗi ngày</h2></div>
+        <div className="nb-filter-row" style={{ margin: 0 }}>
+          {[7, 14, 30].map((n) => <button key={n} type="button" className={`nb-chip ${range === n ? "active" : ""}`} onClick={() => setRange(n)}>{n} ngày</button>)}
+        </div>
+      </div>
+
+      <div className="nb-daily-chart" ref={chartRef} role="group" aria-label="Biểu đồ số lượt nộp theo ngày">
+        {days.map((d) => (
+          <button key={d.key} type="button" className={`nb-daily-col ${selectedDay === d.key ? "selected" : ""}`} onClick={() => pickDay(d.key)} title={`${formatDayLabel(d.key)}: ${d.count} lượt nộp, ${d.active} học sinh`}>
+            <span className="nb-daily-count nb-mono">{d.count}</span>
+            <span className="nb-daily-bar-track"><span className="nb-daily-bar" style={{ height: `${(d.count / maxCount) * 100}%` }} /></span>
+            <span className="nb-daily-label">{formatDayLabel(d.key)}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="nb-daily-toolbar">
+        <label className="nb-daily-date"><span>Xem ngày</span><input type="date" className="nb-input" value={selectedDay} max={todayKey} onChange={(e) => e.target.value && pickDay(e.target.value)} /></label>
+        <div className="nb-daily-stats">
+          <div><strong>{daySubs.length}</strong><span>Lượt nộp</span></div>
+          <div><strong>{activeCount}/{students.length}</strong><span>Học sinh làm bài</span></div>
+          <div><strong>{avgPerStudent}</strong><span>Lượt nộp / học sinh</span></div>
+        </div>
+      </div>
+
+      {perStudent.length === 0 ? (
+        <p className="nb-sub" style={{ padding: "6px 2px 2px" }}>Ngày {formatDayLabel(selectedDay)} chưa có học sinh nào nộp bài.</p>
+      ) : (
+        <div className="nb-daily-list">
+          {perStudent.map((row) => {
+            const isOpen = openStudent === row.studentId;
+            return (
+              <div className="nb-daily-student" key={row.studentId}>
+                <button type="button" className="nb-daily-student-head" aria-expanded={isOpen} onClick={() => { setOpenStudent(isOpen ? null : row.studentId); setOpenSubId(null); }}>
+                  <Avatar name={row.student?.name || row.studentId} size={30} />
+                  <span className="nb-daily-student-info"><strong>{row.student?.name || row.studentId}</strong><small>{row.problems} bài khác nhau · {row.solved} bài đạt</small></span>
+                  <span className="nb-daily-student-count nb-mono">{row.subs.length} lượt</span>
+                  <ChevronRight size={16} className={`nb-review-item-chevron ${isOpen ? "open" : ""}`} />
+                </button>
+                {isOpen && (
+                  <div className="nb-daily-subs">
+                    {row.subs.map((sub) => {
+                      const subOpen = openSubId === sub.id;
+                      return (
+                        <div className="nb-daily-sub" key={sub.id}>
+                          <button type="button" className="nb-daily-sub-head" aria-expanded={subOpen} onClick={() => setOpenSubId(subOpen ? null : sub.id)}>
+                            <span className="nb-daily-sub-time nb-mono">{formatTimeOnly(sub.createdAt)}</span>
+                            <span className="nb-daily-sub-title">{sub.problemTitle || sub.problemId}</span>
+                            <VerdictPill verdict={sub.verdict} />
+                            <span className="nb-daily-sub-score nb-mono">{sub.score ?? 0}đ</span>
+                            <Code2 size={14} className="nb-daily-sub-code-icon" />
+                          </button>
+                          {subOpen && <div className="nb-history-code-wrap"><LazySourceCode submission={sub} emptyMessage="Lượt nộp này không có lưu source code." /></div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {inactiveCount > 0 && perStudent.length > 0 && <p className="nb-sub nb-daily-foot">{inactiveCount} học sinh chưa nộp bài trong ngày này.</p>}
+    </section>
+  );
+}
+
 function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, problems, onNavigate }) {
   const isTeacher = currentUser.role === "teacher" || currentUser.role === "admin";
   const firstName = currentUser.name.split(" ").slice(-1)[0];
@@ -1215,6 +1365,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
           {activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemIds.length} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Eye size={15} /> Quản lý kỳ thi</button></> : <><p className="nb-sub">Tạo hoặc mở một kỳ thi để học sinh bắt đầu thử sức.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Plus size={15} /> Mở khu vực đề thi</button></>}
         </section>
       </div>
+
+      <DailyActivityPanel submissions={submissions} students={students} />
 
       <div className="nb-home-insight-grid">
         <section className="nb-panel nb-home-insight-card">
@@ -4452,6 +4604,54 @@ function App() {
           .nb-practice-roadmap-head { flex-direction: column; align-items: stretch; }
           .nb-practice-roadmap-tools { align-items: flex-start; }
           .nb-practice-roadmap-tools > div { justify-content: flex-start; }
+        }
+
+        /* --- Thống kê lượt làm bài theo ngày (tổng quan giáo viên) --- */
+        .nb-daily-panel { margin: 0 0 18px; padding: 18px 20px; }
+        .nb-daily-chart { display: flex; align-items: stretch; gap: 6px; height: 168px; margin: 6px 0 14px; overflow-x: auto; padding-bottom: 2px; }
+        .nb-daily-col { flex: 1 0 28px; min-width: 28px; display: flex; flex-direction: column; align-items: center; gap: 4px; background: none; border: 0; padding: 4px 0 2px; border-radius: 8px; cursor: pointer; font: inherit; color: inherit; }
+        .nb-daily-col:hover { background: rgba(37,99,235,.05); }
+        .nb-daily-col.selected { background: rgba(37,99,235,.1); }
+        .nb-daily-count { font-size: 10.5px; color: var(--slate); }
+        .nb-daily-bar-track { flex: 1; width: 100%; max-width: 26px; display: flex; align-items: flex-end; }
+        .nb-daily-bar { display: block; width: 100%; min-height: 3px; border-radius: 5px 5px 0 0; background: linear-gradient(180deg, #4f86f7, #2563eb); }
+        .nb-daily-col.selected .nb-daily-bar { background: linear-gradient(180deg, #22b8c7, #12a36a); }
+        .nb-daily-label { font-size: 10px; color: var(--slate); white-space: nowrap; }
+        .nb-daily-col.selected .nb-daily-label { color: var(--ink); font-weight: 700; }
+        .nb-daily-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+        .nb-daily-date { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--slate); }
+        .nb-daily-date .nb-input { width: 170px; }
+        .nb-daily-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+        .nb-daily-stats > div { display: flex; flex-direction: column; gap: 1px; padding: 8px 14px; border: 1px solid var(--paper-line); border-radius: 10px; background: #fff; min-width: 96px; }
+        .nb-daily-stats strong { font-size: 18px; color: var(--ink); }
+        .nb-daily-stats span { font-size: 11px; color: var(--slate); }
+        .nb-daily-list { display: flex; flex-direction: column; gap: 7px; }
+        .nb-daily-student { border: 1px solid var(--paper-line); border-radius: 10px; background: #fff; overflow: hidden; flex-shrink: 0; }
+        .nb-daily-student-head { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: none; border: 0; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+        .nb-daily-student-head:hover { background: rgba(37,99,235,.04); }
+        .nb-daily-student-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .nb-daily-student-info strong { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-daily-student-info small { font-size: 11px; color: var(--slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-daily-student-count { font-size: 12px; font-weight: 700; color: var(--pen-blue); white-space: nowrap; }
+        .nb-daily-subs { display: flex; flex-direction: column; border-top: 1px solid var(--paper-line); background: #fafbfd; }
+        .nb-daily-sub { border-bottom: 1px solid var(--paper-line); flex-shrink: 0; }
+        .nb-daily-sub:last-child { border-bottom: 0; }
+        .nb-daily-sub-head { width: 100%; display: flex; align-items: center; gap: 9px; padding: 8px 12px; background: none; border: 0; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+        .nb-daily-sub-head:hover { background: rgba(37,99,235,.05); }
+        .nb-daily-sub-time { font-size: 11px; color: var(--slate); flex: 0 0 42px; }
+        .nb-daily-sub-title { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-daily-sub-score { font-size: 11px; color: var(--slate); flex: 0 0 auto; }
+        .nb-daily-sub-code-icon { color: var(--slate); flex: 0 0 auto; }
+        .nb-daily-foot { margin: 10px 2px 0; }
+        @media (max-width: 640px) {
+          .nb-daily-panel { padding: 14px 12px; }
+          .nb-daily-chart { height: 148px; }
+          .nb-daily-date .nb-input { width: 100%; }
+          .nb-daily-date { width: 100%; }
+          .nb-daily-stats { width: 100%; }
+          .nb-daily-stats > div { flex: 1; min-width: 0; padding: 8px 10px; }
+          .nb-daily-sub-head { flex-wrap: wrap; }
+          .nb-daily-sub-title { flex-basis: calc(100% - 60px); order: 2; }
         }
       `}</style>
 
