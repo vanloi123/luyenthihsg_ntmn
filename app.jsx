@@ -668,6 +668,16 @@ function StorageBanner({ visible, message, onDismiss, onRetry }) {
   );
 }
 
+function BrandLogoSvg() {
+  return (
+    <svg viewBox="615 385 615 615" role="img" aria-label="Logo Lợi" xmlns="http://www.w3.org/2000/svg">
+      <path d="M665 437 V960 H1192" fill="none" stroke="#00D4FF" strokeWidth="60" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M815 698 L1003 453 L1192 698" fill="none" stroke="#10B981" strokeWidth="52" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="1003" cy="453" r="39" fill="#00D4FF" />
+    </svg>
+  );
+}
+
 function SimpleBarChart({ data, highlightName }) {
   const max = Math.max(1, ...data.map((d) => d.pts));
   return (
@@ -677,7 +687,7 @@ function SimpleBarChart({ data, highlightName }) {
           <div className="nb-bar-track">
             <div
               className={"nb-bar-fill " + (d.full === highlightName ? "me" : "")}
-              style={{ height: (max ? (d.pts / max) * 100 : 0) + "%" }}
+              style={{ "--pct": (max ? (d.pts / max) * 100 : 0) + "%" }}
               title={d.full + ": " + d.pts + " điểm"}
             />
           </div>
@@ -708,7 +718,7 @@ function LoginScreen({ onLogin, error, busy }) {
   return (
     <div className="nb-login-wrap">
       <form className="nb-login-card" onSubmit={submit}>
-        <div className="nb-brand-mark" style={{ width: 44, height: 44, margin: "0 auto 14px" }}><GraduationCap size={22} /></div>
+        <div className="nb-brand-mark nb-brand-logo" style={{ width: 52, height: 52, margin: "0 auto 14px" }}><BrandLogoSvg /></div>
         <h2 className="nb-h2" style={{ textAlign: "center" }}>Đội tuyển Tin học</h2>
         <p className="nb-sub" style={{ textAlign: "center", marginBottom: 22 }}>Đăng nhập bằng tài khoản được giáo viên cấp</p>
 
@@ -1167,7 +1177,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     return { student, attempts: studentSubmissions.length, recentAttempts: recentSubmissions.length, lastSubmission, label };
   }).sort((a, b) => (a.recentAttempts - b.recentAttempts) || (solvedCount(a.student.id) - solvedCount(b.student.id)) || (a.attempts - b.attempts))
     .slice(0, 5);
-  const recentClassActivity = submissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 5);
+  const studentNameById = new Map(students.map((s) => [s.id, s.name]));
+  const recentClassActivity = submissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 10);
 
   return (
     <div className="nb-home-page">
@@ -1221,7 +1232,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
         <section className="nb-panel nb-home-questions"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Hộp việc cần làm</div><h2>Câu hỏi chờ trả lời</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("discussion")}>Mở thảo luận <ChevronRight size={14} /></button></div>{openThreads.length === 0 ? <div className="nb-home-empty"><CheckCircle2 size={22} /><strong>Đã xử lý hết</strong><span>Hiện không có câu hỏi nào đang chờ giáo viên.</span></div> : <div className="nb-home-question-list">{openThreads.slice(0, 4).map((discussion) => <button className="nb-home-question-row" key={discussion.id} onClick={() => onNavigate?.("discussion")}><span className="nb-home-question-icon"><MessageSquare size={14} /></span><span><strong>{discussion.author}</strong><small>{String(discussion.content || "").slice(0, 72)}{String(discussion.content || "").length > 72 ? "…" : ""}</small></span><ChevronRight size={15} /></button>)}</div>}</section>
       </div>
 
-      <section className="nb-panel nb-home-class-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo thời gian thực</div><h2>Hoạt động gần đây của lớp</h2></div><span className="nb-pill nb-pill-ac">{recentClassActivity.length} cập nhật</span></div>{recentClassActivity.length === 0 ? <p className="nb-sub">Chưa có lượt nộp bài gần đây.</p> : <div className="nb-home-class-feed">{recentClassActivity.map((submission, index) => <div key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><span><strong>{submission.studentId}</strong> đã nộp <b>{submission.problemTitle || submission.problemId}</b><small>{submission.verdict} · {submission.score ?? 0} điểm · {formatSubmissionDate(submission.createdAt)}</small></span></div>)}</div>}</section>
+      <section className="nb-panel nb-home-class-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo thời gian thực</div><h2>Hoạt động gần đây của lớp</h2></div><span className="nb-pill nb-pill-ac">{recentClassActivity.length} cập nhật</span></div>{recentClassActivity.length === 0 ? <p className="nb-sub">Chưa có lượt nộp bài gần đây.</p> : <div className="nb-home-class-feed">{recentClassActivity.map((submission, index) => <div key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><span><strong>{studentNameById.get(submission.studentId) || submission.studentId}</strong> đã nộp <b>{submission.problemTitle || submission.problemId}</b><small>{submission.verdict} · {submission.score ?? 0} điểm · {formatSubmissionDate(submission.createdAt)}</small></span></div>)}</div>}</section>
     </div>
   );
 }
@@ -1406,6 +1417,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [active, setActive] = useState(null);
   const [reviewProblem, setReviewProblem] = useState(null);
   const [collapsedMonths, setCollapsedMonths] = useState({});
+  const [collapsedGroups, setCollapsedGroups] = useState({});
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [formError, setFormError] = useState("");
@@ -1506,6 +1518,19 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       .sort((a, b) => b.sortValue - a.sortValue);
   }, [practiceGroups, isTeacher, submissions, currentSubmissions, solvedByCurrent]);
 
+  function toggleGroup(groupKey) {
+    setCollapsedGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
+  }
+  function setAllCollapsed(collapsed) {
+    const groups = {};
+    const months = {};
+    practiceMonthGroups.forEach((month) => {
+      months[month.key] = false;
+      month.groups.forEach((group) => { groups[`${month.key}-${group.id}`] = collapsed; });
+    });
+    setCollapsedMonths(months);
+    setCollapsedGroups(groups);
+  }
   function toggleMonth(monthKey) {
     setCollapsedMonths((current) => ({ ...current, [monthKey]: !current[monthKey] }));
   }
@@ -1785,7 +1810,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       )}
 
       <div className="nb-practice-roadmap">
-        <div className="nb-practice-roadmap-head"><div><div className="nb-eyebrow">Lộ trình hiện tại</div><h3 className="nb-h3">Bài tập theo tháng & chuyên đề</h3><p className="nb-sub" style={{ marginTop: 4 }}>Bấm vào từng tháng để ẩn hoặc hiện danh sách bài tập.</p></div><span className="nb-sub">{filtered.length}/{problems.length} bài đang hiển thị</span></div>
+        <div className="nb-practice-roadmap-head"><div><div className="nb-eyebrow">Lộ trình hiện tại</div><h3 className="nb-h3">Bài tập theo tháng & chuyên đề</h3><p className="nb-sub" style={{ marginTop: 4 }}>Bấm vào từng tháng hoặc từng chuyên đề để ẩn hoặc hiện danh sách bài tập.</p></div><div className="nb-practice-roadmap-tools"><span className="nb-sub">{filtered.length}/{problems.length} bài đang hiển thị</span><div><button type="button" className="nb-btn nb-btn-ghost" onClick={() => setAllCollapsed(true)}>Thu gọn tất cả chuyên đề</button><button type="button" className="nb-btn nb-btn-ghost" onClick={() => setAllCollapsed(false)}>Mở tất cả</button></div></div></div>
         {practiceMonthGroups.map((month, monthIndex) => {
           const isCollapsed = Boolean(collapsedMonths[month.key]);
           return <section className="nb-practice-month-group" key={month.key}>
@@ -1805,12 +1830,14 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
               {month.groups.map((group, groupIndex) => {
                 const groupSolved = group.problems.filter((problem) => solvedByCurrent(problem.id)).length;
                 const groupAttempts = group.problems.reduce((total, problem) => total + (isTeacher ? teacherProblemStats(problem.id).attempts : problemStats(problem.id).attempts), 0);
-                return <section className="nb-practice-group" key={`${month.key}-${group.id}`}>
+                const groupKey = `${month.key}-${group.id}`;
+                const groupCollapsed = Boolean(collapsedGroups[groupKey]);
+                return <section className="nb-practice-group" key={groupKey}>
                   <div className="nb-practice-group-rail"><span>{String(groupIndex + 1).padStart(2, "0")}</span><i /></div>
                   <div className="nb-practice-group-content">
-                    <div className="nb-practice-group-head"><div><p>{group.subtitle}</p><h3>{group.title}</h3></div><div className="nb-practice-group-summary">{isTeacher ? <span>{group.problems.length} bài · {groupAttempts} lượt nộp</span> : <><span>{groupSolved}/{group.problems.length} đã xong</span><div><i style={{ width: `${group.problems.length ? Math.round(groupSolved / group.problems.length * 100) : 0}%` }} /></div></>}</div></div>
-                    <div className="nb-practice-problem-list">{group.problems.map(renderPracticeProblem)}</div>
-                    {isTeacher && <div className="nb-practice-group-actions"><button className="nb-btn nb-btn-ghost" type="button" onClick={() => beginAdd(group.id === "uncategorized" ? undefined : group.id)}><Plus size={14} /> Thêm bài vào chuyên đề</button></div>}
+                    <button type="button" className="nb-practice-group-head nb-practice-group-toggle" aria-expanded={!groupCollapsed} onClick={() => toggleGroup(groupKey)}><div><p>{group.subtitle}</p><h3>{group.title}</h3></div><div className="nb-practice-group-summary">{isTeacher ? <span>{group.problems.length} bài · {groupAttempts} lượt nộp</span> : <><span>{groupSolved}/{group.problems.length} đã xong</span><div><i style={{ width: `${group.problems.length ? Math.round(groupSolved / group.problems.length * 100) : 0}%` }} /></div></>}</div><ChevronRight size={16} className={`nb-practice-group-chevron ${groupCollapsed ? "" : "open"}`} /></button>
+                    {!groupCollapsed && <div className="nb-practice-problem-list">{group.problems.map(renderPracticeProblem)}</div>}
+                    {isTeacher && !groupCollapsed && <div className="nb-practice-group-actions"><button className="nb-btn nb-btn-ghost" type="button" onClick={() => beginAdd(group.id === "uncategorized" ? undefined : group.id)}><Plus size={14} /> Thêm bài vào chuyên đề</button></div>}
                   </div>
                 </section>;
               })}
@@ -4400,6 +4427,32 @@ function App() {
           .nb-panel:has(.nb-management-head) .nb-filter-row .nb-chip { flex: 1; padding-left: 6px; padding-right: 6px; }
           .nb-panel:has(.nb-management-head) .nb-table { min-width: 820px; }
         }
+
+        .nb-brand-mark.nb-brand-logo { background: #0F172A; padding: 0; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 6px 16px rgba(15,23,42,.28); box-sizing: border-box; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        .nb-brand-mark.nb-brand-logo svg { display: block; width: 72%; height: 72%; flex: none; }
+        /* --- Cập nhật: biểu đồ đường đua điểm (không tràn trên điện thoại) + chuyên đề thu gọn --- */
+        .nb-bar-fill { height: var(--pct, 0%); }
+        .nb-bar-value { max-width: 100%; white-space: nowrap; font-size: 10.5px; }
+        .nb-practice-group-toggle { width: 100%; background: none; border: 0; padding: 4px 0; margin-bottom: 9px; cursor: pointer; text-align: left; font: inherit; color: inherit; align-items: center; }
+        .nb-practice-group-toggle > div:first-child { min-width: 0; flex: 1; }
+        .nb-practice-group-chevron { flex-shrink: 0; color: var(--slate); transition: transform .18s ease; }
+        .nb-practice-group-chevron.open { transform: rotate(90deg); }
+        .nb-practice-group-toggle:hover h3 { color: var(--pen-blue); }
+        .nb-practice-roadmap-tools { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+        .nb-practice-roadmap-tools > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+        .nb-practice-roadmap-tools .nb-btn { padding: 6px 11px; font-size: 12px; }
+        @media (max-width: 640px) {
+          .nb-barchart { flex-direction: column; align-items: stretch; height: auto; gap: 9px; padding: 6px 0 0; }
+          .nb-bar-col { flex-direction: row; align-items: center; gap: 8px; height: auto; }
+          .nb-bar-label { order: 1; width: 62px; max-width: 62px; flex: 0 0 62px; text-align: left; font-size: 11px; }
+          .nb-bar-track { order: 2; flex: 1; min-width: 0; max-width: none; height: 14px; align-items: stretch; background: rgba(37,99,235,.07); border-radius: 7px; overflow: hidden; }
+          .nb-bar-fill { height: 100%; width: var(--pct, 0%); min-height: 0; min-width: 3px; border-radius: 7px; background: linear-gradient(90deg, #4f86f7, #2563eb); }
+          .nb-bar-fill.me { background: linear-gradient(90deg, #22b8c7, #12a36a); }
+          .nb-bar-value { order: 3; width: 48px; flex: 0 0 48px; text-align: right; font-size: 12px; }
+          .nb-practice-roadmap-head { flex-direction: column; align-items: stretch; }
+          .nb-practice-roadmap-tools { align-items: flex-start; }
+          .nb-practice-roadmap-tools > div { justify-content: flex-start; }
+        }
       `}</style>
 
       {loading ? (
@@ -4415,7 +4468,7 @@ function App() {
         <>
           <aside className="nb-sidebar nb-only-desktop">
             <div className="nb-brand">
-              <div className="nb-brand-mark"><GraduationCap size={18} /></div>
+              <div className="nb-brand-mark nb-brand-logo"><BrandLogoSvg /></div>
               <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>Nội trú Mường Nhé</span></div>
             </div>
             <nav className="nb-nav">
@@ -4443,7 +4496,7 @@ function App() {
           <main className="nb-main">
             <div className="nb-topbar">
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div className="nb-brand-mark nb-only-mobile" style={{ width: 26, height: 26 }}><GraduationCap size={14} /></div>
+                <div className="nb-brand-mark nb-brand-logo nb-only-mobile" style={{ width: 28, height: 28 }}><BrandLogoSvg /></div>
                 <div className="nb-eyebrow" style={{ margin: 0 }}>{activeTabLabel}</div>
               </div>
               <div className="nb-topbar-user">
