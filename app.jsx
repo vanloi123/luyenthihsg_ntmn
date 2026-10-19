@@ -4430,6 +4430,9 @@ function App() {
 
         .nb-brand-mark.nb-brand-logo { background: #0F172A; padding: 0; box-shadow: 0 0 0 1px rgba(255,255,255,.08), 0 6px 16px rgba(15,23,42,.28); box-sizing: border-box; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         .nb-brand-mark.nb-brand-logo svg { display: block; width: 72%; height: 72%; flex: none; }
+        .nb-brand-text.nb-brand-text-logo { min-width: 0; }
+        .nb-brand-text.nb-brand-text-logo b { font-size: 17px; letter-spacing: .3em; font-weight: 800; color: #fff; line-height: 1.1; }
+        .nb-brand-text.nb-brand-text-logo span { display: block; margin-top: 4px; font-size: 8.5px; letter-spacing: .08em; color: #38BDF8; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         /* --- Cập nhật: biểu đồ đường đua điểm (không tràn trên điện thoại) + chuyên đề thu gọn --- */
         .nb-bar-fill { height: var(--pct, 0%); }
         .nb-bar-value { max-width: 100%; white-space: nowrap; font-size: 10.5px; }
@@ -4469,7 +4472,7 @@ function App() {
           <aside className="nb-sidebar nb-only-desktop">
             <div className="nb-brand">
               <div className="nb-brand-mark nb-brand-logo"><BrandLogoSvg /></div>
-              <div className="nb-brand-text"><b>Tin học thầy Lợi</b><span>Nội trú Mường Nhé</span></div>
+              <div className="nb-brand-text nb-brand-text-logo"><b>LỢI</b><span>INFORMATICS | MƯỜNG NHÉ</span></div>
             </div>
             <nav className="nb-nav">
               {navItems.map((n) => (
