@@ -1,10 +1,10 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback, useReducer } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
-  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink,
+  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink, Keyboard,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, SISTER_SITE_URL, SISTER_SITE_LABEL } from "./config.js";
@@ -174,12 +174,13 @@ async function dbSetLessonProgress(studentId, topicId, progress) {
 // Tải TOÀN BỘ dòng của một bảng bằng cách gọi nhiều trang (range) liên tiếp,
 // tránh bị cắt mất dữ liệu khi bảng vượt quá giới hạn "Max Rows" của Supabase
 // (mặc định 1000 dòng/lần gọi), bất kể sau này bảng phình to đến đâu.
-async function fetchAllRows(table, { order, pageSize = 1000, columns = "*" } = {}) {
+async function fetchAllRows(table, { order, pageSize = 1000, columns = "*", gte = null } = {}) {
   let allRows = [];
   let from = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     let query = supabase.from(table).select(columns).range(from, from + pageSize - 1);
+    if (gte) query = query.gte(gte.column, gte.value);
     if (order) query = query.order(order.column, { ascending: order.ascending });
     const { data, error } = await query;
     if (error) return { data: null, error };
@@ -202,41 +203,64 @@ async function fetchSourceCode(submissionId) {
   return data?.source_code || "";
 }
 // light=true: bỏ qua topics + problems (nặng, ít thay đổi) để tiết kiệm băng thông; trả về null cho 2 mục đó.
-async function fetchAll({ light = false } = {}) {
+// scope: "full" = tất cả; "medium" = bài nộp mới + tài khoản/thảo luận/bài giao + danh sách đề;
+// "fast" = chỉ bài nộp mới + danh sách đề. Bài giảng/đề bài (nặng) chỉ tải ở "full".
+// since: chỉ lấy bài nộp từ mốc này trở đi (tải gia tăng) — dùng cho "fast"/"medium".
+async function fetchAll({ scope = "full", since = null } = {}) {
+  const full = scope === "full";
+  const medium = scope !== "fast";
+  const skipped = { data: null, error: null };
   const [topicsR, problemsR, examsR, submissionsR, discussionsR, repliesR, accountsR, assignmentsR] = await Promise.all([
-    light ? { data: null, error: null } : supabase.from("topics").select("*"),
-    light ? { data: null, error: null } : supabase.from("problems").select("*"),
+    full ? supabase.from("topics").select("*") : skipped,
+    full ? supabase.from("problems").select("*") : skipped,
     supabase.from("exams").select(EXAM_LIST_COLUMNS).order("created_at", { ascending: false }),
-    fetchAllRows("submissions", { order: { column: "created_at", ascending: true }, columns: SUBMISSION_LIST_COLUMNS }),
-    supabase.from("discussions").select("*").order("created_at", { ascending: false }),
-    fetchAllRows("discussion_replies", { order: { column: "created_at", ascending: true } }),
-    supabase.from("accounts").select("*"),
-    fetchAllRows("assignments", { order: { column: "created_at", ascending: true } }),
+    fetchAllRows("submissions", { order: { column: "created_at", ascending: true }, columns: SUBMISSION_LIST_COLUMNS, gte: !full && since ? { column: "created_at", value: since } : null }),
+    medium ? supabase.from("discussions").select("*").order("created_at", { ascending: false }) : skipped,
+    medium ? fetchAllRows("discussion_replies", { order: { column: "created_at", ascending: true } }) : skipped,
+    medium ? supabase.from("accounts").select("*") : skipped,
+    medium ? fetchAllRows("assignments", { order: { column: "created_at", ascending: true } }) : skipped,
   ]);
   const results = [topicsR, problemsR, submissionsR, discussionsR, repliesR, accountsR, assignmentsR];
   const firstError = results.find((r) => r.error);
   if (firstError) throw firstError.error;
 
-  const repliesByThread = {};
-  (repliesR.data || []).forEach((r) => {
-    if (!repliesByThread[r.thread_id]) repliesByThread[r.thread_id] = [];
-    repliesByThread[r.thread_id].push({ author: r.author, role: r.role, content: r.content });
-  });
-  const discussions = (discussionsR.data || []).map((d) => ({
-    id: d.id, author: d.author, role: d.role, topicRef: d.topic_ref, content: d.content,
-    replies: repliesByThread[d.id] || [],
-  }));
+  let discussions = null;
+  if (discussionsR.data) {
+    const repliesByThread = {};
+    (repliesR.data || []).forEach((r) => {
+      if (!repliesByThread[r.thread_id]) repliesByThread[r.thread_id] = [];
+      repliesByThread[r.thread_id].push({ author: r.author, role: r.role, content: r.content });
+    });
+    discussions = discussionsR.data.map((d) => ({
+      id: d.id, author: d.author, role: d.role, topicRef: d.topic_ref, content: d.content,
+      replies: repliesByThread[d.id] || [],
+    }));
+  }
+  const rows = submissionsR.data || [];
+  const cursor = rows.reduce((max, r) => (r.created_at && (!max || r.created_at > max) ? r.created_at : max), null);
 
   return {
     topics: topicsR.data ? topicsR.data.map(mapTopic) : null,
     problems: problemsR.data ? problemsR.data.map(mapProblem) : null,
     exams: (examsR.data || []).map(mapExam),
     examsMissing: !!examsR.error,
-    submissions: (submissionsR.data || []).map(mapSubmission),
+    submissions: rows.map(mapSubmission),
+    partial: !full,
+    cursor,
     discussions,
-    accounts: (accountsR.data || []).map(mapAccount),
-    assignments: (assignmentsR.data || []).map(mapAssignment),
+    accounts: accountsR.data ? accountsR.data.map(mapAccount) : null,
+    assignments: assignmentsR.data ? assignmentsR.data.map(mapAssignment) : null,
   };
+}
+// Gộp bài nộp mới vào danh sách hiện có (theo id), giữ source code đã có và thứ tự thời gian.
+function mergeIncremental(prev, incoming) {
+  if (!incoming.length) return prev;
+  const byId = new Map((prev || []).map((x) => [x.id, x]));
+  incoming.forEach((x) => {
+    const old = byId.get(x.id);
+    byId.set(x.id, old && old.sourceCode && !x.sourceCode ? { ...x, sourceCode: old.sourceCode } : x);
+  });
+  return [...byId.values()].sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
 }
 
 async function dbAddTopic(t) {
@@ -3251,7 +3275,7 @@ function ExamsView({ exams, examsMissing, isTeacher, currentUser, students, prac
   useEffect(() => {
     if (mode.type !== "list") return undefined;
     loadMeta();
-    const t = setInterval(() => { if (!document.hidden) { loadMeta(); setNow(Date.now()); } }, 45000);
+    const t = setInterval(() => { if (!document.hidden) { loadMeta(); setNow(Date.now()); } }, 60000);
     return () => clearInterval(t);
   }, [mode.type, loadMeta]);
   useEffect(() => { if (notice) { const t = setTimeout(() => setNotice(""), 5000); return () => clearTimeout(t); } return undefined; }, [notice]);
@@ -3651,6 +3675,489 @@ function AccountsView({ accounts, resetPassword, addAccount, removeAccount, curr
 /*  APP SHELL                                                               */
 /* ---------------------------------------------------------------------- */
 
+/* ====================================================================== */
+/*  GIẢI TRÍ: GÕ LỆNH PYTHON                                              */
+/* ====================================================================== */
+const TYPING_CATEGORIES = [
+  { key: "all", label: "Tất cả" },
+  { key: "co-ban", label: "Cơ bản" },
+  { key: "chuoi", label: "Chuỗi" },
+  { key: "list", label: "List" },
+  { key: "dict", label: "Dict & Set" },
+  { key: "lap", label: "Điều kiện & vòng lặp" },
+  { key: "ham", label: "Hàm, module & file" },
+];
+const TYPING_SNIPPETS = [
+  ["co-ban", 'print("Xin chao")', "In một dòng chữ ra màn hình"],
+  ["co-ban", 'name = input("Ten: ")', "Nhập một chuỗi từ bàn phím"],
+  ["co-ban", "n = int(input())", "Nhập một số nguyên"],
+  ["co-ban", "x = float(input())", "Nhập một số thực"],
+  ["co-ban", "a, b = map(int, input().split())", "Nhập hai số nguyên trên cùng một dòng"],
+  ["co-ban", "print(a + b)", "In tổng của a và b"],
+  ["co-ban", 'print(f"Tong = {a + b}")', "In chuỗi có chèn giá trị biến (f-string)"],
+  ["co-ban", "print(a // b, a % b)", "Thương nguyên và số dư của phép chia"],
+  ["co-ban", "print(2 ** 10)", "Lũy thừa: 2 mũ 10"],
+  ["co-ban", "print(abs(-5))", "Giá trị tuyệt đối"],
+  ["co-ban", "print(round(3.14159, 2))", "Làm tròn đến 2 chữ số thập phân"],
+  ["co-ban", "print(max(a, b))", "Số lớn hơn trong hai số"],
+  ["co-ban", "print(min(a, b, c))", "Số nhỏ nhất trong các số"],
+  ["co-ban", "print(type(x))", "Xem kiểu dữ liệu của biến"],
+  ["co-ban", "print(divmod(17, 5))", "Trả về cả thương và số dư"],
+  ["co-ban", 'print("a", "b", sep="-")', "In nhiều giá trị, ngăn cách bằng dấu '-'"],
+  ["co-ban", 'print(n, end=" ")', "In xong không xuống dòng"],
+  ["co-ban", "x = int(\"123\") + 1", "Đổi chuỗi sang số rồi cộng 1"],
+  ["chuoi", "s = s.upper()", "Chuyển thành chữ HOA"],
+  ["chuoi", "s = s.lower()", "Chuyển thành chữ thường"],
+  ["chuoi", "s = s.strip()", "Xóa khoảng trắng hai đầu chuỗi"],
+  ["chuoi", 'words = s.split(",")', "Tách chuỗi thành danh sách theo dấu phẩy"],
+  ["chuoi", 'print(" ".join(words))', "Ghép danh sách thành chuỗi, cách nhau bởi dấu cách"],
+  ["chuoi", 's = s.replace("a", "b")', "Thay mọi chữ a bằng b"],
+  ["chuoi", "print(s[::-1])", "In chuỗi đảo ngược"],
+  ["chuoi", "print(len(s))", "Độ dài chuỗi"],
+  ["chuoi", 'print(s.find("x"))', "Vị trí đầu tiên của 'x' (-1 nếu không có)"],
+  ["chuoi", 'print(s.count("a"))', "Đếm số lần xuất hiện của 'a'"],
+  ["chuoi", 'print(s.startswith("ab"))', "Kiểm tra chuỗi có bắt đầu bằng 'ab'"],
+  ["chuoi", "print(s.isdigit())", "Kiểm tra chuỗi chỉ gồm chữ số"],
+  ["chuoi", "print(s.title())", "Viết hoa chữ cái đầu mỗi từ"],
+  ["chuoi", "print(s[1:4])", "Cắt chuỗi từ vị trí 1 đến 3"],
+  ["chuoi", "print(ord(\"a\"), chr(98))", "Mã ASCII của ký tự và ký tự từ mã"],
+  ["chuoi", 'print(f"{x:.2f}")', "In số thực với 2 chữ số thập phân"],
+  ["chuoi", 'print("ab" * 3)', "Lặp chuỗi 3 lần"],
+  ["list", "a = [1, 2, 3]", "Tạo danh sách (list)"],
+  ["list", "a.append(4)", "Thêm phần tử vào cuối"],
+  ["list", "a.insert(0, 9)", "Chèn 9 vào vị trí đầu tiên"],
+  ["list", "a.pop()", "Lấy ra và xóa phần tử cuối"],
+  ["list", "a.remove(3)", "Xóa phần tử có giá trị 3 (lần đầu tiên)"],
+  ["list", "a.sort(reverse=True)", "Sắp xếp giảm dần ngay trên list"],
+  ["list", "b = sorted(a)", "Tạo list mới đã sắp xếp tăng dần"],
+  ["list", "a.reverse()", "Đảo ngược list"],
+  ["list", "print(a.index(2))", "Vị trí của giá trị 2"],
+  ["list", "a.extend([4, 5])", "Nối thêm nhiều phần tử vào cuối"],
+  ["list", "print(a[-1])", "Phần tử cuối cùng"],
+  ["list", "print(a[1:3])", "Lát cắt từ vị trí 1 đến 2"],
+  ["list", "print(sum(a) / len(a))", "Trung bình cộng của list"],
+  ["list", "b = [x * x for x in a]", "List comprehension: bình phương từng phần tử"],
+  ["list", "b = [x for x in a if x % 2 == 0]", "Lọc ra các số chẵn"],
+  ["list", "a = list(map(int, input().split()))", "Nhập một dãy số trên một dòng"],
+  ["list", "b = a.copy()", "Sao chép list"],
+  ["list", "a = list(range(1, 11))", "Tạo list [1, 2, ..., 10]"],
+  ["list", "print(any(a), all(a))", "Có ít nhất một / tất cả phần tử đúng"],
+  ["list", "for i, x in enumerate(a):", "Duyệt list kèm chỉ số"],
+  ["dict", 'd = {"a": 1, "b": 2}', "Tạo từ điển (dict)"],
+  ["dict", 'd["c"] = 3', "Thêm hoặc cập nhật khóa 'c'"],
+  ["dict", 'print(d.get("x", 0))', "Lấy giá trị, không có khóa thì trả về 0"],
+  ["dict", "for k, v in d.items():", "Duyệt từng cặp khóa - giá trị"],
+  ["dict", 'print("a" in d)', "Kiểm tra khóa có tồn tại"],
+  ["dict", "print(list(d.keys()))", "Danh sách các khóa"],
+  ["dict", "print(list(d.values()))", "Danh sách các giá trị"],
+  ["dict", 'del d["a"]', "Xóa khóa 'a'"],
+  ["dict", 'd.update({"x": 1})', "Gộp thêm cặp khóa - giá trị"],
+  ["dict", "s = set(a)", "Tạo tập hợp, loại bỏ phần tử trùng"],
+  ["dict", "s.add(5)", "Thêm phần tử vào tập hợp"],
+  ["dict", "s.discard(2)", "Xóa phần tử (không lỗi nếu không có)"],
+  ["dict", "print(s1 | s2, s1 & s2)", "Hợp và giao của hai tập hợp"],
+  ["dict", "print(len(set(a)))", "Số phần tử khác nhau trong list"],
+  ["dict", "d = dict(zip(a, b))", "Ghép hai list thành dict"],
+  ["lap", "for i in range(n):", "Lặp i từ 0 đến n-1"],
+  ["lap", "for i in range(1, n + 1):", "Lặp i từ 1 đến n"],
+  ["lap", "for i in range(n, 0, -1):", "Lặp ngược từ n về 1"],
+  ["lap", "while n > 0:", "Lặp khi n còn lớn hơn 0"],
+  ["lap", "if x % 2 == 0:", "Kiểm tra x là số chẵn"],
+  ["lap", "elif x > 0:", "Nhánh điều kiện tiếp theo"],
+  ["lap", "else:", "Nhánh còn lại"],
+  ["lap", "for x in a:", "Duyệt từng phần tử của list"],
+  ["lap", "for x, y in zip(a, b):", "Duyệt song song hai list"],
+  ["lap", "if x in a:", "Kiểm tra x có trong list"],
+  ["lap", "if not a:", "Kiểm tra list rỗng"],
+  ["lap", "while True:", "Vòng lặp vô hạn (dùng break để thoát)"],
+  ["lap", "if a > b and b > c:", "Hai điều kiện cùng đúng"],
+  ["lap", "break", "Thoát khỏi vòng lặp"],
+  ["lap", "continue", "Bỏ qua phần còn lại, sang vòng kế tiếp"],
+  ["ham", "def tong(a, b):", "Khai báo hàm có hai tham số"],
+  ["ham", "return a + b", "Trả về kết quả của hàm"],
+  ["ham", "f = lambda x: x * 2", "Hàm ẩn danh (lambda)"],
+  ["ham", "import math", "Nạp thư viện toán học"],
+  ["ham", "print(math.sqrt(16))", "Căn bậc hai"],
+  ["ham", "print(math.gcd(12, 18))", "Ước chung lớn nhất"],
+  ["ham", "print(math.floor(2.7), math.ceil(2.1))", "Làm tròn xuống / làm tròn lên"],
+  ["ham", "from math import pi", "Chỉ nạp số pi từ math"],
+  ["ham", "import sys", "Nạp thư viện hệ thống"],
+  ["ham", "input = sys.stdin.readline", "Đọc nhập nhanh hơn trong bài thi"],
+  ["ham", "try:", "Bắt đầu khối thử chạy"],
+  ["ham", "except ValueError:", "Bắt lỗi khi đổi kiểu sai"],
+  ["ham", 'with open("a.txt") as f:', "Mở file an toàn, tự đóng khi xong"],
+  ["ham", "data = f.read()", "Đọc toàn bộ nội dung file"],
+  ["ham", "class SinhVien:", "Khai báo lớp (class)"],
+  ["ham", "def __init__(self, ten):", "Hàm khởi tạo của lớp"],
+  ["ham", "self.ten = ten", "Lưu thuộc tính cho đối tượng"],
+].map(([cat, code, hint]) => ({ cat, code, hint }));
+
+const TYPING_MODES = {
+  timed: { label: "Thử thách 60 giây", desc: "Gõ càng nhiều lệnh đúng càng tốt trước khi hết giờ.", seconds: 60 },
+  free: { label: "Luyện 15 lệnh", desc: "Không giới hạn thời gian. Gõ chính xác 15 lệnh liên tiếp.", count: 15 },
+};
+
+function shuffleList(list) {
+  const arr = [...list];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+function typingTitle(wpm) {
+  if (wpm >= 45) return "Siêu tốc độ";
+  if (wpm >= 30) return "Ngón tay thần tốc";
+  if (wpm >= 15) return "Gõ chăm chỉ";
+  return "Tập sự gõ phím";
+}
+
+const PY_KEYWORDS = new Set("def return for in while if elif else import from as with try except class lambda not and or break continue pass True False None is".split(" "));
+const PY_BUILTINS = new Set("print input int float str len range map list set dict sum min max abs round sorted open type zip enumerate any all chr ord divmod tuple bool pow reversed".split(" "));
+function pyTokenClasses(code) {
+  const cls = new Array(code.length).fill("p");
+  const re = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)/g;
+  let m;
+  while ((m = re.exec(code))) {
+    let c = "p";
+    const end = m.index + m[0].length;
+    if (m[1]) c = "s";
+    else if (m[2]) c = "n";
+    else if (m[3] === "f" && /["']/.test(code[end] || "")) c = "s";
+    else if (PY_KEYWORDS.has(m[3])) c = "k";
+    else if (PY_BUILTINS.has(m[3])) c = "b";
+    else if (code[end] === "(") c = "f";
+    for (let i = m.index; i < end; i += 1) cls[i] = c;
+  }
+  return cls;
+}
+function ColoredCode({ code }) {
+  const cls = useMemo(() => pyTokenClasses(code), [code]);
+  return <code className="nb-tg-colored">{[...code].map((ch, i) => <span key={i} className={`t-${cls[i]}`}>{ch}</span>)}</code>;
+}
+
+/* Bàn phím ảo: chỉ ra phím kế tiếp và ngón tay nên dùng */
+const TG_FINGERS = [
+  { fingers: [0, 0, 1, 2, 3, 3, 3, 3, 2, 1, 0, 0, 0], left: 5, keys: [["`", "~"], ["1", "!"], ["2", "@"], ["3", "#"], ["4", "$"], ["5", "%"], ["6", "^"], ["7", "&"], ["8", "*"], ["9", "("], ["0", ")"], ["-", "_"], ["=", "+"]] },
+  { fingers: [0, 1, 2, 3, 3, 3, 3, 2, 1, 0, 0, 0, 0], left: 4, keys: "qwertyuiop".split("").map((c) => [c, c.toUpperCase()]).concat([["[", "{"], ["]", "}"], ["\\", "|"]]) },
+  { fingers: [0, 1, 2, 3, 3, 3, 3, 2, 1, 0, 0], left: 4, keys: "asdfghjkl".split("").map((c) => [c, c.toUpperCase()]).concat([[";", ":"], ["'", "\""]]) },
+  { fingers: [0, 1, 2, 3, 3, 3, 3, 2, 1, 0], left: 4, keys: "zxcvbnm".split("").map((c) => [c, c.toUpperCase()]).concat([[",", "<"], [".", ">"], ["/", "?"]]) },
+];
+const TG_ROWS = TG_FINGERS.map((row, r) => row.keys.map(([base, shift], c) => ({
+  id: `${r}-${c}`, base, shift, finger: row.fingers[c], hand: c <= row.left ? "L" : "R", letter: /[a-z]/.test(base),
+})));
+const TG_KEY_BY_CHAR = (() => {
+  const map = { " ": { id: "space", shift: null } };
+  TG_ROWS.flat().forEach((k) => {
+    map[k.base] = { id: k.id, shift: null };
+    if (k.shift !== k.base) map[k.shift] = { id: k.id, shift: k.hand === "L" ? "R" : "L" };
+  });
+  return map;
+})();
+
+function TypingKeyboard({ nextChar, press }) {
+  const target = nextChar ? TG_KEY_BY_CHAR[nextChar] : null;
+  return (
+    <div className="nb-tg-kb" aria-hidden="true">
+      {TG_ROWS.map((row, r) => (
+        <div className="nb-tg-kb-row" key={r} style={{ paddingLeft: r === 1 ? 14 : r === 2 ? 26 : r === 3 ? 0 : 0 }}>
+          {r === 3 && <div className={`nb-tg-key wide shift ${target?.shift === "L" ? "target" : ""}`}>Shift</div>}
+          {row.map((k) => (
+            <div key={k.id} className={`nb-tg-key f${k.finger} ${target?.id === k.id ? "target" : ""} ${press?.id === k.id ? (press.bad ? "bad" : "down") : ""}`}>
+              {!k.letter && k.shift !== k.base && <small>{k.shift}</small>}
+              <span>{k.letter ? k.shift : k.base}</span>
+            </div>
+          ))}
+          {r === 3 && <div className={`nb-tg-key wide shift ${target?.shift === "R" ? "target" : ""}`}>Shift</div>}
+        </div>
+      ))}
+      <div className="nb-tg-kb-row"><div className={`nb-tg-key space ${target?.id === "space" ? "target" : ""} ${press?.id === "space" ? (press.bad ? "bad" : "down") : ""}`}>Dấu cách</div></div>
+      <div className="nb-tg-kb-legend"><span><i className="f0" />Út</span><span><i className="f1" />Áp út</span><span><i className="f2" />Giữa</span><span><i className="f3" />Trỏ</span><span><i className="f4" />Cái</span></div>
+    </div>
+  );
+}
+
+/* Ví dụ tự gõ ở màn hình chọn chủ đề */
+function TypingDemo({ snippets }) {
+  const reduced = typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const [i, setI] = useState(0);
+  const [n, setN] = useState(0);
+  const snippet = snippets[i % Math.max(1, snippets.length)] || TYPING_SNIPPETS[0];
+  useEffect(() => { setI(0); setN(0); }, [snippets]);
+  useEffect(() => {
+    if (reduced) return undefined;
+    const done = n >= snippet.code.length;
+    const timer = setTimeout(() => { if (done) { setI((v) => v + 1); setN(0); } else setN((v) => v + 1); }, done ? 1500 : 75 + Math.random() * 60);
+    return () => clearTimeout(timer);
+  }, [n, snippet, reduced]);
+  const cls = useMemo(() => pyTokenClasses(snippet.code), [snippet.code]);
+  const shown = reduced ? snippet.code.length : n;
+  return (
+    <div className="nb-tg-editor demo">
+      <div className="nb-tg-tab"><Code2 size={13} /> vi_du.py</div>
+      <div className="nb-tg-line"><span className="nb-tg-gutter">1</span>
+        <code>{[...snippet.code].map((ch, k) => <span key={k} className={k < shown ? `t-${cls[k]}` : "t-dim"}>{ch}</span>)}{!reduced && <i className="nb-tg-caret" />}</code>
+      </div>
+      <div className="nb-tg-demo-hint">{snippet.hint}</div>
+    </div>
+  );
+}
+
+function TypingGameView({ currentUser }) {
+  const [phase, setPhase] = useState("menu");
+  const [category, setCategory] = useState("all");
+  const [mode, setMode] = useState("timed");
+  const [typed, setTyped] = useState("");
+  const [result, setResult] = useState(null);
+  const [press, setPress] = useState(null);
+  const [gain, setGain] = useState(null);
+  const [, bump] = useReducer((x) => x + 1, 0);
+  const inputRef = useRef(null);
+  const pressTimer = useRef(null);
+  const game = useRef(null);
+  const bestKey = (m) => `typing-best:${currentUser.id}:${m}`;
+  const [bests, setBests] = useState(() => ({ timed: lsGet(bestKey("timed")), free: lsGet(bestKey("free")) }));
+
+  const pool = useMemo(() => TYPING_SNIPPETS.filter((s) => category === "all" || s.cat === category), [category]);
+  const demoPool = useMemo(() => shuffleList(pool).slice(0, 6), [pool]);
+  useEffect(() => () => clearTimeout(pressTimer.current), []);
+
+  function newGame() {
+    const need = mode === "timed" ? 300 : TYPING_MODES.free.count;
+    let queue = [];
+    while (queue.length < need) queue = queue.concat(shuffleList(pool));
+    queue = queue.slice(0, need);
+    game.current = { queue, idx: 0, score: 0, done: 0, chars: 0, keys: 0, errors: 0, combo: 0, bestCombo: 0, missed: [], startedAt: Date.now(), flash: "" };
+    setTyped(""); setResult(null); setGain(null); setPhase("play");
+    setTimeout(() => inputRef.current?.focus(), 30);
+  }
+  function finish() {
+    const g = game.current;
+    if (!g || g.finished) return;
+    g.finished = true;
+    const elapsed = Math.min(Date.now() - g.startedAt, mode === "timed" ? TYPING_MODES.timed.seconds * 1000 : Infinity);
+    const minutes = Math.max(elapsed / 60000, 1 / 600);
+    const wpm = Math.round(g.chars / 5 / minutes);
+    const accuracy = g.keys ? Math.round(((g.keys - g.errors) / g.keys) * 100) : 100;
+    const summary = { score: g.score, wpm, accuracy, done: g.done, bestCombo: g.bestCombo, seconds: Math.round(elapsed / 1000), missed: g.missed, mode, date: new Date().toISOString() };
+    const previous = lsGet(bestKey(mode));
+    const isRecord = g.score > 0 && (!previous || g.score > previous.score);
+    if (isRecord) { const rec = { score: g.score, wpm, accuracy, date: summary.date }; lsSet(bestKey(mode), rec); setBests((b) => ({ ...b, [mode]: rec })); }
+    setResult({ ...summary, isRecord, previous });
+    setPhase("result");
+  }
+  useEffect(() => {
+    if (phase !== "play") return undefined;
+    const timer = setInterval(() => {
+      const g = game.current;
+      if (!g) return;
+      if (mode === "timed" && Date.now() - g.startedAt >= TYPING_MODES.timed.seconds * 1000) finish();
+      else bump();
+    }, 200);
+    return () => clearInterval(timer);
+  }, [phase, mode]);
+
+  function nextSnippet() {
+    const g = game.current;
+    g.idx += 1;
+    setTyped("");
+    if (mode === "free" && g.idx >= TYPING_MODES.free.count) finish();
+  }
+  function onKeyDown(event) {
+    if (event.key === "Escape") { quit(); return; }
+    if (event.key.length !== 1) return;
+    const info = TG_KEY_BY_CHAR[event.key];
+    const g = game.current;
+    if (!info || !g) return;
+    const expected = g.queue[g.idx]?.code[typed.length];
+    setPress({ id: info.id, bad: expected !== event.key });
+    clearTimeout(pressTimer.current);
+    pressTimer.current = setTimeout(() => setPress(null), 150);
+  }
+  function onChange(event) {
+    const g = game.current;
+    if (!g || g.finished) return;
+    const snippet = g.queue[g.idx];
+    const value = event.target.value;
+    if (value.length > snippet.code.length) return;
+    for (let i = typed.length; i < value.length; i += 1) {
+      g.keys += 1;
+      if (value[i] !== snippet.code[i]) {
+        g.errors += 1; g.combo = 0; g.flash = "bad";
+        if (!g.missed.some((m) => m.code === snippet.code)) g.missed.push(snippet);
+      }
+    }
+    if (value === snippet.code) {
+      const points = Math.round(snippet.code.length * 10 * (1 + Math.min(g.combo, 10) * 0.1));
+      g.score += points; g.chars += snippet.code.length; g.done += 1; g.combo += 1;
+      g.bestCombo = Math.max(g.bestCombo, g.combo); g.flash = "ok";
+      setGain({ n: points, id: Date.now() });
+      nextSnippet();
+    } else {
+      setTyped(value);
+    }
+    bump();
+  }
+  function skip() {
+    const g = game.current;
+    if (!g || g.finished) return;
+    const snippet = g.queue[g.idx];
+    g.combo = 0;
+    if (!g.missed.some((m) => m.code === snippet.code)) g.missed.push(snippet);
+    nextSnippet(); bump(); inputRef.current?.focus();
+  }
+  function quit() { if (game.current) game.current.finished = true; setPhase("menu"); }
+
+  /* ---------------- Màn hình chọn ---------------- */
+  if (phase === "menu") {
+    return (
+      <div className="nb-tg">
+        <header className="nb-tg-head">
+          <h2>Gõ lệnh Python</h2>
+          <p>Gõ nhanh và đúng các hàm, câu lệnh hay gặp để nhớ cú pháp, bớt sai chính tả khi làm bài.</p>
+        </header>
+        <div className="nb-tg-menu">
+          <div className="nb-tg-choose">
+            <section className="nb-tg-block">
+              <h3>Chủ đề</h3>
+              <div className="nb-tg-topics" role="radiogroup" aria-label="Chủ đề">
+                {TYPING_CATEGORIES.map((c) => {
+                  const list = TYPING_SNIPPETS.filter((s) => c.key === "all" || s.cat === c.key);
+                  return (
+                    <button key={c.key} role="radio" aria-checked={category === c.key} className={`nb-tg-topic ${category === c.key ? "active" : ""}`} onClick={() => setCategory(c.key)}>
+                      <strong>{c.label}</strong>
+                      <code>{c.key === "all" ? "print(), for, def, ..." : list[0].code}</code>
+                      <span>{list.length} lệnh</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+            <section className="nb-tg-block">
+              <h3>Chế độ</h3>
+              <div className="nb-tg-modes" role="radiogroup" aria-label="Chế độ">
+                {Object.entries(TYPING_MODES).map(([key, m]) => (
+                  <button key={key} role="radio" aria-checked={mode === key} className={`nb-tg-mode ${mode === key ? "active" : ""}`} onClick={() => setMode(key)}>
+                    <span className="nb-tg-mode-icon">{key === "timed" ? <Clock size={18} /> : <ListChecks size={18} />}</span>
+                    <span className="nb-tg-mode-text"><strong>{m.label}</strong><span>{m.desc}</span></span>
+                    <small>{bests[key] ? `Kỷ lục ${bests[key].score}` : "Chưa chơi"}</small>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+          <aside className="nb-tg-side">
+            <TypingDemo snippets={demoPool} />
+            <button className="nb-btn nb-btn-primary nb-tg-start-btn" onClick={newGame}><Play size={17} /> Bắt đầu chơi</button>
+            <p className="nb-sub">Gõ đúng liên tiếp để tăng combo, điểm nhân tối đa gấp đôi. Sai một ký tự là mất combo.</p>
+          </aside>
+        </div>
+      </div>
+    );
+  }
+
+  /* ---------------- Kết quả ---------------- */
+  if (phase === "result" && result) {
+    return (
+      <div className="nb-tg">
+        <div className="nb-tg-result">
+          <section className="nb-tg-result-main">
+            <span className="nb-tg-result-mode">{TYPING_MODES[result.mode].label}</span>
+            <h2>{typingTitle(result.wpm)}</h2>
+            <div className="nb-tg-wpm"><strong>{result.wpm}</strong><span>từ mỗi phút</span></div>
+            {result.isRecord && <span className="nb-tg-record"><Award size={15} /> Kỷ lục mới của em</span>}
+            {result.previous && !result.isRecord && <p className="nb-sub">Kỷ lục hiện tại: {result.previous.score} điểm, {result.previous.wpm} từ/phút.</p>}
+            <div className="nb-tg-actions">
+              <button className="nb-btn nb-btn-primary" onClick={newGame}><RefreshCw size={16} /> Chơi lại</button>
+              <button className="nb-btn nb-btn-ghost" onClick={() => setPhase("menu")}>Đổi chủ đề</button>
+            </div>
+          </section>
+          <dl className="nb-tg-result-stats">
+            <div><dt>Điểm</dt><dd>{result.score}</dd></div>
+            <div><dt>Chính xác</dt><dd>{result.accuracy}%</dd></div>
+            <div><dt>Lệnh hoàn thành</dt><dd>{result.done}</dd></div>
+            <div><dt>Combo cao nhất</dt><dd>x{result.bestCombo}</dd></div>
+            <div><dt>Thời gian</dt><dd>{result.seconds} giây</dd></div>
+          </dl>
+        </div>
+        {result.missed.length > 0 ? (
+          <section className="nb-tg-block">
+            <h3>Nên luyện thêm ({result.missed.length} lệnh)</h3>
+            <div className="nb-tg-missed">
+              {result.missed.map((m) => (<div key={m.code}><ColoredCode code={m.code} /><span>{m.hint}</span></div>))}
+            </div>
+          </section>
+        ) : <p className="nb-sub">Em không gõ sai lệnh nào. Rất chuẩn!</p>}
+      </div>
+    );
+  }
+
+  /* ---------------- Đang chơi ---------------- */
+  const g = game.current;
+  if (!g) return null;
+  const snippet = g.queue[g.idx] || g.queue[0];
+  const elapsed = Date.now() - g.startedAt;
+  const total = TYPING_MODES.timed.seconds;
+  const left = Math.max(0, total - elapsed / 1000);
+  const liveWpm = elapsed > 3000 ? Math.round(g.chars / 5 / (elapsed / 60000)) : 0;
+  const liveAcc = g.keys ? Math.round(((g.keys - g.errors) / g.keys) * 100) : 100;
+  const multiplier = (1 + Math.min(g.combo, 10) * 0.1).toFixed(1);
+  const categoryLabel = TYPING_CATEGORIES.find((c) => c.key === snippet.cat)?.label || "";
+  const cls = pyTokenClasses(snippet.code);
+  const RING = 2 * Math.PI * 18;
+
+  return (
+    <div className="nb-tg play">
+      <div className="nb-tg-bar">
+        <button className="nb-btn nb-btn-ghost" onClick={quit}><ChevronLeft size={16} /> Thoát</button>
+        {mode === "timed" ? (
+          <div className={`nb-tg-ring ${left < 10 ? "warn" : ""}`} role="timer" aria-label={`Còn ${Math.ceil(left)} giây`}>
+            <svg viewBox="0 0 44 44"><circle cx="22" cy="22" r="18" className="bg" /><circle cx="22" cy="22" r="18" className="fg" strokeDasharray={RING} strokeDashoffset={RING * (1 - left / total)} /></svg>
+            <b>{Math.ceil(left)}</b>
+          </div>
+        ) : (
+          <div className="nb-tg-progress"><span>Lệnh {Math.min(g.idx + 1, TYPING_MODES.free.count)}/{TYPING_MODES.free.count}</span><i><b style={{ width: `${(g.idx / TYPING_MODES.free.count) * 100}%` }} /></i></div>
+        )}
+        <button className="nb-btn nb-btn-ghost" onClick={skip}>Bỏ qua <ChevronRight size={16} /></button>
+      </div>
+
+      <div className="nb-tg-strip">
+        <div className="nb-tg-score"><span>Điểm</span><strong>{g.score}</strong>{gain && <em key={gain.id} className="nb-tg-gain">+{gain.n}</em>}</div>
+        <div className={`nb-tg-combo ${g.combo >= 3 ? "hot" : ""}`}>
+          <span>Combo {g.combo} · x{multiplier}</span>
+          <div className="nb-tg-pips">{Array.from({ length: 10 }, (_, i) => <i key={i} className={i < Math.min(g.combo, 10) ? "on" : ""} />)}</div>
+        </div>
+        <div className="nb-tg-mini"><span>Tốc độ</span><strong>{liveWpm}</strong></div>
+        <div className="nb-tg-mini"><span>Chính xác</span><strong>{liveAcc}%</strong></div>
+      </div>
+
+      <div className={`nb-tg-editor ${g.flash}`} onAnimationEnd={() => { g.flash = ""; }} onClick={() => inputRef.current?.focus()}>
+        <div className="nb-tg-tab"><Code2 size={13} /> lenh.py <span>{categoryLabel}</span></div>
+        <div className="nb-tg-line" aria-label={snippet.code}>
+          <span className="nb-tg-gutter">1</span>
+          <code>
+            {[...snippet.code].map((ch, i) => {
+              const t = typed[i];
+              const state = t === undefined ? (i === typed.length ? "cur" : "dim") : t === ch ? `t-${cls[i]}` : "bad";
+              return <span key={i} className={state}>{ch}</span>;
+            })}
+          </code>
+        </div>
+        <div className="nb-tg-prompt">
+          <span aria-hidden="true">&gt;&gt;&gt;</span>
+          <input
+            ref={inputRef} className="nb-mono" value={typed} onChange={onChange} onKeyDown={onKeyDown}
+            onPaste={(e) => e.preventDefault()} placeholder="Gõ lệnh ở đây" autoFocus autoComplete="off" autoCorrect="off"
+            autoCapitalize="off" spellCheck={false} aria-label="Ô gõ lệnh"
+          />
+        </div>
+      </div>
+      <p className="nb-tg-meaning"><b>Ý nghĩa</b> {snippet.hint}</p>
+      <TypingKeyboard nextChar={snippet.code[typed.length]} press={press} />
+    </div>
+  );
+}
+
 const BASE_NAV = [
   { key: "overview", label: "Tổng quan", shortLabel: "Tổng quan", icon: Home },
   { key: "lessons", label: "Bài giảng", shortLabel: "Bài giảng", icon: BookOpen },
@@ -3659,6 +4166,7 @@ const BASE_NAV = [
   { key: "contests", label: "Đề thi thử", shortLabel: "Đề thi", icon: Clock },
   { key: "leaderboard", label: "Bảng xếp hạng", shortLabel: "Xếp hạng", icon: Trophy },
   { key: "discussion", label: "Thảo luận", shortLabel: "Thảo luận", icon: MessageSquare },
+  { key: "typing", label: "Gõ lệnh Python", shortLabel: "Gõ lệnh", icon: Keyboard },
 ];
 const ACCOUNTS_NAV = { key: "accounts", label: "Quản lý tài khoản", shortLabel: "Tài khoản", icon: Users };
 
@@ -3698,18 +4206,27 @@ function App() {
     }
   }, [pendingProblemWrites.length]);
 
+  const subCursor = useRef(null);
+  function applyData(data) {
+    if (data.topics) setTopics(data.topics);
+    if (data.problems) setProblems(data.problems);
+    setExams(data.exams); setExamsMissing(data.examsMissing);
+    setSubmissions((prev) => (data.partial ? mergeIncremental(prev, data.submissions) : mergeLocalCode(prev, data.submissions)));
+    if (data.discussions) setDiscussions(data.discussions);
+    if (data.accounts) setAccounts(data.accounts);
+    if (data.assignments) setAssignments(data.assignments);
+    if (data.cursor) subCursor.current = data.cursor;
+  }
+  function sinceCursor() {
+    return subCursor.current ? new Date(new Date(subCursor.current).getTime() - 3 * 60 * 1000).toISOString() : null;
+  }
+
   const runInitialLoad = useCallback(async () => {
     setLoading(true);
     setSetupError(false);
     try {
       const data = await fetchAll();
-      setTopics(data.topics);
-      setProblems(data.problems);
-      setExams(data.exams); setExamsMissing(data.examsMissing);
-      setSubmissions((prev) => mergeLocalCode(prev, data.submissions));
-      setDiscussions(data.discussions);
-      setAccounts(data.accounts);
-      setAssignments(data.assignments);
+      applyData(data);
       const sessionUserId = lsGet("session-user");
       if (sessionUserId && data.accounts.some((a) => a.id === sessionUserId)) setAuthUserId(sessionUserId);
     } catch (e) {
@@ -3732,37 +4249,55 @@ function App() {
     return () => { cancelled = true; };
   }, [currentUser?.id, isTeacher]);
 
+  // Làm mới nền: chỉ chạy khi đã đăng nhập, tab đang hiện và người dùng còn thao tác.
+  // Mỗi lượt tải nhẹ (bài nộp mới); 2 lượt có thêm thảo luận/bài giao; 5 lượt tải đầy đủ để đối chiếu.
   useEffect(() => {
+    if (!authUserId) return undefined;
+    const POLL_MS = 120000;
+    const IDLE_MS = 5 * 60 * 1000;
     let tick = 0;
-    const interval = setInterval(async () => {
-      if (typeof document !== "undefined" && document.hidden) return;
+    let running = false;
+    let lastRun = Date.now();
+    let lastActivity = Date.now();
+    let wasIdle = false;
+    const run = async () => {
+      if (running || document.hidden) return;
+      running = true;
       tick += 1;
+      const scope = tick % 5 === 0 ? "full" : tick % 2 === 0 ? "medium" : "fast";
       try {
-        const data = await fetchAll({ light: tick % 5 !== 0 });
-        if (data.topics) setTopics(data.topics);
-        if (data.problems) setProblems(data.problems);
-        setExams(data.exams); setExamsMissing(data.examsMissing);
-        setSubmissions((prev) => mergeLocalCode(prev, data.submissions));
-        setDiscussions(data.discussions);
-        setAccounts(data.accounts);
-        setAssignments(data.assignments);
+        applyData(await fetchAll({ scope, since: sinceCursor() }));
         setStorageError(false);
-      } catch (e) { /* transient network hiccup, ignore silently */ }
-    }, 60000);
-    return () => clearInterval(interval);
-  }, []);
+        lastRun = Date.now();
+      } catch (e) { /* mạng chập chờn: bỏ qua, lượt sau thử lại */ }
+      running = false;
+    };
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      if (Date.now() - lastActivity > IDLE_MS) { wasIdle = true; return; }
+      run();
+    }, POLL_MS);
+    const resume = () => {
+      lastActivity = Date.now();
+      if ((wasIdle || document.visibilityState === "visible") && Date.now() - lastRun > 60000) { wasIdle = false; run(); }
+      wasIdle = false;
+    };
+    const activity = () => { lastActivity = Date.now(); if (wasIdle) resume(); };
+    const onVisible = () => { if (!document.hidden) resume(); };
+    const events = ["pointerdown", "keydown", "touchstart", "scroll"];
+    events.forEach((name) => window.addEventListener(name, activity, { passive: true, capture: true }));
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      events.forEach((name) => window.removeEventListener(name, activity, { capture: true }));
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [authUserId]);
 
   async function refreshNow() {
     setRefreshing(true);
     try {
-      const data = await fetchAll();
-      setTopics(data.topics);
-      setProblems(data.problems);
-      setExams(data.exams); setExamsMissing(data.examsMissing);
-      setSubmissions((prev) => mergeLocalCode(prev, data.submissions));
-      setDiscussions(data.discussions);
-      setAccounts(data.accounts);
-      setAssignments(data.assignments);
+      applyData(await fetchAll());
       const retryResult = await retryPendingProblemWrites();
       if (retryResult.failed === 0) setStorageError(false);
     } catch (e) {
@@ -3776,8 +4311,20 @@ function App() {
     setLoginBusy(true);
     await new Promise((r) => setTimeout(r, 250));
     const uname = username.toLowerCase();
-    const acc = accounts.find((a) => a.username.toLowerCase() === uname);
-    if (!acc || acc.passwordHash !== hashPassword(password)) {
+    const hashed = hashPassword(password);
+    let acc = accounts.find((a) => a.username.toLowerCase() === uname);
+    if (!acc || acc.passwordHash !== hashed) {
+      // Danh sách tài khoản trên máy có thể cũ (tài khoản mới tạo / vừa đổi mật khẩu): tải lại một lần rồi thử lại.
+      try {
+        const { data: fresh, error } = await supabase.from("accounts").select("*");
+        if (!error && fresh) {
+          const list = fresh.map(mapAccount);
+          setAccounts(list);
+          acc = list.find((a) => a.username.toLowerCase() === uname);
+        }
+      } catch (e) { /* giữ kết quả cũ */ }
+    }
+    if (!acc || acc.passwordHash !== hashed) {
       setLoginError("Sai tên đăng nhập hoặc mật khẩu.");
       setLoginBusy(false);
       return;
@@ -5604,6 +6151,152 @@ function App() {
           .nb-xm-problem-row { flex-wrap: wrap; }
           .nb-xm-section { padding: 14px; }
         }
+        /* -------------------------------------------------------------- */
+        /*  GÕ LỆNH PYTHON                                               */
+        /* -------------------------------------------------------------- */
+        .nb-tg { --tg-bg: #0e1b2b; --tg-dim: #6f829b; --tg-p: #e8eef7; --tg-k: #8cb4ff; --tg-b: #5fd7b0; --tg-s: #f5c26b; --tg-n: #c4a7ff; --tg-f: #7fe3f0;
+          --tg-ok: #1f9d6b; --tg-bad: #d64545; --tg-amber: #c98a12; display: flex; flex-direction: column; gap: 18px; max-width: 960px; margin: 0 auto; }
+        .nb-tg-head h2 { margin: 0 0 6px; font-size: 28px; letter-spacing: -.02em; }
+        .nb-tg-head p { margin: 0; max-width: 560px; color: var(--slate); font-size: 14px; line-height: 1.6; }
+        .nb-tg-menu { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 22px; align-items: start; }
+        .nb-tg-choose { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+        .nb-tg-block { display: flex; flex-direction: column; gap: 10px; }
+        .nb-tg-block h3 { margin: 0; font-size: 13px; color: var(--slate); font-weight: 700; }
+        .nb-tg-topics { display: flex; flex-direction: column; background: #fff; border: 1px solid #e1e8f2; border-radius: 14px; overflow: hidden; }
+        .nb-tg-topic { display: grid; grid-template-columns: 150px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 16px; text-align: left; font: inherit; color: var(--ink); background: transparent; border: 0; border-top: 1px solid #edf1f6; border-left: 3px solid transparent; cursor: pointer; transition: background .15s; }
+        .nb-tg-topic:first-child { border-top: 0; }
+        .nb-tg-topic strong { font-size: 13.5px; }
+        .nb-tg-topic code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7a8aa2; font: 500 12px 'JetBrains Mono', monospace; }
+        .nb-tg-topic span { color: var(--slate); font-size: 11.5px; white-space: nowrap; }
+        .nb-tg-topic:hover { background: #f5f9fc; }
+        .nb-tg-topic.active { background: #eef5ff; border-left-color: #2563eb; }
+        .nb-tg-topic.active code { color: #1e4fb8; }
+        .nb-tg-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .nb-tg-mode { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: start; padding: 14px 16px; text-align: left; font: inherit; color: var(--ink); cursor: pointer; background: #fff; border: 1.5px solid #e1e8f2; border-radius: 13px; transition: border-color .15s, background .15s; }
+        .nb-tg-mode-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: var(--slate); background: #eef2f7; }
+        .nb-tg-mode-text { display: flex; flex-direction: column; gap: 3px; }
+        .nb-tg-mode-text strong { font-size: 14px; }
+        .nb-tg-mode-text span { color: var(--slate); font-size: 12px; line-height: 1.5; }
+        .nb-tg-mode small { grid-column: 2; color: #1e4fb8; font: 600 11.5px 'JetBrains Mono', monospace; }
+        .nb-tg-mode.active { border-color: #2563eb; background: #f3f8ff; }
+        .nb-tg-mode.active .nb-tg-mode-icon { color: #fff; background: #2563eb; }
+        .nb-tg-side { position: sticky; top: 14px; display: flex; flex-direction: column; gap: 12px; }
+        .nb-tg-start-btn { width: 100%; justify-content: center; padding: 13px 18px; font-size: 15px; }
+        .nb-tg-side .nb-sub { margin: 0; font-size: 12px; line-height: 1.6; }
+        .nb-tg-editor { display: flex; flex-direction: column; border-radius: 14px; background: var(--tg-bg); box-shadow: 0 14px 34px rgba(14,27,43,.22); overflow: hidden; border: 2px solid transparent; }
+        .nb-tg-tab { display: flex; align-items: center; gap: 7px; padding: 9px 14px; color: #9fb0c6; background: rgba(255,255,255,.05); font: 500 12px 'JetBrains Mono', monospace; }
+        .nb-tg-tab span { margin-left: auto; padding: 2px 8px; border-radius: 99px; color: #cfe0f5; background: rgba(255,255,255,.09); font: 600 11px 'Be Vietnam Pro', sans-serif; }
+        .nb-tg-line { display: flex; gap: 14px; padding: 22px 18px; font: 600 22px/1.65 'JetBrains Mono', monospace; }
+        .nb-tg-line code { font: inherit; white-space: pre-wrap; word-break: break-all; color: var(--tg-p); }
+        .nb-tg-gutter { color: #44566e; user-select: none; }
+        .nb-tg-line span, .nb-tg-colored span { transition: color .08s; }
+        .t-p { color: var(--tg-p); } .t-k { color: var(--tg-k); } .t-b { color: var(--tg-b); } .t-s { color: var(--tg-s); } .t-n { color: var(--tg-n); } .t-f { color: var(--tg-f); }
+        .t-dim, .nb-tg-line .dim { color: var(--tg-dim); }
+        .nb-tg-line .cur { color: #fff; background: rgba(255,255,255,.14); box-shadow: inset 0 -2px #22b8c7; border-radius: 2px; }
+        .nb-tg-line .bad { color: #fff; background: var(--tg-bad); border-radius: 3px; }
+        .nb-tg-caret { display: inline-block; width: 2px; height: 1.15em; margin-left: 1px; vertical-align: text-bottom; background: #22b8c7; animation: nbTgCaret 1s steps(1) infinite; }
+        @keyframes nbTgCaret { 50% { opacity: 0; } }
+        .nb-tg-editor.demo { box-shadow: 0 10px 26px rgba(14,27,43,.18); }
+        .nb-tg-editor.demo .nb-tg-line { padding: 18px 16px; font-size: 16px; min-height: 84px; }
+        .nb-tg-demo-hint { padding: 0 16px 16px 44px; color: #8ea2bd; font-size: 12px; }
+        .nb-tg-prompt { display: flex; align-items: center; gap: 10px; padding: 0 16px 16px; }
+        .nb-tg-prompt > span { color: #5fd7b0; font: 700 15px 'JetBrains Mono', monospace; }
+        .nb-tg-prompt input { flex: 1; min-width: 0; padding: 11px 14px; border-radius: 10px; border: 1.5px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); color: #fff; font-size: 17px; outline: none; }
+        .nb-tg-prompt input::placeholder { color: #6f829b; }
+        .nb-tg-prompt input:focus { border-color: #22b8c7; box-shadow: 0 0 0 3px rgba(34,184,199,.2); }
+        .nb-tg-editor.ok { animation: nbTgOk .4s ease; }
+        .nb-tg-editor.bad { animation: nbTgBad .28s ease; }
+        @keyframes nbTgOk { 0% { border-color: #3ddc97; } 100% { border-color: transparent; } }
+        @keyframes nbTgBad { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); border-color: var(--tg-bad); } 75% { transform: translateX(4px); } }
+        .nb-tg-meaning { margin: 0; padding: 0 4px; color: var(--ink); font-size: 14px; line-height: 1.6; }
+        .nb-tg-meaning b { margin-right: 8px; color: #1e4fb8; }
+        .nb-tg-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .nb-tg-ring { position: relative; width: 52px; height: 52px; display: grid; place-items: center; }
+        .nb-tg-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+        .nb-tg-ring circle { fill: none; stroke-width: 4; }
+        .nb-tg-ring .bg { stroke: #e3eaf3; }
+        .nb-tg-ring .fg { stroke: #2563eb; stroke-linecap: round; transition: stroke-dashoffset .25s linear, stroke .3s; }
+        .nb-tg-ring.warn .fg { stroke: var(--tg-bad); }
+        .nb-tg-ring b { font: 700 16px 'JetBrains Mono', monospace; color: var(--ink); }
+        .nb-tg-ring.warn b { color: var(--tg-bad); }
+        .nb-tg-progress { flex: 1; max-width: 320px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--slate); font-weight: 600; }
+        .nb-tg-progress i { display: block; height: 6px; border-radius: 99px; background: #e3eaf3; overflow: hidden; }
+        .nb-tg-progress b { display: block; height: 100%; background: #2563eb; transition: width .25s; }
+        .nb-tg-strip { display: grid; grid-template-columns: 1.1fr 1.6fr .8fr .8fr; align-items: center; background: #fff; border: 1px solid #e1e8f2; border-radius: 14px; }
+        .nb-tg-strip > div { display: flex; flex-direction: column; gap: 4px; padding: 12px 18px; border-left: 1px solid #edf1f6; min-width: 0; }
+        .nb-tg-strip > div:first-child { border-left: 0; }
+        .nb-tg-strip span { color: var(--slate); font-size: 12px; }
+        .nb-tg-strip strong { font: 700 24px 'JetBrains Mono', monospace; color: var(--ink); line-height: 1.1; }
+        .nb-tg-score { position: relative; }
+        .nb-tg-gain { position: absolute; right: 14px; top: 8px; color: var(--tg-ok); font: 700 14px 'JetBrains Mono', monospace; font-style: normal; animation: nbTgGain .9s ease-out forwards; pointer-events: none; }
+        @keyframes nbTgGain { 0% { opacity: 0; transform: translateY(8px); } 20% { opacity: 1; } 100% { opacity: 0; transform: translateY(-14px); } }
+        .nb-tg-pips { display: flex; gap: 4px; }
+        .nb-tg-pips i { flex: 1; height: 9px; border-radius: 3px; background: #e3eaf3; transition: background .15s; }
+        .nb-tg-pips i.on { background: #2563eb; }
+        .nb-tg-combo.hot .nb-tg-pips i.on { background: var(--tg-amber); }
+        .nb-tg-combo.hot span { color: #8a5a00; font-weight: 600; }
+        .nb-tg-kb { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 14px 12px 10px; background: #fff; border: 1px solid #e1e8f2; border-radius: 14px; user-select: none; }
+        .nb-tg-kb-row { display: flex; gap: 5px; justify-content: center; }
+        .nb-tg-key { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 42px; height: 42px; border-radius: 8px; border: 1px solid #d9e2ee; border-bottom-width: 3px; background: #f6f9fc; color: #44566e; font: 600 13px 'JetBrains Mono', monospace; transition: transform .06s, background .1s; }
+        .nb-tg-key small { position: absolute; top: 2px; left: 5px; font-size: 9px; color: #8a98ac; font-weight: 500; }
+        .nb-tg-key.f0 { background: #fdf0f0; } .nb-tg-key.f1 { background: #fff6e8; } .nb-tg-key.f2 { background: #eefaf3; } .nb-tg-key.f3 { background: #eef4ff; } .nb-tg-key.f4 { background: #f4f0fd; }
+        .nb-tg-key.wide { width: 74px; font-size: 11px; background: #eef2f7; }
+        .nb-tg-key.space { width: 300px; font-size: 11px; background: #f4f0fd; }
+        .nb-tg-key.target { background: #2563eb; border-color: #1b4fc4; color: #fff; box-shadow: 0 0 0 3px rgba(37,99,235,.25); }
+        .nb-tg-key.target small { color: #cfe0ff; }
+        .nb-tg-key.down { transform: translateY(2px); background: #cfe0ff; border-bottom-width: 1px; }
+        .nb-tg-key.bad { background: #ffd9d9; border-color: var(--tg-bad); color: #8f1f1f; }
+        .nb-tg-kb-legend { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; margin-top: 6px; color: var(--slate); font-size: 11px; }
+        .nb-tg-kb-legend span { display: inline-flex; align-items: center; gap: 5px; }
+        .nb-tg-kb-legend i { width: 11px; height: 11px; border-radius: 3px; border: 1px solid #d0d9e6; }
+        .nb-tg-kb-legend .f0 { background: #fdf0f0; } .nb-tg-kb-legend .f1 { background: #fff6e8; } .nb-tg-kb-legend .f2 { background: #eefaf3; } .nb-tg-kb-legend .f3 { background: #eef4ff; } .nb-tg-kb-legend .f4 { background: #f4f0fd; }
+        .nb-tg-result { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 18px; align-items: stretch; }
+        .nb-tg-result-main { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 28px; border-radius: 16px; background: var(--tg-bg); color: #fff; }
+        .nb-tg-result-mode { color: #9fb0c6; font-size: 13px; }
+        .nb-tg-result-main h2 { margin: 0; font-size: 26px; letter-spacing: -.01em; }
+        .nb-tg-wpm { display: flex; align-items: baseline; gap: 10px; }
+        .nb-tg-wpm strong { font: 700 76px/1 'JetBrains Mono', monospace; color: var(--tg-f); }
+        .nb-tg-wpm span { color: #9fb0c6; font-size: 14px; }
+        .nb-tg-record { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 99px; color: #4d3200; background: #ffd770; font-size: 12.5px; font-weight: 700; }
+        .nb-tg-result-main .nb-sub { color: #9fb0c6; margin: 0; }
+        .nb-tg-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+        .nb-tg-result-main .nb-btn-ghost { color: #fff; border-color: rgba(255,255,255,.3); background: transparent; }
+        .nb-tg-result-stats { margin: 0; display: flex; flex-direction: column; background: #fff; border: 1px solid #e1e8f2; border-radius: 16px; overflow: hidden; }
+        .nb-tg-result-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 15px 20px; border-top: 1px solid #edf1f6; }
+        .nb-tg-result-stats > div:first-child { border-top: 0; }
+        .nb-tg-result-stats dt { color: var(--slate); font-size: 13px; }
+        .nb-tg-result-stats dd { margin: 0; font: 700 20px 'JetBrains Mono', monospace; color: var(--ink); }
+        .nb-tg-missed { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .nb-tg-missed > div { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 12px; background: var(--tg-bg); min-width: 0; }
+        .nb-tg-missed code.nb-tg-colored { font: 600 14px/1.5 'JetBrains Mono', monospace; word-break: break-all; }
+        .nb-tg-missed span { color: #9fb0c6; font-size: 12px; }
+        .nb-tg button:focus-visible { outline: 3px solid rgba(37,99,235,.45); outline-offset: 2px; }
+        @media (max-width: 860px) {
+          .nb-tg-menu { grid-template-columns: 1fr; }
+          .nb-tg-side { position: static; order: -1; }
+          .nb-tg-result { grid-template-columns: 1fr; }
+        }
+        @media (max-width: 760px) {
+          .nb-tg-kb { display: none; }
+        }
+        @media (max-width: 640px) {
+          .nb-tg-head h2 { font-size: 23px; }
+          .nb-tg-topic { grid-template-columns: 1fr auto; }
+          .nb-tg-topic code { display: none; }
+          .nb-tg-modes { grid-template-columns: 1fr; }
+          .nb-tg-strip { grid-template-columns: 1fr 1fr; }
+          .nb-tg-strip > div { border-left: 0; border-top: 1px solid #edf1f6; padding: 10px 14px; }
+          .nb-tg-strip > div:nth-child(-n+2) { border-top: 0; }
+          .nb-tg-strip > div:nth-child(even) { border-left: 1px solid #edf1f6; }
+          .nb-tg-line { font-size: 17px; padding: 16px 12px; gap: 10px; }
+          .nb-tg-prompt input { font-size: 16px; }
+          .nb-tg-wpm strong { font-size: 58px; }
+          .nb-tg-result-main { padding: 22px; }
+          .nb-tg-missed { grid-template-columns: 1fr; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .nb-tg *, .nb-tg-editor { animation: none !important; transition: none !important; }
+        }
       `}</style>
 
       {loading ? (
@@ -5708,6 +6401,7 @@ function App() {
                   students={students} practiceProblems={problems} refreshExams={refreshExams} setExams={setExams}
                 />
               )}
+              {tab === "typing" && <TypingGameView currentUser={currentUser} />}
               {tab === "leaderboard" && (
                 <LeaderboardView students={students} points={points} solvedCount={solvedCount} currentUser={currentUser} problemsCount={problems.length} />
               )}
