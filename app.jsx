@@ -2663,7 +2663,8 @@ function ExamProblemEditor({ initial, onSave, onClose }) {
           <div><div className="nb-eyebrow">Bài chỉ thuộc đề thi này</div><h3 className="nb-h3">{initial ? "Sửa bài trong đề" : "Thêm bài vào đề"}</h3></div>
           <button type="button" className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
         </div>
-        <input className="nb-input" placeholder="Tên bài" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        <label className="nb-xm-field"><span>Tên bài</span>
+          <input className="nb-input" placeholder="Ví dụ: Tổng hai số" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} /></label>
         <div className="nb-xm-row">
           <label><span className="nb-field-label">Độ khó</span>
             <select className="nb-input" value={form.difficulty} onChange={(e) => setForm({ ...form, difficulty: e.target.value })}>{DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}</select></label>
@@ -2672,7 +2673,8 @@ function ExamProblemEditor({ initial, onSave, onClose }) {
           <label><span className="nb-field-label">Ngôn ngữ</span>
             <select className="nb-input" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>{LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
         </div>
-        <textarea className="nb-input" rows={7} placeholder="Đề bài — mô tả, ràng buộc, định dạng input/output" value={form.statement} onChange={(e) => setForm({ ...form, statement: e.target.value })} />
+        <label className="nb-xm-field"><span>Đề bài (mô tả, ràng buộc, định dạng input/output)</span>
+          <textarea className="nb-input nb-xm-statement-input" rows={10} placeholder={"Nhập nội dung đề bài. Để trống một dòng giữa các đoạn để tách đoạn.\n\nInput: …\nOutput: …"} value={form.statement} onChange={(e) => setForm({ ...form, statement: e.target.value })} /></label>
         <div className="nb-form-section-label">Hình minh họa (không bắt buộc)</div>
         <div className="nb-image-upload-panel">
           <label className="nb-upload-drop"><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onImage} /><UploadCloud size={20} /><span><strong>Chọn ảnh đề bài</strong><small>PNG, JPG, WEBP, GIF · tối đa 5 MB</small></span></label>
@@ -2843,7 +2845,7 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
               <label><span>Thời gian làm bài (phút)</span><input className="nb-input" type="number" min="10" max="300" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })} /></label>
             </div>
             <label className="nb-xm-field"><span>Mô tả / lưu ý cho học sinh (không bắt buộc)</span>
-              <textarea className="nb-input" rows={3} placeholder="Ví dụ: Được dùng Python hoặc C++, không trao đổi bài, nộp nhiều lần lấy điểm cao nhất." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+              <textarea className="nb-input nb-xm-desc-input" rows={4} placeholder="Ví dụ: Được dùng Python hoặc C++, không trao đổi bài, nộp nhiều lần lấy điểm cao nhất." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
           </section>
 
           <section className="nb-xm-section">
@@ -5512,6 +5514,18 @@ function App() {
         .nb-xm-students { display: flex; flex-direction: column; gap: 10px; }
         .nb-xm-students-tools { display: flex; flex-direction: column; gap: 8px; }
         .nb-xm-students-tools .nb-practice-search, .nb-xm-picker .nb-practice-search { flex: none; height: 42px; min-height: 0; }
+        .nb-xm-problem-modal > *, .nb-xm-picker > *, .nb-xm-viewer > * { flex-shrink: 0; }
+        .nb-xm-problem-modal textarea, .nb-xm-problem-modal input, .nb-xm-problem-modal select { flex-shrink: 0; }
+        .nb-xm-problem-modal .nb-testcase-editor { flex-shrink: 0; }
+        .nb-xm-picker .nb-xm-picker-list { flex-shrink: 1; min-height: 120px; }
+        .nb-xm-statement-input { min-height: 220px; line-height: 1.6; resize: vertical; }
+        .nb-xm-desc-input { min-height: 110px; line-height: 1.6; resize: vertical; }
+        .nb-xm-problem-modal { gap: 14px; }
+        .nb-xm-problem-modal .nb-modal-head { padding-bottom: 12px; border-bottom: 1px solid #e9edf4; align-items: center; }
+        .nb-xm-problem-modal .nb-modal-head .nb-h3 { margin: 4px 0 0; }
+        .nb-xm-row label > .nb-field-label, .nb-xm-field > span { color: var(--slate); font: 600 11px 'Be Vietnam Pro', inherit; text-transform: none; letter-spacing: 0; }
+        .nb-xm-problem-modal .nb-form-section-label { margin-top: 4px; }
+        .nb-xm-problem-modal .nb-modal-actions { gap: 10px; padding-top: 6px; }
         .nb-xm-students-bulk { display: flex; gap: 8px; flex-wrap: wrap; }
         .nb-xm-student-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; max-height: 280px; overflow-y: auto; padding: 3px; }
         .nb-xm-problem-list { display: flex; flex-direction: column; gap: 8px; }
