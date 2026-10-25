@@ -4013,7 +4013,7 @@ function TypingGameView({ currentUser }) {
     return (
       <div className="nb-tg">
         <header className="nb-tg-head">
-          <h2>Gõ lệnh Python</h2>
+          <h2>Giải trí</h2>
           <p>Gõ nhanh và đúng các hàm, câu lệnh hay gặp để nhớ cú pháp, bớt sai chính tả khi làm bài.</p>
         </header>
         <div className="nb-tg-menu">
@@ -4166,7 +4166,7 @@ const BASE_NAV = [
   { key: "contests", label: "Đề thi thử", shortLabel: "Đề thi", icon: Clock },
   { key: "leaderboard", label: "Bảng xếp hạng", shortLabel: "Xếp hạng", icon: Trophy },
   { key: "discussion", label: "Thảo luận", shortLabel: "Thảo luận", icon: MessageSquare },
-  { key: "typing", label: "Gõ lệnh Python", shortLabel: "Gõ lệnh", icon: Keyboard },
+  { key: "typing", label: "Giải trí", shortLabel: "Gõ lệnh", icon: Keyboard },
 ];
 const ACCOUNTS_NAV = { key: "accounts", label: "Quản lý tài khoản", shortLabel: "Tài khoản", icon: Users };
 
