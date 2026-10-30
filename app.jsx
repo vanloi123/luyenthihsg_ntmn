@@ -377,13 +377,82 @@ async function dbExamGetProblems(examId) {
   if (error) throw error;
   return (Array.isArray(data?.problems) ? data.problems : []).map(normalizeExamProblem);
 }
-async function dbExamSave(exam, problems, isNew, createdBy) {
+// Code mẫu của giáo viên: cột exams.solutions (schema-exams-v3.sql) = { mode, count, items: { [problemId]: { language, code, note } } }
+// mode: "auto" = mở khi mọi học sinh được giao đã nộp xong · "open" = mở ngay · "hidden" = chưa công bố
+let examSolutionsColumn = true;
+const SOLUTION_MODES = {
+  auto: "Tự động mở khi tất cả học sinh đã nộp bài",
+  open: "Công bố ngay",
+  hidden: "Chưa công bố",
+};
+function cleanSolutions(solutions, problems) {
+  const ids = new Set((problems || []).map((p) => p.id));
+  const items = {};
+  Object.entries(solutions?.items || {}).forEach(([id, it]) => {
+    if (ids.has(id) && String(it?.code || "").trim()) items[id] = { language: normalizeLanguage(it.language), code: String(it.code), note: String(it.note || "") };
+  });
+  const mode = ["auto", "open", "hidden"].includes(solutions?.mode) ? solutions.mode : "auto";
+  return { mode, count: Object.keys(items).length, items };
+}
+// trả về true nếu đã lưu code mẫu, false nếu cột chưa có (chưa chạy SQL v3)
+async function dbExamSave(exam, problems, isNew, createdBy, solutions) {
   const row = examRow(exam, problems);
-  const query = isNew
-    ? supabase.from("exams").insert({ id: exam.id, ...row, created_by: createdBy || null })
-    : supabase.from("exams").update(row).eq("id", exam.id);
-  const { error } = await query;
+  const wantSolutions = solutions !== undefined && examSolutionsColumn;
+  if (wantSolutions) row.solutions = cleanSolutions(solutions, problems);
+  const run = (r) => (isNew
+    ? supabase.from("exams").insert({ id: exam.id, ...r, created_by: createdBy || null })
+    : supabase.from("exams").update(r).eq("id", exam.id));
+  let { error } = await run(row);
+  if (error && wantSolutions && isMissingColumnError(error, "solutions")) {
+    examSolutionsColumn = false;
+    delete row.solutions;
+    ({ error } = await run(row));
+    if (error) throw error;
+    return false;
+  }
   if (error) throw error;
+  return wantSolutions;
+}
+async function dbExamGetSolutions(examId) {
+  if (!examSolutionsColumn) return null;
+  const { data, error } = await supabase.from("exams").select("solutions").eq("id", examId).maybeSingle();
+  if (error) { if (isMissingColumnError(error, "solutions")) examSolutionsColumn = false; return null; }
+  return data?.solutions || null;
+}
+// Học sinh chỉ tải phần tóm tắt (chế độ + số bài có code mẫu), chưa tải nội dung code khi chưa được công bố
+async function dbExamSolutionInfo(examId) {
+  if (!examSolutionsColumn) return null;
+  const { data, error } = await supabase.from("exams").select("mode:solutions->>mode,count:solutions->>count").eq("id", examId).maybeSingle();
+  if (error) { if (isMissingColumnError(error, "solutions")) examSolutionsColumn = false; return null; }
+  if (!data || !Number(data.count)) return null;
+  return { mode: data.mode || "auto", count: Number(data.count) };
+}
+async function dbExamSetSolutionMode(examId, solutions, mode) {
+  const next = { ...(solutions || { items: {}, count: 0 }), mode };
+  const { error } = await supabase.from("exams").update({ solutions: next }).eq("id", examId);
+  if (error) throw error;
+  return next;
+}
+// Code mẫu được mở khi: công bố ngay, hoặc (chế độ tự động) mọi học sinh được giao đều đã nộp / hết giờ
+function solutionsUnlocked(exam, mode, attempts, students, nowMs) {
+  if (mode === "open") return true;
+  if (mode === "hidden") return false;
+  const known = new Set((students || []).map((st) => st.id));
+  const ids = (exam.assignedTo.length ? exam.assignedTo : [...known]).filter((id) => known.has(id));
+  if (ids.length === 0) return false;
+  return ids.every((id) => {
+    const phase = attemptPhase(exam, attempts.find((a) => a.studentId === id) || null, nowMs);
+    return phase === "finished" || phase === "timeup";
+  });
+}
+function solutionProgress(exam, attempts, students, nowMs) {
+  const known = new Set((students || []).map((st) => st.id));
+  const ids = (exam.assignedTo.length ? exam.assignedTo : [...known]).filter((id) => known.has(id));
+  const done = ids.filter((id) => {
+    const phase = attemptPhase(exam, attempts.find((a) => a.studentId === id) || null, nowMs);
+    return phase === "finished" || phase === "timeup";
+  }).length;
+  return { done, total: ids.length };
 }
 async function dbExamSetStatus(id, status) {
   const { error } = await supabase.from("exams").update({ status }).eq("id", id);
@@ -2770,7 +2839,20 @@ function ExamCode({ submission }) {
   return code ? <pre className="nb-history-code">{code}</pre> : <p className="nb-sub" style={{ padding: 14 }}>Lượt nộp này không có mã nguồn được lưu.</p>;
 }
 
-function ExamSubmissionViewer({ title, subtitle, problems, submissions, initialProblemId, onClose }) {
+function SolutionPanel({ solution, teacherNote }) {
+  if (!solution) return null;
+  const meta = LANGUAGE_META[solution.language] || LANGUAGE_META.cpp;
+  return (
+    <section className="nb-xm-solution">
+      <div className="nb-xm-solution-head"><strong><Award size={15} /> Code mẫu của thầy cô</strong><span>{meta.label}</span></div>
+      {teacherNote && <p className="nb-xm-solution-teacher">{teacherNote}</p>}
+      {solution.note && <p className="nb-xm-solution-note">{solution.note}</p>}
+      <pre className="nb-history-code">{solution.code}</pre>
+    </section>
+  );
+}
+
+function ExamSubmissionViewer({ title, subtitle, problems, submissions, initialProblemId, onClose, solutions, solutionNote }) {
   const [problemId, setProblemId] = useState(initialProblemId || problems[0]?.id);
   const [openId, setOpenId] = useState(null);
   const best = useMemo(() => bestScoreMap(submissions), [submissions]);
@@ -2800,6 +2882,7 @@ function ExamSubmissionViewer({ title, subtitle, problems, submissions, initialP
             <ProblemStatement problem={problem} />
           </details>
         )}
+        {problem && solutions?.[problem.id] && <SolutionPanel solution={solutions[problem.id]} teacherNote={solutionNote} />}
         <div className="nb-xm-viewer-body">
           <div className="nb-xm-sub-list">
             {list.length === 0 && <p className="nb-sub" style={{ padding: 14 }}>Chưa có lượt nộp nào cho bài này.</p>}
@@ -2820,8 +2903,9 @@ function ExamSubmissionViewer({ title, subtitle, problems, submissions, initialP
 }
 
 /* ---------- Soạn một bài tập nằm trong đề ---------- */
-function ExamProblemEditor({ initial, onSave, onClose }) {
+function ExamProblemEditor({ initial, initialSolution, onSave, onClose }) {
   const [form, setForm] = useState(() => ({
+    solLang: initialSolution?.language || "python", solCode: initialSolution?.code || "", solNote: initialSolution?.note || "",
     title: initial?.title || "", difficulty: initial?.difficulty || "Dễ", points: initial?.points || 100,
     language: initial ? problemLanguage(initial) : "cpp", statement: initial?.statement || "",
     imageUrl: initial?.imageUrl || "", imageFile: null,
@@ -2865,7 +2949,7 @@ function ExamProblemEditor({ initial, onSave, onClose }) {
         id: initial?.id || newExamProblemId(), title: form.title.trim(), difficulty: form.difficulty,
         points: Math.max(1, Number(form.points) || 100), language: form.language, statement: form.statement.trim(), imageUrl,
         sample: { input: form.sampleInput.trim() || "—", output: form.sampleOutput.trim() || "—" }, testCases: tests,
-      }));
+      }), form.solCode.trim() ? { language: form.solLang, code: form.solCode.replace(/\s+$/, ""), note: form.solNote.trim() } : null);
     } catch (err) {
       setError(err?.message || "Không thể tải ảnh hoặc lưu bài.");
       setBusy(false);
@@ -2913,6 +2997,15 @@ function ExamProblemEditor({ initial, onSave, onClose }) {
             </div>
           ))}
         </div>
+        <div className="nb-form-section-label">Code mẫu của giáo viên (không bắt buộc)</div>
+        <p className="nb-sub" style={{ margin: "-4px 0 8px" }}>Học sinh chỉ xem được code mẫu sau khi tất cả học sinh được giao đã nộp bài (hoặc khi thầy cô công bố ngay trong trang kết quả).</p>
+        <div className="nb-xm-row two">
+          <label><span className="nb-field-label">Ngôn ngữ code mẫu</span>
+            <select className="nb-input" value={form.solLang} onChange={(e) => setForm({ ...form, solLang: e.target.value })}>{LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
+          <label><span className="nb-field-label">Ghi chú / hướng giải (nếu có)</span>
+            <input className="nb-input" placeholder="Ví dụ: Duyệt một lần, độ phức tạp O(n)" value={form.solNote} onChange={(e) => setForm({ ...form, solNote: e.target.value })} /></label>
+        </div>
+        <textarea className="nb-input nb-mono nb-xm-solution-input" rows={8} placeholder="Dán code mẫu vào đây" spellCheck={false} value={form.solCode} onChange={(e) => setForm({ ...form, solCode: e.target.value })} />
         <button type="button" className="nb-btn nb-btn-ghost" onClick={() => setForm((f) => ({ ...f, testCases: [...f.testCases, createEmptyTestCase()] }))}><Plus size={15} /> Thêm test case</button>
         {error && <div className="nb-login-error"><AlertCircle size={14} /> {error}</div>}
         <div className="nb-modal-actions">
@@ -2969,6 +3062,7 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
     scope: exam && exam.assignedTo.length > 0 ? "selected" : "all", assignedTo: exam ? [...exam.assignedTo] : [],
   }));
   const [problems, setProblems] = useState([]);
+  const [solutions, setSolutions] = useState({ mode: "auto", count: 0, items: {} });
   const [editor, setEditor] = useState(null);
   const [picker, setPicker] = useState(false);
   const [studentQuery, setStudentQuery] = useState("");
@@ -2979,8 +3073,8 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
   useEffect(() => {
     if (isNew) return undefined;
     let cancelled = false;
-    dbExamGetProblems(exam.id)
-      .then((list) => { if (!cancelled) { setProblems(list); setLoading(false); } })
+    Promise.all([dbExamGetProblems(exam.id), dbExamGetSolutions(exam.id)])
+      .then(([list, sol]) => { if (!cancelled) { setProblems(list); if (sol) setSolutions({ mode: sol.mode || "auto", count: sol.count || 0, items: sol.items || {} }); setLoading(false); } })
       .catch(() => { if (!cancelled) { setLoadError("Không tải được bài tập của đề. Hãy đóng và thử lại."); setLoading(false); } });
     return () => { cancelled = true; };
   }, [exam?.id, isNew]);
@@ -3010,7 +3104,12 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
       return next;
     });
   }
-  function saveProblem(problem) {
+  function saveProblem(problem, solution) {
+    setSolutions((cur) => {
+      const items = { ...cur.items };
+      if (solution) items[problem.id] = solution; else delete items[problem.id];
+      return { ...cur, items };
+    });
     setProblems((list) => (list.some((p) => p.id === problem.id) ? list.map((p) => (p.id === problem.id ? problem : p)) : [...list, problem]));
     setEditor(null);
   }
@@ -3035,8 +3134,9 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
     };
     setSaving(true);
     try {
-      await dbExamSave(payload, problems, isNew, currentUser?.id);
-      onSaved(isNew ? "Đã tạo đề thi." : "Đã lưu thay đổi.");
+      const hasSolutions = Object.values(solutions.items).some((it) => String(it?.code || "").trim());
+      const saved = await dbExamSave(payload, problems, isNew, currentUser?.id, solutions);
+      onSaved((isNew ? "Đã tạo đề thi." : "Đã lưu thay đổi.") + (hasSolutions && !saved ? " Lưu ý: chưa lưu được code mẫu vì chưa chạy file schema-exams-v3.sql trên Supabase." : ""));
     } catch (e) {
       setError(e?.message ? `Không lưu được đề thi: ${e.message}` : "Không lưu được đề thi. Hãy thử lại.");
       setSaving(false);
@@ -3127,14 +3227,14 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
           </div>
         </>
       )}
-      {editor && <ExamProblemEditor initial={editor.problem} onSave={saveProblem} onClose={() => setEditor(null)} />}
+      {editor && <ExamProblemEditor initial={editor.problem} initialSolution={editor.problem ? solutions.items[editor.problem.id] : null} onSave={saveProblem} onClose={() => setEditor(null)} />}
       {picker && <PracticePickerModal practiceProblems={practiceProblems} onPick={importProblems} onClose={() => setPicker(false)} />}
     </div>
   );
 }
 
 /* ---------- Phòng thi (học sinh làm bài / giáo viên xem trước) ---------- */
-function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
+function ExamRunner({ exam, currentUser, isTeacher, onExit, students = [] }) {
   const [problems, setProblems] = useState(null);
   const [attempt, setAttempt] = useState(null);
   const [mySubs, setMySubs] = useState([]);
@@ -3146,6 +3246,10 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
   const [starting, setStarting] = useState(false);
   const [notice, setNotice] = useState("");
   const [langPref, setLangPref] = useState("");
+  const [solInfo, setSolInfo] = useState(null);       // { mode, count } — chưa có nội dung code
+  const [solItems, setSolItems] = useState(null);     // nội dung code mẫu, chỉ tải khi đã được mở
+  const [solChecking, setSolChecking] = useState(false);
+  const [solUnlocked, setSolUnlocked] = useState(false);
   const [awayNotice, setAwayNotice] = useState(null);
   const attemptRef = useRef(null);
   const offsetRef = useRef(0);
@@ -3182,6 +3286,31 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
   const remaining = attempt ? attemptRemainingMs(exam, attempt, serverNow) : 0;
   attemptRef.current = attempt;
   offsetRef.current = offset;
+
+  // Code mẫu: chỉ kiểm tra khi học sinh đã xong bài; tải nội dung code sau khi được mở
+  const reviewActive = !isTeacher && !canWork && !!problems && !!attempt;
+  const checkSolutions = useCallback(async () => {
+    setSolChecking(true);
+    try {
+      const info = await dbExamSolutionInfo(exam.id);
+      setSolInfo(info);
+      if (!info) { setSolUnlocked(false); setSolChecking(false); return; }
+      let open = info.mode === "open";
+      if (info.mode === "auto") {
+        const all = await dbExamFetchAttempts({ examId: exam.id });
+        open = solutionsUnlocked(exam, "auto", all, students, Date.now() + offsetRef.current);
+      }
+      setSolUnlocked(open);
+      if (open) { const full = await dbExamGetSolutions(exam.id); setSolItems(full?.items || {}); }
+    } catch (e) { /* giữ trạng thái cũ, lần kiểm tra sau sẽ thử lại */ }
+    setSolChecking(false);
+  }, [exam, students]);
+  useEffect(() => {
+    if (!reviewActive || solUnlocked) return undefined;
+    checkSolutions();
+    const t = setInterval(() => { if (!document.hidden) checkSolutions(); }, 60000);
+    return () => clearInterval(t);
+  }, [reviewActive, solUnlocked, checkSolutions]);
 
   // Phát hiện học sinh rời màn hình thi: +1 lỗi (không trừ điểm) và tạm dừng đồng hồ đến khi quay lại.
   const monitoring = !isTeacher && canWork;
@@ -3330,6 +3459,16 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
           <span>Bấm vào từng bài để xem lại các lần nộp và code của em.</span>
         </div>
       )}
+      {reviewMode && solInfo && (
+        <div className={`nb-xm-solution-banner ${solUnlocked ? "open" : ""}`}>
+          {solUnlocked ? <CheckCircle2 size={18} /> : <Lock size={18} />}
+          <div>
+            <strong>{solUnlocked ? "Thầy cô đã công bố code mẫu" : solInfo.mode === "hidden" ? "Code mẫu chưa được công bố" : "Code mẫu sẽ mở khi tất cả học sinh đã nộp bài"}</strong>
+            <span>{solUnlocked ? "Mở từng bài ở bên dưới, phần code mẫu nằm ngay dưới đề bài." : "Hệ thống tự kiểm tra lại mỗi phút, em có thể xem lại bài làm của mình trong lúc chờ."}</span>
+          </div>
+          {!solUnlocked && <button type="button" className="nb-btn nb-btn-ghost" onClick={checkSolutions} disabled={solChecking}><RefreshCw size={14} className={solChecking ? "nb-spin" : ""} /> Kiểm tra lại</button>}
+        </div>
+      )}
       {notice && <div className="nb-login-error" style={{ marginBottom: 10 }}><AlertCircle size={14} /> {notice}</div>}
       {awayNotice && (
         <div className="nb-xm-away" role="alert">
@@ -3366,7 +3505,7 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
         />
       )}
       {viewing && (
-        <ExamSubmissionViewer title={exam.title} subtitle={`${total}/${maxScore} điểm`} problems={problems} submissions={mySubs} initialProblemId={viewing} onClose={() => setViewing(null)} />
+        <ExamSubmissionViewer title={exam.title} subtitle={`${total}/${maxScore} điểm`} problems={problems} submissions={mySubs} initialProblemId={viewing} onClose={() => setViewing(null)} solutions={solUnlocked ? solItems : null} />
       )}
     </div>
   );
@@ -3429,6 +3568,16 @@ function ExamResults({ exam, students, onExit }) {
   const top = joined.reduce((m, r) => Math.max(m, r.total), 0);
   const maxScore = (problems || []).reduce((s, p) => s + p.points, 0);
 
+  const [solutions, setSolutions] = useState(null);
+  const [solBusy, setSolBusy] = useState(false);
+  useEffect(() => { let c = false; dbExamGetSolutions(exam.id).then((v) => { if (!c) setSolutions(v); }).catch(() => {}); return () => { c = true; }; }, [exam.id]);
+  async function changeSolutionMode(mode) {
+    if (!solutions) return;
+    setSolBusy(true);
+    try { setSolutions(await dbExamSetSolutionMode(exam.id, solutions, mode)); }
+    catch (e) { setError("Chưa đổi được chế độ công bố code mẫu, hãy thử lại."); }
+    setSolBusy(false);
+  }
   const [extendFor, setExtendFor] = useState(null);
   const [extendMinutes, setExtendMinutes] = useState("15");
   async function extend(row, minutes) {
@@ -3480,6 +3629,21 @@ function ExamResults({ exam, students, onExit }) {
             <div><strong>{avg}</strong><span>Điểm trung bình /{maxScore}</span></div>
             <div><strong>{top}</strong><span>Điểm cao nhất</span></div>
           </div>
+          {solutions && solutions.count > 0 && (() => {
+            const prog = solutionProgress(exam, attempts, students, now);
+            const unlocked = solutionsUnlocked(exam, solutions.mode, attempts, students, now);
+            return (
+              <section className={`nb-xm-solution-ctl ${unlocked ? "open" : ""}`}>
+                <div className="nb-xm-solution-ctl-text">
+                  <strong>{unlocked ? <CheckCircle2 size={16} /> : <Lock size={16} />} Code mẫu · {solutions.count}/{problems.length} bài</strong>
+                  <span>{unlocked ? "Học sinh đang xem được code mẫu." : solutions.mode === "hidden" ? "Đang ẩn với học sinh." : `Tự động mở khi tất cả nộp xong: ${prog.done}/${prog.total} học sinh đã nộp hoặc hết giờ.`}</span>
+                </div>
+                <div className="nb-xm-solution-modes" role="radiogroup" aria-label="Công bố code mẫu">
+                  {Object.entries(SOLUTION_MODES).map(([k, label]) => <button key={k} type="button" role="radio" aria-checked={solutions.mode === k} disabled={solBusy} className={`nb-chip ${solutions.mode === k ? "active" : ""}`} onClick={() => changeSolutionMode(k)}>{label}</button>)}
+                </div>
+              </section>
+            );
+          })()}
           <div className="nb-exam-toolbar" style={{ margin: "14px 0" }}>
             <div className="nb-exam-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm học sinh…" /></div>
             <div className="nb-filter-row" style={{ margin: 0 }}>
@@ -3499,7 +3663,7 @@ function ExamResults({ exam, students, onExit }) {
                     <td><div className="nb-contest-student"><Avatar name={r.student.name} size={28} /><div className="nb-xm-name"><strong>{r.student.name}</strong><small>@{r.student.username}{r.student.className ? ` · ${r.student.className}` : ""}</small></div></div></td>
                     <td><span className={`nb-xm-phase ${phaseTone[r.phase]}`}>{ATTEMPT_PHASE_LABEL[r.phase]}</span></td>
                     <td>{r.attempt ? formatSpan(r.spent) : "—"}{r.attempt?.extraMinutes ? <small className="nb-xm-extra"> (+{r.attempt.extraMinutes}′)</small> : null}</td>
-                    <td>{r.attempt ? <span className={`nb-xm-viol ${r.attempt.violations > 0 ? "has" : ""}`} title="Số lần rời màn hình">{r.attempt.violations || 0}{r.attempt.pausedAt && r.phase === "running" ? "·Thoát màn hình" : ""}</span> : "—"}</td>
+                    <td>{r.attempt ? <span className={`nb-xm-viol ${r.attempt.violations > 0 ? "has" : ""}`} title="Số lần rời màn hình (không trừ điểm)">{r.attempt.violations || 0}{r.attempt.pausedAt && r.phase === "running" ? " · đang vắng" : ""}</span> : "—"}</td>
                     {problems.map((p) => { const sc = r.best.get(p.id); return <td key={p.id}><span className={`nb-xm-cell ${sc == null ? "empty" : sc >= p.points ? "full" : sc > 0 ? "part" : "zero"}`}>{sc == null ? "–" : sc}</span></td>; })}
                     <td><b>{r.total}</b></td>
                     <td className="nb-xm-row-actions">
@@ -3531,7 +3695,7 @@ function ExamResults({ exam, students, onExit }) {
         </div>
       )}
       {detail && problems && (
-        <ExamSubmissionViewer title={detail.student.name} subtitle={`${exam.title} · ${detail.total}/${maxScore} điểm · ${ATTEMPT_PHASE_LABEL[detail.phase]}`} problems={problems} submissions={detail.own} onClose={() => setDetail(null)} />
+        <ExamSubmissionViewer title={detail.student.name} subtitle={`${exam.title} · ${detail.total}/${maxScore} điểm · ${ATTEMPT_PHASE_LABEL[detail.phase]}`} problems={problems} submissions={detail.own} onClose={() => setDetail(null)} solutions={solutions?.items} solutionNote="Giáo viên luôn xem được code mẫu." />
       )}
     </div>
   );
@@ -3585,8 +3749,8 @@ function ExamsView({ exams, examsMissing, isTeacher, currentUser, students, prac
   }
   async function cloneExam(exam) {
     try {
-      const problems = await dbExamGetProblems(exam.id);
-      await dbExamSave({ ...exam, id: `ex${Date.now()}`, title: `${exam.title} · Bản sao`, status: "draft", date: "Chưa xếp lịch" }, problems, true, currentUser.id);
+      const [problems, sol] = await Promise.all([dbExamGetProblems(exam.id), dbExamGetSolutions(exam.id)]);
+      await dbExamSave({ ...exam, id: `ex${Date.now()}`, title: `${exam.title} · Bản sao`, status: "draft", date: "Chưa xếp lịch" }, problems, true, currentUser.id, sol || undefined);
       await refreshExams();
       setNotice("Đã nhân bản thành bản nháp.");
     } catch (e) { setNotice("Chưa nhân bản được đề, hãy thử lại."); }
@@ -3607,7 +3771,7 @@ function ExamsView({ exams, examsMissing, isTeacher, currentUser, students, prac
       onClose={() => setMode({ type: "list" })} onSaved={async (msg) => { await refreshExams(); setMode({ type: "list" }); setNotice(msg); }} />;
   }
   if (mode.type === "run" && liveExam(mode.examId)) {
-    return <ExamRunner exam={liveExam(mode.examId)} currentUser={currentUser} isTeacher={isTeacher || mode.preview} onExit={() => { setMode({ type: "list" }); loadMeta(); }} />;
+    return <ExamRunner students={students} exam={liveExam(mode.examId)} currentUser={currentUser} isTeacher={isTeacher || mode.preview} onExit={() => { setMode({ type: "list" }); loadMeta(); }} />;
   }
   if (mode.type === "results" && liveExam(mode.examId)) {
     return <ExamResults exam={liveExam(mode.examId)} students={students} onExit={() => setMode({ type: "list" })} />;
@@ -6707,6 +6871,25 @@ function App() {
         .nb-xm-extend > * { flex-shrink: 0; }
         .nb-xm-extend-body { padding: 4px 22px 8px; display: flex; flex-direction: column; gap: 14px; }
         .nb-xm-extend-quick { display: flex; flex-wrap: wrap; gap: 8px; }
+        /* ---- Code mẫu trong đề thi ---- */
+        .nb-xm-solution-input { min-height: 160px; line-height: 1.55; resize: vertical; font-size: 12.5px; }
+        .nb-xm-solution { margin: 0 22px 12px; border: 1px solid #bfe7d4; border-radius: 12px; background: #f3fbf7; overflow: hidden; flex-shrink: 0; }
+        .nb-xm-solution-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; background: #e3f6ec; color: #0b5a38; font-size: 13px; }
+        .nb-xm-solution-head strong { display: inline-flex; align-items: center; gap: 6px; }
+        .nb-xm-solution-head span { font: 600 11.5px 'JetBrains Mono', monospace; }
+        .nb-xm-solution-note, .nb-xm-solution-teacher { margin: 0; padding: 10px 14px 0; font-size: 13px; color: var(--ink); }
+        .nb-xm-solution-teacher { color: var(--slate); font-size: 12px; }
+        .nb-xm-solution .nb-history-code { margin: 10px 14px 14px; max-height: 260px; overflow: auto; }
+        .nb-xm-solution-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 12px 16px; border-radius: 12px; border: 1px solid #f3d38a; background: #fff8e6; color: #7a4a00; }
+        .nb-xm-solution-banner.open { border-color: #bfe7d4; background: #f0faf5; color: #0b5a38; }
+        .nb-xm-solution-banner > div { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+        .nb-xm-solution-banner svg { flex-shrink: 0; }
+        .nb-xm-solution-ctl { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-top: 14px; padding: 14px 16px; border-radius: 14px; border: 1px solid #f3d38a; background: #fff8e6; }
+        .nb-xm-solution-ctl.open { border-color: #bfe7d4; background: #f0faf5; }
+        .nb-xm-solution-ctl-text { display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+        .nb-xm-solution-ctl-text strong { display: inline-flex; align-items: center; gap: 6px; }
+        .nb-xm-solution-ctl-text span { color: var(--slate); font-size: 12px; }
+        .nb-xm-solution-modes { display: flex; gap: 8px; flex-wrap: wrap; }
         .nb-xm-desc-input { min-height: 110px; line-height: 1.6; resize: vertical; }
         .nb-xm-problem-modal { gap: 14px; }
         .nb-xm-problem-modal .nb-modal-head { padding-bottom: 12px; border-bottom: 1px solid #e9edf4; align-items: center; }
