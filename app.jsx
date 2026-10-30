@@ -3499,7 +3499,7 @@ function ExamResults({ exam, students, onExit }) {
                     <td><div className="nb-contest-student"><Avatar name={r.student.name} size={28} /><div className="nb-xm-name"><strong>{r.student.name}</strong><small>@{r.student.username}{r.student.className ? ` · ${r.student.className}` : ""}</small></div></div></td>
                     <td><span className={`nb-xm-phase ${phaseTone[r.phase]}`}>{ATTEMPT_PHASE_LABEL[r.phase]}</span></td>
                     <td>{r.attempt ? formatSpan(r.spent) : "—"}{r.attempt?.extraMinutes ? <small className="nb-xm-extra"> (+{r.attempt.extraMinutes}′)</small> : null}</td>
-                    <td>{r.attempt ? <span className={`nb-xm-viol ${r.attempt.violations > 0 ? "has" : ""}`} title="Số lần rời màn hình (không trừ điểm)">{r.attempt.violations || 0}{r.attempt.pausedAt && r.phase === "running" ? " · đang vắng" : ""}</span> : "—"}</td>
+                    <td>{r.attempt ? <span className={`nb-xm-viol ${r.attempt.violations > 0 ? "has" : ""}`} title="Số lần rời màn hình">{r.attempt.violations || 0}{r.attempt.pausedAt && r.phase === "running" ? "·Thoát màn hình" : ""}</span> : "—"}</td>
                     {problems.map((p) => { const sc = r.best.get(p.id); return <td key={p.id}><span className={`nb-xm-cell ${sc == null ? "empty" : sc >= p.points ? "full" : sc > 0 ? "part" : "zero"}`}>{sc == null ? "–" : sc}</span></td>; })}
                     <td><b>{r.total}</b></td>
                     <td className="nb-xm-row-actions">
