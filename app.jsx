@@ -334,6 +334,9 @@ async function uploadProblemImage(file) {
 /* ---------- ĐỀ THI THỬ: lớp dữ liệu (bảng exams / exam_attempts / exam_submissions) ---------- */
 const EXAM_LIST_COLUMNS = "id,title,description,status,date,duration,assigned_to,problem_count,total_points,created_at";
 const EXAM_SUB_LIGHT_COLUMNS = "id,exam_id,student_id,problem_id,verdict,score,passed_tests,total_tests,problem_title,problem_points,created_at";
+// Cột mới (schema-exams-v2.sql). Nếu chưa chạy SQL, tự rơi về cách cũ để hệ thống vẫn chạy bình thường.
+let examLanguageColumn = true;
+const isMissingColumnError = (error, name) => !!error && (error.code === "42703" || error.code === "PGRST204" || new RegExp(name, "i").test(String(error.message || "")));
 const EXAM_STATUS = ["draft", "upcoming", "active", "completed"];
 
 function mapExam(row) {
@@ -396,18 +399,19 @@ function mapExamSubmission(row) {
     verdict: row.verdict, score: Number(row.score) || 0,
     passedTests: row.passed_tests ?? null, totalTests: row.total_tests ?? null,
     problemTitle: row.problem_title, problemPoints: row.problem_points,
-    sourceCode: row.source_code || "", createdAt: row.created_at || null,
+    sourceCode: row.source_code || "", createdAt: row.created_at || null, language: row.language || "",
   };
 }
 // Lấy bài nộp đề thi: không kèm code (nhẹ), trừ khi withCode (chỉ dùng cho bài của chính học sinh)
 async function dbExamFetchSubmissions({ examId, studentId, withCode = false } = {}) {
-  const columns = withCode ? EXAM_SUB_LIGHT_COLUMNS + ",source_code" : EXAM_SUB_LIGHT_COLUMNS;
   const rows = [];
   for (let from = 0; ; from += 1000) {
+    const columns = EXAM_SUB_LIGHT_COLUMNS + (examLanguageColumn ? ",language" : "") + (withCode ? ",source_code" : "");
     let q = supabase.from("exam_submissions").select(columns).order("created_at", { ascending: true }).range(from, from + 999);
     if (examId) q = q.eq("exam_id", examId);
     if (studentId) q = q.eq("student_id", studentId);
     const { data, error } = await q;
+    if (error && examLanguageColumn && isMissingColumnError(error, "language")) { examLanguageColumn = false; from -= 1000; continue; }
     if (error) throw error;
     rows.push(...(data || []));
     if (!data || data.length < 1000) break;
@@ -420,17 +424,26 @@ async function dbExamSourceCode(submissionId) {
   return data?.source_code || "";
 }
 async function dbExamAddSubmission(sub) {
-  const { error } = await supabase.from("exam_submissions").insert({
+  const row = {
     id: sub.id, exam_id: sub.examId, student_id: sub.studentId, problem_id: sub.problemId, verdict: sub.verdict,
     score: sub.score, passed_tests: sub.passedTests, total_tests: sub.totalTests,
     problem_title: sub.problemTitle, problem_points: sub.problemPoints, source_code: sub.sourceCode || null,
-  });
+  };
+  if (examLanguageColumn && sub.language) row.language = sub.language;
+  let { error } = await supabase.from("exam_submissions").insert(row);
+  if (error && "language" in row && isMissingColumnError(error, "language")) {
+    examLanguageColumn = false;
+    delete row.language;
+    ({ error } = await supabase.from("exam_submissions").insert(row));
+  }
   if (error) throw error;
 }
 function mapExamAttempt(row) {
   return {
     id: row.id, examId: row.exam_id, studentId: row.student_id,
     startedAt: row.started_at, finishedAt: row.finished_at || null, extraMinutes: Number(row.extra_minutes) || 0,
+    violations: Number(row.violations) || 0, pausedMs: Number(row.paused_ms) || 0, pausedAt: row.paused_at || null,
+    pauseSupported: "violations" in row,
   };
 }
 async function dbExamFetchAttempts({ examId, studentId } = {}) {
@@ -455,6 +468,9 @@ async function dbExamUpdateAttempt(id, patch) {
   const row = {};
   if ("finishedAt" in patch) row.finished_at = patch.finishedAt;
   if ("extraMinutes" in patch) row.extra_minutes = patch.extraMinutes;
+  if ("violations" in patch) row.violations = patch.violations;
+  if ("pausedMs" in patch) row.paused_ms = Math.max(0, Math.round(patch.pausedMs));
+  if ("pausedAt" in patch) row.paused_at = patch.pausedAt;
   const { error } = await supabase.from("exam_attempts").update(row).eq("id", id);
   if (error) throw error;
 }
@@ -689,7 +705,7 @@ function getProblemTestCases(problem) {
   }];
 }
 
-async function judgeSourceCode(problem, code) {
+async function judgeSourceCode(problem, code, languageOverride) {
   const sourceCode = String(code || "").trim();
   if (sourceCode.length < 8) {
     return { verdict: "CE", tests: [], message: "Chưa có code hợp lệ để biên dịch." };
@@ -708,7 +724,7 @@ async function judgeSourceCode(problem, code) {
     };
   }
 
-  const language = problemLanguage(problem);
+  const language = languageOverride ? normalizeLanguage(languageOverride) : problemLanguage(problem);
   const languageId = JUDGE0_LANGUAGE_IDS[language] || JUDGE0_LANGUAGE_IDS.cpp;
   const results = [];
   for (const test of testCases) {
@@ -947,12 +963,131 @@ function ChangePasswordModal({ currentUser, onClose, onChange }) {
 /*  PROBLEM SOLVER MODAL                                                    */
 /* ---------------------------------------------------------------------- */
 
+/* ---------- Hiển thị đề bài: đoạn văn, tiêu đề, danh sách, bảng, mã, số mũ / chỉ số dưới ---------- */
+function prettyMath(text) {
+  return String(text).replace(/<=/g, "≤").replace(/>=/g, "≥").replace(/!=/g, "≠");
+}
+function renderStatementInline(text, keyBase = "i") {
+  const source = String(text ?? "");
+  const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\^\{[^}\n]+\})|(\^-?(?:\d+|[A-Za-z]))|(_\{[^}\n]+\})|(_[A-Za-z0-9]{1,2}(?![A-Za-z0-9_]))/g;
+  const out = [];
+  let cursor = 0;
+  let m;
+  let n = 0;
+  const pushText = (t) => { if (t) out.push(<React.Fragment key={`${keyBase}t${n++}`}>{prettyMath(t)}</React.Fragment>); };
+  while ((m = pattern.exec(source))) {
+    const token = m[0];
+    const prev = m.index > 0 ? source[m.index - 1] : "";
+    const isScript = token[0] === "^" || token[0] === "_";
+    // ^ và _ chỉ là số mũ / chỉ số khi đứng ngay sau một ký tự (vd 10^9, a_i), không phải đầu từ
+    if (isScript && (!prev || /\s/.test(prev))) continue;
+    if (token[0] === "_" && !/[A-Za-z0-9)\]}]/.test(prev)) continue;
+    pushText(source.slice(cursor, m.index));
+    cursor = m.index + token.length;
+    const key = `${keyBase}x${n++}`;
+    if (token[0] === "`") out.push(<code key={key} className="nb-st-code">{token.slice(1, -1)}</code>);
+    else if (token.startsWith("**")) out.push(<strong key={key}>{prettyMath(token.slice(2, -2))}</strong>);
+    else if (token[0] === "^") out.push(<sup key={key} className="nb-st-sup">{prettyMath(token[1] === "{" ? token.slice(2, -1) : token.slice(1))}</sup>);
+    else out.push(<sub key={key} className="nb-st-sub">{prettyMath(token[1] === "{" ? token.slice(2, -1) : token.slice(1))}</sub>);
+  }
+  pushText(source.slice(cursor));
+  return out;
+}
+
+const STATEMENT_LABELS = /^(input|output|dữ liệu vào|dữ liệu ra|dữ liệu|kết quả|ràng buộc|giới hạn|ví dụ|giải thích|yêu cầu|subtask\s*\d*|lưu ý|gợi ý|ghi chú|bài toán|mô tả|định dạng)\s*:?\s*$/i;
+const STATEMENT_INLINE_LABELS = /^(input|output|dữ liệu vào|dữ liệu ra|ràng buộc|giới hạn|yêu cầu|lưu ý|gợi ý|ghi chú)\s*:\s+(.+)$/i;
+
+function parseStatementBlocks(statement) {
+  const lines = String(statement || "").replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  let i = 0;
+  const isBlank = (s) => !s.trim();
+  const isBullet = (s) => /^\s*[-*•]\s+\S/.test(s);
+  const isOrdered = (s) => /^\s*\d{1,3}[.)]\s+\S/.test(s);
+  const isTableRow = (s) => /^\s*\|.*\|\s*$/.test(s);
+  while (i < lines.length) {
+    const line = lines[i];
+    if (isBlank(line)) { i++; continue; }
+    if (/^\s*```/.test(line)) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++;
+      blocks.push({ type: "code", text: buf.join("\n") });
+      continue;
+    }
+    const heading = line.match(/^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$/);
+    if (heading) { blocks.push({ type: "heading", level: heading[1].length, text: heading[2] }); i++; continue; }
+    if (STATEMENT_LABELS.test(line.trim())) { blocks.push({ type: "label", text: line.trim().replace(/:\s*$/, "") }); i++; continue; }
+    if (isTableRow(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+      const split = (s) => s.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+      const head = split(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && isTableRow(lines[i])) rows.push(split(lines[i++]));
+      blocks.push({ type: "table", head, rows });
+      continue;
+    }
+    if (isBullet(line) || isOrdered(line)) {
+      const ordered = isOrdered(line);
+      const items = [];
+      while (i < lines.length && (ordered ? isOrdered(lines[i]) : isBullet(lines[i]))) {
+        items.push(lines[i].replace(ordered ? /^\s*\d{1,3}[.)]\s+/ : /^\s*[-*•]\s+/, ""));
+        i++;
+      }
+      blocks.push({ type: ordered ? "ol" : "ul", items });
+      continue;
+    }
+    const buf = [];
+    while (i < lines.length && !isBlank(lines[i]) && !/^\s*```/.test(lines[i]) && !(buf.length && (isBullet(lines[i]) || isOrdered(lines[i]) || /^\s{0,3}#{1,3}\s/.test(lines[i]) || STATEMENT_LABELS.test(lines[i].trim())))) buf.push(lines[i++]);
+    if (!buf.length) { buf.push(lines[i++]); }
+    blocks.push({ type: "p", text: buf.join("\n") });
+  }
+  return blocks;
+}
+
 function ProblemStatement({ problem }) {
-  const paragraphs = String(problem.statement || "").split(/\n{2,}/).filter((part) => part.trim());
+  const blocks = useMemo(() => parseStatementBlocks(problem.statement), [problem.statement]);
   return (
-    <div className="nb-problem-statement">
+    <div className="nb-problem-statement nb-st">
       {problem.imageUrl && <img className="nb-problem-statement-image" src={problem.imageUrl} alt={`Hình minh họa cho ${problem.title}`} />}
-      {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+      {blocks.map((b, k) => {
+        const key = `b${k}`;
+        if (b.type === "heading") {
+          const Tag = b.level === 1 ? "h3" : b.level === 2 ? "h4" : "h5";
+          return <Tag key={key} className={`nb-st-h nb-st-h${b.level}`}>{renderStatementInline(b.text, key)}</Tag>;
+        }
+        if (b.type === "label") return <div key={key} className="nb-st-label"><span>{b.text}</span></div>;
+        if (b.type === "code") return <pre key={key} className="nb-st-pre">{b.text}</pre>;
+        if (b.type === "ul") return <ul key={key} className="nb-st-list">{b.items.map((it, j) => <li key={j}>{renderStatementInline(it, `${key}-${j}`)}</li>)}</ul>;
+        if (b.type === "ol") return <ol key={key} className="nb-st-list ordered">{b.items.map((it, j) => <li key={j}>{renderStatementInline(it, `${key}-${j}`)}</li>)}</ol>;
+        if (b.type === "table") {
+          return (
+            <div key={key} className="nb-st-table-wrap"><table className="nb-st-table">
+              <thead><tr>{b.head.map((c, j) => <th key={j}>{renderStatementInline(c, `${key}h${j}`)}</th>)}</tr></thead>
+              <tbody>{b.rows.map((r, j) => <tr key={j}>{r.map((c, q) => <td key={q}>{renderStatementInline(c, `${key}r${j}c${q}`)}</td>)}</tr>)}</tbody>
+            </table></div>
+          );
+        }
+        const inline = b.text.match(STATEMENT_INLINE_LABELS);
+        if (inline && !b.text.includes("\n")) {
+          return <p key={key} className="nb-st-p nb-st-inline-label"><span className="nb-st-tag">{inline[1]}</span>{renderStatementInline(inline[2], key)}</p>;
+        }
+        return <p key={key} className="nb-st-p">{renderStatementInline(b.text, key)}</p>;
+      })}
+    </div>
+  );
+}
+
+function StatementHelp({ statement, problem }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="nb-st-help">
+      <div className="nb-st-help-row">
+        <span>Mẹo trình bày: <code>10^9</code> → 10<sup>9</sup> · <code>2^{"{n+1}"}</code> · <code>a_i</code> → a<sub>i</sub> · <code>{"`code`"}</code> · <code>**đậm**</code> · <code>- gạch đầu dòng</code> · <code>1. đánh số</code> · <code>&lt;=</code> → ≤ · khối mã bằng <code>```</code></span>
+        <button type="button" className="nb-btn nb-btn-ghost" onClick={() => setOpen((v) => !v)}><Eye size={14} /> {open ? "Ẩn xem trước" : "Xem trước đề"}</button>
+      </div>
+      {open && <div className="nb-st-preview"><ProblemStatement problem={{ ...problem, statement }} /></div>}
     </div>
   );
 }
@@ -1133,10 +1268,21 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
   );
 }
 
-function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0, submissionHistory = [] }) {
-  const editorLanguage = problemLanguage(problem);
+let examDialogQuietUntil = 0;
+function examConfirm(message) {
+  examDialogQuietUntil = Date.now() + 60000; // hộp thoại confirm làm cửa sổ mất focus: không tính là rời màn hình
+  const ok = window.confirm(message);
+  examDialogQuietUntil = Date.now() + 800;
+  return ok;
+}
+
+function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0, submissionHistory = [], chooseLanguage = false, defaultLanguage = "", onLanguageChange }) {
+  // Trong đề thi: học sinh tự chọn ngôn ngữ trước khi gõ code (chooseLanguage). Luyện tập: theo cấu hình bài.
+  const [chosenLanguage, setChosenLanguage] = useState(() => (chooseLanguage && LANGUAGE_META[defaultLanguage] ? defaultLanguage : ""));
+  const needsLanguage = chooseLanguage && !chosenLanguage;
+  const editorLanguage = chooseLanguage ? (chosenLanguage || "cpp") : problemLanguage(problem);
   const editorMeta = LANGUAGE_META[editorLanguage] || LANGUAGE_META.cpp;
-  const [code, setCode] = useState(() => editorMeta.starter);
+  const [code, setCode] = useState(() => (chooseLanguage ? (LANGUAGE_META[defaultLanguage]?.starter || "") : editorMeta.starter));
   const [judging, setJudging] = useState(false);
   const [result, setResult] = useState(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1144,14 +1290,24 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
 
+  function pickLanguage(lang) {
+    if (lang === chosenLanguage) return;
+    const untouched = !code.trim() || LANGUAGE_OPTIONS.some((o) => o.starter === code);
+    if (chosenLanguage && !untouched && !examConfirm("Đổi ngôn ngữ sẽ thay code đang gõ bằng mẫu trống của ngôn ngữ mới. Em vẫn muốn đổi?")) return;
+    setChosenLanguage(lang);
+    setCode(LANGUAGE_META[lang].starter);
+    setResult(null);
+    onLanguageChange && onLanguageChange(lang);
+  }
+
   async function handleSubmit() {
-    if (readOnly || judging) return;
+    if (readOnly || judging || needsLanguage) return;
     setJudging(true);
     setResult(null);
     try {
-      const r = await judgeSourceCode(problem, code);
+      const r = await judgeSourceCode(problem, code, chooseLanguage ? chosenLanguage : undefined);
       setResult(r);
-      onVerdict && onVerdict(problem.id, r, code);
+      onVerdict && onVerdict(problem.id, r, code, chooseLanguage ? chosenLanguage : problemLanguage(problem));
     } catch (error) {
       setResult({
         verdict: "SE",
@@ -1170,7 +1326,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
       <div className="nb-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
           <div>
-            <div className="nb-eyebrow">{problem.id} · {editorMeta.label} · {problem.points} điểm</div>
+            <div className="nb-eyebrow">{problem.id} · {needsLanguage ? "Chọn ngôn ngữ" : editorMeta.label} · {problem.points} điểm</div>
             <h3 className="nb-h3">{problem.title}</h3>
           </div>
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
@@ -1193,20 +1349,45 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
               <button type="button" className="nb-history-toggle" onClick={() => setHistoryOpen((open) => !open)}><RefreshCw size={14} /> Lịch sử code đã nộp ({orderedHistory.length})<ChevronRight size={14} className={historyOpen ? "nb-history-chevron open" : "nb-history-chevron"} /></button>
               {historyOpen && <div className="nb-history-body">
                 <div className="nb-history-list">{orderedHistory.map((submission) => <button type="button" key={submission.id} className={"nb-history-item " + (selectedHistory?.id === submission.id ? "active" : "")} onClick={() => setSelectedHistoryId(submission.id)}><div><VerdictPill verdict={submission.verdict} /><span className="nb-history-date">{formatSubmissionDate(submission.createdAt)}</span></div><strong>{submission.score ?? 0}/{submission.problemPoints ?? problem.points}đ</strong><small>{submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test đạt` : "Bản nộp cũ"}</small></button>)}</div>
-                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" onClick={async () => { try { const c = selectedHistory.sourceCode || await fetchSourceCode(selectedHistory.id); if (c) { setCode(c); setResult(null); setHistoryOpen(false); } } catch (e) { /* ignore */ } }}><Code2 size={14} /> Khôi phục vào editor</button></div><LazySourceCode submission={selectedHistory} emptyMessage="Lượt nộp này được tạo trước khi hệ thống lưu source code." /></div>}
+                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" onClick={async () => { try { const c = selectedHistory.sourceCode || await fetchSourceCode(selectedHistory.id); if (c) { if (chooseLanguage && LANGUAGE_META[selectedHistory.language]) setChosenLanguage(selectedHistory.language); setCode(c); setResult(null); setHistoryOpen(false); } } catch (e) { /* ignore */ } }}><Code2 size={14} /> Khôi phục vào editor</button></div><LazySourceCode submission={selectedHistory} emptyMessage="Lượt nộp này được tạo trước khi hệ thống lưu source code." /></div>}
               </div>}
             </div>}
           </div>
 
           <div className="nb-modal-col">
-            <CodeEditor code={code} onChange={setCode} language={editorLanguage} onSubmit={handleSubmit} readOnly={readOnly} />
+            {needsLanguage ? (
+              <div className="nb-lang-picker" role="group" aria-label="Chọn ngôn ngữ lập trình">
+                <div className="nb-eyebrow">Trước khi gõ code</div>
+                <h4>Em muốn làm bài bằng ngôn ngữ nào?</h4>
+                <p className="nb-sub">Chọn ngôn ngữ em quen nhất. Mỗi bài có thể chọn một ngôn ngữ khác nhau; bài nộp sẽ được chấm theo ngôn ngữ em chọn.</p>
+                <div className="nb-lang-grid">
+                  {LANGUAGE_OPTIONS.map((o) => (
+                    <button type="button" key={o.value} className={`nb-lang-card lang-${o.value}`} onClick={() => pickLanguage(o.value)}>
+                      <span className="nb-lang-mark">{o.value === "python" ? "Py" : o.value === "c" ? "C" : "C++"}</span>
+                      <strong>{o.label}</strong>
+                      <small>Tệp {o.extension}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
+                {chooseLanguage && (
+                  <div className="nb-lang-bar" role="radiogroup" aria-label="Ngôn ngữ">
+                    <span>Ngôn ngữ</span>
+                    {LANGUAGE_OPTIONS.map((o) => <button type="button" role="radio" aria-checked={o.value === chosenLanguage} key={o.value} className={o.value === chosenLanguage ? "active" : ""} onClick={() => pickLanguage(o.value)}>{o.label}</button>)}
+                  </div>
+                )}
+                <CodeEditor code={code} onChange={setCode} language={editorLanguage} onSubmit={handleSubmit} readOnly={readOnly} />
+              </>
+            )}
             <p className="nb-sub" style={{ marginTop: 6 }}>
               Mã được biên dịch và chạy trong môi trường cô lập; kết quả được đối chiếu với test case của bài.
             </p>
             <div className="nb-modal-actions">
-              <button className="nb-btn nb-btn-primary" onClick={handleSubmit} disabled={judging || readOnly}>
+              <button className="nb-btn nb-btn-primary" onClick={handleSubmit} disabled={judging || readOnly || needsLanguage}>
                 {judging ? <Loader2 size={16} className="nb-spin" /> : <Play size={16} />}
-                {judging ? "Đang chấm…" : readOnly ? (disabledLabel || "Không thể nộp bài") : "Nộp bài & Chấm"}
+                {judging ? "Đang chấm…" : readOnly ? (disabledLabel || "Không thể nộp bài") : needsLanguage ? "Chọn ngôn ngữ để bắt đầu" : "Nộp bài & Chấm"}
               </button>
             </div>
 
@@ -2051,6 +2232,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           </div>
           <textarea className="nb-input" placeholder="Đề bài — có thể nhập nhiều đoạn, mô tả thuật toán, ràng buộc và ví dụ" rows={7} value={form.statement}
             onChange={(e) => setForm({ ...form, statement: e.target.value })} />
+          <StatementHelp statement={form.statement} problem={{ title: form.title, imageUrl: "" }} />
           <div className="nb-form-section-label">Hình minh họa cho đề bài</div>
           <div className="nb-image-upload-panel">
             <label className="nb-upload-drop">
@@ -2526,11 +2708,20 @@ const ATTEMPT_PHASE_LABEL = { none: "Chưa vào thi", running: "Đang làm bài"
 function examLimitMs(exam, attempt) {
   return ((Number(exam.duration) || 0) + (Number(attempt?.extraMinutes) || 0)) * 60000;
 }
+// Thời gian đã làm bài thực tế = từ lúc bắt đầu, trừ thời gian học sinh rời màn hình (đồng hồ tạm dừng).
+function attemptElapsedMs(attempt, nowMs) {
+  if (!attempt) return 0;
+  const startMs = new Date(attempt.startedAt).getTime();
+  const pausedNow = attempt.pausedAt ? Math.max(0, nowMs - new Date(attempt.pausedAt).getTime()) : 0;
+  return Math.max(0, nowMs - startMs - (attempt.pausedMs || 0) - pausedNow);
+}
+function attemptRemainingMs(exam, attempt, nowMs) {
+  return examLimitMs(exam, attempt) - attemptElapsedMs(attempt, nowMs);
+}
 function attemptPhase(exam, attempt, nowMs) {
   if (!attempt) return "none";
   if (attempt.finishedAt) return "finished";
-  const startMs = new Date(attempt.startedAt).getTime();
-  return nowMs - startMs >= examLimitMs(exam, attempt) ? "timeup" : "running";
+  return attemptRemainingMs(exam, attempt, nowMs) <= 0 ? "timeup" : "running";
 }
 function examVisibleTo(exam, userId) {
   return exam.status !== "draft" && (exam.assignedTo.length === 0 || exam.assignedTo.includes(userId));
@@ -2616,7 +2807,7 @@ function ExamSubmissionViewer({ title, subtitle, problems, submissions, initialP
               <button type="button" key={s.id} className={`nb-xm-sub-item ${selected?.id === s.id ? "active" : ""}`} onClick={() => setOpenId(s.id)}>
                 <div><VerdictPill verdict={s.verdict} /><span className="nb-history-date">{formatSubmissionDate(s.createdAt)}</span></div>
                 <strong>{s.score}/{s.problemPoints ?? problem?.points}đ</strong>
-                <small>Lần {list.length - index}{s.passedTests != null && s.totalTests != null ? ` · ${s.passedTests}/${s.totalTests} test đạt` : ""}</small>
+                <small>{s.language && LANGUAGE_META[s.language] ? `${LANGUAGE_META[s.language].label} · ` : ""}Lần {list.length - index}{s.passedTests != null && s.totalTests != null ? ` · ${s.passedTests}/${s.totalTests} test đạt` : ""}</small>
               </button>
             ))}
           </div>
@@ -2694,11 +2885,11 @@ function ExamProblemEditor({ initial, onSave, onClose }) {
             <select className="nb-input" value={form.difficulty} onChange={(e) => setForm({ ...form, difficulty: e.target.value })}>{DIFFICULTIES.map((d) => <option key={d} value={d}>{d}</option>)}</select></label>
           <label><span className="nb-field-label">Điểm</span>
             <input className="nb-input" type="number" min="1" value={form.points} onChange={(e) => setForm({ ...form, points: e.target.value })} /></label>
-          <label><span className="nb-field-label">Ngôn ngữ</span>
-            <select className="nb-input" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>{LANGUAGE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</select></label>
+          <div className="nb-xm-lang-note"><span className="nb-field-label">Ngôn ngữ</span><strong>Học sinh tự chọn</strong><small>Python · C · C++ khi làm bài</small></div>
         </div>
         <label className="nb-xm-field"><span>Đề bài (mô tả, ràng buộc, định dạng input/output)</span>
           <textarea className="nb-input nb-xm-statement-input" rows={10} placeholder={"Nhập nội dung đề bài. Để trống một dòng giữa các đoạn để tách đoạn.\n\nInput: …\nOutput: …"} value={form.statement} onChange={(e) => setForm({ ...form, statement: e.target.value })} /></label>
+        <StatementHelp statement={form.statement} problem={{ title: form.title, imageUrl: "" }} />
         <div className="nb-form-section-label">Hình minh họa (không bắt buộc)</div>
         <div className="nb-image-upload-panel">
           <label className="nb-upload-drop"><input type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={onImage} /><UploadCloud size={20} /><span><strong>Chọn ảnh đề bài</strong><small>PNG, JPG, WEBP, GIF · tối đa 5 MB</small></span></label>
@@ -2753,7 +2944,7 @@ function PracticePickerModal({ practiceProblems, onPick, onClose }) {
           {filtered.map((p) => (
             <label key={p.id} className={`nb-exam-check ${picked.includes(p.id) ? "selected" : ""}`}>
               <input type="checkbox" checked={picked.includes(p.id)} onChange={() => setPicked((c) => (c.includes(p.id) ? c.filter((x) => x !== p.id) : [...c, p.id]))} />
-              <span><strong>{p.title}</strong><small>{p.points} điểm · {(LANGUAGE_META[problemLanguage(p)] || LANGUAGE_META.cpp).label} · {p.difficulty} · {getProblemTestCases(p).length} test</small></span>
+              <span><strong>{p.title}</strong><small>{p.points} điểm · {p.difficulty} · {getProblemTestCases(p).length} test</small></span>
               <CheckCircle2 size={16} />
             </label>
           ))}
@@ -2905,7 +3096,7 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
               {problems.map((p, i) => (
                 <div key={p.id} className="nb-xm-problem-row">
                   <span className="nb-xm-problem-no">{i + 1}</span>
-                  <div className="nb-xm-problem-main"><strong>{p.title}</strong><small>{p.points} điểm · {(LANGUAGE_META[problemLanguage(p)] || LANGUAGE_META.cpp).label} · {p.difficulty} · {p.testCases.length} test</small></div>
+                  <div className="nb-xm-problem-main"><strong>{p.title}</strong><small>{p.points} điểm · {p.difficulty} · {p.testCases.length} test</small></div>
                   <div className="nb-xm-problem-actions">
                     <button type="button" className="nb-icon-btn" title="Lên" aria-label="Chuyển lên" disabled={i === 0} onClick={() => move(i, -1)}><ChevronRight size={15} style={{ transform: "rotate(-90deg)" }} /></button>
                     <button type="button" className="nb-icon-btn" title="Xuống" aria-label="Chuyển xuống" disabled={i === problems.length - 1} onClick={() => move(i, 1)}><ChevronRight size={15} style={{ transform: "rotate(90deg)" }} /></button>
@@ -2954,6 +3145,11 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
   const [viewing, setViewing] = useState(null);
   const [starting, setStarting] = useState(false);
   const [notice, setNotice] = useState("");
+  const [langPref, setLangPref] = useState("");
+  const [awayNotice, setAwayNotice] = useState(null);
+  const attemptRef = useRef(null);
+  const offsetRef = useRef(0);
+  const awayRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2983,7 +3179,65 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
   const phase = isTeacher ? "preview" : attemptPhase(exam, attempt, serverNow);
   const examOpen = exam.status === "active";
   const canWork = !isTeacher && phase === "running" && examOpen;
-  const remaining = attempt ? new Date(attempt.startedAt).getTime() + examLimitMs(exam, attempt) - serverNow : 0;
+  const remaining = attempt ? attemptRemainingMs(exam, attempt, serverNow) : 0;
+  attemptRef.current = attempt;
+  offsetRef.current = offset;
+
+  // Phát hiện học sinh rời màn hình thi: +1 lỗi (không trừ điểm) và tạm dừng đồng hồ đến khi quay lại.
+  const monitoring = !isTeacher && canWork;
+  useEffect(() => {
+    if (!monitoring) return undefined;
+    const serverMs = () => Date.now() + offsetRef.current;
+    function leave() {
+      const a = attemptRef.current;
+      if (Date.now() < examDialogQuietUntil || awayRef.current || !a || a.finishedAt) return;
+      awayRef.current = true;
+      const at = new Date(serverMs()).toISOString();
+      const next = { ...a, violations: (a.violations || 0) + 1, pausedAt: a.pauseSupported ? (a.pausedAt || at) : null };
+      attemptRef.current = next;
+      setAttempt(next);
+      if (a.pauseSupported) dbExamUpdateAttempt(a.id, { violations: next.violations, pausedAt: next.pausedAt }).catch(() => {});
+    }
+    function back() {
+      const a = attemptRef.current;
+      if (!a || a.finishedAt) return;
+      if (document.visibilityState === "hidden" || !document.hasFocus()) return;
+      const wasAway = awayRef.current;
+      awayRef.current = false;
+      if (a.pausedAt) {
+        const add = Math.max(0, serverMs() - new Date(a.pausedAt).getTime());
+        const next = { ...a, pausedMs: (a.pausedMs || 0) + add, pausedAt: null };
+        attemptRef.current = next;
+        setAttempt(next);
+        dbExamUpdateAttempt(a.id, { pausedMs: next.pausedMs, pausedAt: null }).catch(() => {});
+        setAwayNotice({ count: a.violations || 0, supported: true, sec: Math.round(add / 1000) });
+      } else if (wasAway) {
+        setAwayNotice({ count: a.violations || 0, supported: false, sec: 0 });
+      }
+    }
+    let blurTimer = null;
+    const onVisibility = () => { if (document.visibilityState === "hidden") leave(); else back(); };
+    const onBlur = () => { clearTimeout(blurTimer); blurTimer = setTimeout(() => { if (!document.hasFocus()) leave(); }, 350); };
+    const onFocus = () => { clearTimeout(blurTimer); back(); };
+    const onHide = () => leave();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pagehide", onHide);
+    back(); // vào lại phòng thi khi đồng hồ còn đang tạm dừng từ lần trước
+    return () => {
+      clearTimeout(blurTimer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pagehide", onHide);
+    };
+  }, [monitoring]);
+  useEffect(() => {
+    if (!awayNotice) return undefined;
+    const t = setTimeout(() => setAwayNotice(null), 20000);
+    return () => clearTimeout(t);
+  }, [awayNotice]);
   const best = useMemo(() => bestScoreMap(mySubs), [mySubs]);
   const total = sumMap(best);
   const maxScore = (problems || []).reduce((s, p) => s + p.points, 0);
@@ -3000,17 +3254,16 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
     setStarting(false);
   }
   async function finish() {
-    if (!window.confirm("Kết thúc bài thi? Sau khi kết thúc em sẽ không thể nộp thêm.")) return;
+    if (!examConfirm("Kết thúc bài thi? Sau khi kết thúc em sẽ không thể nộp thêm.")) return;
     try {
       const at = new Date(Date.now() + offset).toISOString();
       await dbExamUpdateAttempt(attempt.id, { finishedAt: at });
       setAttempt({ ...attempt, finishedAt: at });
     } catch (e) { setNotice("Chưa kết thúc được bài thi, hãy thử lại."); }
   }
-  function handleVerdict(problemId, result, code) {
+  function handleVerdict(problemId, result, code, language) {
     if (isTeacher || !attempt) return;
-    const deadline = new Date(attempt.startedAt).getTime() + examLimitMs(exam, attempt) + 45000;
-    if (attempt.finishedAt || !examOpen || Date.now() + offset > deadline) {
+    if (attempt.finishedAt || !examOpen || attemptRemainingMs(exam, attempt, Date.now() + offset) < -45000) {
       setNotice("Đã hết giờ nên bài nộp này không được ghi nhận."); return;
     }
     const p = (problems || []).find((x) => x.id === problemId);
@@ -3020,7 +3273,7 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
     const sub = {
       id: "xs" + Date.now() + Math.random().toString(36).slice(2, 6), examId: exam.id, studentId: currentUser.id, problemId, verdict, score,
       passedTests: typeof result === "object" ? result.passedTests ?? null : null, totalTests: typeof result === "object" ? result.totalTests ?? null : null,
-      problemTitle: p.title, problemPoints: p.points, sourceCode: String(code || ""), createdAt: new Date().toISOString(),
+      problemTitle: p.title, problemPoints: p.points, sourceCode: String(code || ""), createdAt: new Date().toISOString(), language: language || "",
     };
     setMySubs((prev) => [...prev, sub]);
     dbExamAddSubmission(sub).catch(() => setNotice("Chưa lưu được bài nộp lên máy chủ. Hãy kiểm tra mạng và nộp lại."));
@@ -3033,6 +3286,7 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
         : phase === "running" ? <div className={`nb-exam-timer ${remaining < 300000 ? "warning" : ""}`}><Clock size={15} /> {formatClock(remaining)}</div>
         : phase !== "none" ? <div className="nb-contest-timer" style={{ color: "var(--slate)" }}>{ATTEMPT_PHASE_LABEL[phase]}</div> : null}
       {problems && !isTeacher && phase !== "none" && <div className="nb-sub">{total}/{maxScore} điểm</div>}
+      {!isTeacher && attempt && phase === "running" && <div className={`nb-xm-viol-chip ${attempt.violations > 0 ? "has" : ""}`} title="Mỗi lần rời màn hình thi được ghi 1 lỗi. Lỗi này không trừ điểm."><Eye size={13} /> Rời màn hình: {attempt.violations || 0} lần</div>}
     </div>
   );
 
@@ -3051,7 +3305,8 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
             <span><Clock size={15} /> {exam.duration} phút</span><span><ListChecks size={15} /> {problems.length} bài</span><span><Award size={15} /> {maxScore} điểm</span>
           </div>
           <ul className="nb-xm-rules">
-            <li>Đồng hồ bắt đầu tính khi em bấm “Bắt đầu làm bài” và <strong>không dừng lại</strong> dù em thoát trang hoặc đổi thiết bị.</li>
+            <li>Đồng hồ bắt đầu tính khi em bấm “Bắt đầu làm bài”. Nếu em <strong>rời khỏi màn hình thi</strong> (chuyển tab, mở ứng dụng khác), hệ thống ghi <strong>+1 lỗi</strong> để thầy cô biết — lỗi này <strong>không trừ điểm</strong> — và <strong>tạm dừng đồng hồ</strong> cho đến khi em quay lại.</li>
+            <li>Mỗi bài em tự chọn ngôn ngữ lập trình (Python, C hoặc C++) trước khi gõ code.</li>
             <li>Mỗi bài có thể nộp nhiều lần, điểm của bài là điểm cao nhất trong các lần nộp.</li>
             <li>Hết giờ hệ thống tự khóa; em có thể bấm “Kết thúc bài thi” sớm nếu đã làm xong.</li>
           </ul>
@@ -3076,6 +3331,14 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
         </div>
       )}
       {notice && <div className="nb-login-error" style={{ marginBottom: 10 }}><AlertCircle size={14} /> {notice}</div>}
+      {awayNotice && (
+        <div className="nb-xm-away" role="alert">
+          <AlertCircle size={18} />
+          <div><strong>Em vừa rời khỏi màn hình thi · +1 lỗi (tổng {awayNotice.count} lần)</strong>
+            <span>Lỗi này chỉ để ghi nhận, <b>không trừ điểm</b>.{awayNotice.supported ? ` Đồng hồ đã tạm dừng trong ${awayNotice.sec < 60 ? `${awayNotice.sec} giây` : `${Math.round(awayNotice.sec / 60)} phút`} em vắng mặt và đang chạy tiếp.` : ""}</span></div>
+          <button type="button" className="nb-btn nb-btn-ghost" onClick={() => setAwayNotice(null)}>Đã hiểu</button>
+        </div>
+      )}
       <div className="nb-problem-grid">
         {problems.map((p, i) => {
           const mine = mySubs.filter((s) => s.problemId === p.id);
@@ -3099,6 +3362,7 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit }) {
           alreadySolved={(best.get(active.id) || 0) >= active.points}
           bestScore={best.get(active.id) || 0} attemptCount={mySubs.filter((s) => s.problemId === active.id).length}
           submissionHistory={mySubs} onVerdict={handleVerdict}
+          chooseLanguage defaultLanguage={langPref} onLanguageChange={setLangPref}
         />
       )}
       {viewing && (
@@ -3148,9 +3412,8 @@ function ExamResults({ exam, students, onExit }) {
       const own = subs.filter((s) => s.studentId === id);
       const best = bestScoreMap(own);
       const phase = attemptPhase(exam, attempt, now);
-      const startMs = attempt ? new Date(attempt.startedAt).getTime() : 0;
-      const endMs = attempt ? (attempt.finishedAt ? new Date(attempt.finishedAt).getTime() : Math.min(now, startMs + examLimitMs(exam, attempt))) : 0;
-      return { student, attempt, own, best, phase, total: sumMap(best), spent: attempt ? endMs - startMs : 0 };
+      const spent = attempt ? Math.min(attemptElapsedMs(attempt, attempt.finishedAt ? new Date(attempt.finishedAt).getTime() : now), examLimitMs(exam, attempt)) : 0;
+      return { student, attempt, own, best, phase, total: sumMap(best), spent };
     }).filter(Boolean);
   }, [exam, students, attempts, subs, now, studentById]);
 
@@ -3166,9 +3429,14 @@ function ExamResults({ exam, students, onExit }) {
   const top = joined.reduce((m, r) => Math.max(m, r.total), 0);
   const maxScore = (problems || []).reduce((s, p) => s + p.points, 0);
 
-  async function extend(row) {
+  const [extendFor, setExtendFor] = useState(null);
+  const [extendMinutes, setExtendMinutes] = useState("15");
+  async function extend(row, minutes) {
+    const add = Math.round(Number(minutes));
+    if (!Number.isFinite(add) || add === 0 || Math.abs(add) > 600) { setError("Số phút cộng thêm không hợp lệ (nhập từ 1 đến 600)."); return; }
     try {
-      await dbExamUpdateAttempt(row.attempt.id, { extraMinutes: row.attempt.extraMinutes + 15 });
+      await dbExamUpdateAttempt(row.attempt.id, { extraMinutes: Math.max(0, row.attempt.extraMinutes + add) });
+      setExtendFor(null);
       await load();
     } catch (e) { setError("Chưa gia hạn được, hãy thử lại."); }
   }
@@ -3179,10 +3447,10 @@ function ExamResults({ exam, students, onExit }) {
   function exportCsv() {
     if (!problems) return;
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const head = ["Họ tên", "Tài khoản", "Lớp", "Trạng thái", "Bắt đầu", "Thời gian làm (phút)", ...problems.map((p, i) => `Bài ${i + 1}: ${p.title} (/${p.points})`), `Tổng (/${maxScore})`];
+    const head = ["Họ tên", "Tài khoản", "Lớp", "Trạng thái", "Bắt đầu", "Thời gian làm (phút)", "Số lần rời màn hình", "Giờ cộng thêm (phút)", ...problems.map((p, i) => `Bài ${i + 1}: ${p.title} (/${p.points})`), `Tổng (/${maxScore})`];
     const lines = [head, ...sortByName(rows.map((r) => r.student)).map((st) => {
       const r = rows.find((x) => x.student.id === st.id);
-      return [st.name, st.username, st.className || "", ATTEMPT_PHASE_LABEL[r.phase], r.attempt ? formatSubmissionDate(r.attempt.startedAt) : "", r.attempt ? Math.round(r.spent / 60000) : "", ...problems.map((p) => r.best.get(p.id) || 0), r.total];
+      return [st.name, st.username, st.className || "", ATTEMPT_PHASE_LABEL[r.phase], r.attempt ? formatSubmissionDate(r.attempt.startedAt) : "", r.attempt ? Math.round(r.spent / 60000) : "", r.attempt ? r.attempt.violations : "", r.attempt ? r.attempt.extraMinutes : "", ...problems.map((p) => r.best.get(p.id) || 0), r.total];
     })].map((line) => line.map(esc).join(",")).join("\r\n");
     const blob = new Blob(["﻿" + lines], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -3223,19 +3491,20 @@ function ExamResults({ exam, students, onExit }) {
           </div>
           <div className="nb-contest-stats-table-wrap">
             <table className="nb-contest-stats-table nb-xm-table">
-              <thead><tr><th>#</th><th>Học sinh</th><th>Trạng thái</th><th>Thời gian</th>{problems.map((p, i) => <th key={p.id} title={p.title}>Bài {i + 1}<small>/{p.points}</small></th>)}<th>Tổng<small>/{maxScore}</small></th><th></th></tr></thead>
+              <thead><tr><th>#</th><th>Học sinh</th><th>Trạng thái</th><th>Thời gian</th><th title="Số lần học sinh rời khỏi màn hình thi (không trừ điểm)">Rời màn hình</th>{problems.map((p, i) => <th key={p.id} title={p.title}>Bài {i + 1}<small>/{p.points}</small></th>)}<th>Tổng<small>/{maxScore}</small></th><th></th></tr></thead>
               <tbody>
                 {visible.map((r, index) => (
                   <tr key={r.student.id}>
                     <td>{index + 1}</td>
                     <td><div className="nb-contest-student"><Avatar name={r.student.name} size={28} /><div className="nb-xm-name"><strong>{r.student.name}</strong><small>@{r.student.username}{r.student.className ? ` · ${r.student.className}` : ""}</small></div></div></td>
                     <td><span className={`nb-xm-phase ${phaseTone[r.phase]}`}>{ATTEMPT_PHASE_LABEL[r.phase]}</span></td>
-                    <td>{r.attempt ? formatSpan(r.spent) : "—"}</td>
+                    <td>{r.attempt ? formatSpan(r.spent) : "—"}{r.attempt?.extraMinutes ? <small className="nb-xm-extra"> (+{r.attempt.extraMinutes}′)</small> : null}</td>
+                    <td>{r.attempt ? <span className={`nb-xm-viol ${r.attempt.violations > 0 ? "has" : ""}`} title="Số lần rời màn hình (không trừ điểm)">{r.attempt.violations || 0}{r.attempt.pausedAt && r.phase === "running" ? " · đang vắng" : ""}</span> : "—"}</td>
                     {problems.map((p) => { const sc = r.best.get(p.id); return <td key={p.id}><span className={`nb-xm-cell ${sc == null ? "empty" : sc >= p.points ? "full" : sc > 0 ? "part" : "zero"}`}>{sc == null ? "–" : sc}</span></td>; })}
                     <td><b>{r.total}</b></td>
                     <td className="nb-xm-row-actions">
                       <button className="nb-btn nb-btn-ghost" disabled={r.own.length === 0} onClick={() => setDetail(r)}><Eye size={14} /> Xem bài</button>
-                      {r.attempt && <button className="nb-btn nb-btn-ghost" title="Cộng thêm 15 phút" onClick={() => extend(r)}><Clock size={14} /> +15′</button>}
+                      {r.attempt && <button className="nb-btn nb-btn-ghost" title="Cộng thêm thời gian cho học sinh này" onClick={() => { setExtendFor(r); setExtendMinutes("15"); }}><Clock size={14} /> + Giờ</button>}
                       {r.attempt?.finishedAt && <button className="nb-btn nb-btn-ghost" title="Cho học sinh làm tiếp" onClick={() => reopen(r)}><RefreshCw size={14} /> Làm tiếp</button>}
                     </td>
                   </tr>
@@ -3245,6 +3514,21 @@ function ExamResults({ exam, students, onExit }) {
           </div>
           {visible.length === 0 && <div className="nb-exam-empty" style={{ marginTop: 12 }}><Users size={24} /><strong>Không có học sinh phù hợp</strong><span>Đổi bộ lọc hoặc kiểm tra danh sách học sinh được giao đề.</span></div>}
         </>
+      )}
+      {extendFor && (
+        <div className="nb-modal-overlay" onClick={() => setExtendFor(null)} role="dialog" aria-modal="true" aria-label="Cộng thêm giờ">
+          <form className="nb-modal nb-xm-extend" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); extend(extendFor, extendMinutes); }}>
+            <div className="nb-modal-head"><div><div className="nb-eyebrow">Cộng thêm giờ</div><h3 className="nb-h3">{extendFor.student.name}</h3>
+              <p className="nb-sub">Đã được cộng {extendFor.attempt.extraMinutes} phút · Thời gian đề: {exam.duration} phút</p></div>
+              <button type="button" className="nb-icon-btn" onClick={() => setExtendFor(null)} aria-label="Đóng"><X size={18} /></button></div>
+            <div className="nb-xm-extend-body">
+              <div className="nb-xm-extend-quick">{[5, 10, 15, 30, 45, 60].map((m) => <button type="button" key={m} className={`nb-chip ${String(m) === String(extendMinutes) ? "active" : ""}`} onClick={() => setExtendMinutes(String(m))}>+{m} phút</button>)}</div>
+              <label className="nb-xm-field"><span>Hoặc nhập số phút (số âm để giảm bớt giờ đã cộng)</span>
+                <input className="nb-input" type="number" step="1" min="-600" max="600" value={extendMinutes} onChange={(e) => setExtendMinutes(e.target.value)} autoFocus /></label>
+            </div>
+            <div className="nb-modal-actions"><button type="button" className="nb-btn nb-btn-ghost" onClick={() => setExtendFor(null)}>Hủy</button><button type="submit" className="nb-btn nb-btn-primary"><Clock size={15} /> Cộng {Number(extendMinutes) || 0} phút</button></div>
+          </form>
+        </div>
       )}
       {detail && problems && (
         <ExamSubmissionViewer title={detail.student.name} subtitle={`${exam.title} · ${detail.total}/${maxScore} điểm · ${ATTEMPT_PHASE_LABEL[detail.phase]}`} problems={problems} submissions={detail.own} onClose={() => setDetail(null)} />
@@ -3686,7 +3970,29 @@ const TYPING_CATEGORIES = [
   { key: "dict", label: "Dict & Set" },
   { key: "lap", label: "Điều kiện & vòng lặp" },
   { key: "ham", label: "Hàm, module & file" },
+  { key: "toan", label: "Toán & số" },
+  { key: "thuvien", label: "Thư viện chuẩn" },
+  { key: "lop", label: "Lớp & xử lý lỗi" },
+  { key: "thuat-toan", label: "Thuật toán" },
 ];
+// Ký hiệu + màu nhấn cho từng chủ đề (hiển thị trên thẻ chủ đề)
+const TYPING_TOPIC_STYLE = {
+  all: { mark: "Py", color: "#2563eb" }, "co-ban": { mark: "=", color: "#0d9488" }, chuoi: { mark: "Aa", color: "#d97706" },
+  list: { mark: "[ ]", color: "#7c3aed" }, dict: { mark: "{ }", color: "#db2777" }, lap: { mark: "for", color: "#059669" },
+  ham: { mark: "def", color: "#0284c7" }, toan: { mark: "π", color: "#dc2626" }, thuvien: { mark: "lib", color: "#4f46e5" },
+  lop: { mark: "OOP", color: "#c026d3" }, "thuat-toan": { mark: "O(n)", color: "#ea580c" },
+};
+// Cấp bậc theo tổng điểm tích lũy
+const TYPING_LEVELS = [
+  { min: 0, name: "Tập sự gõ phím" }, { min: 600, name: "Gõ phím chăm chỉ" }, { min: 2000, name: "Thạo lệnh Python" },
+  { min: 5000, name: "Ngón tay thần tốc" }, { min: 10000, name: "Cao thủ Python" }, { min: 20000, name: "Bậc thầy gõ lệnh" },
+];
+function typingLevel(xp) {
+  let idx = 0;
+  TYPING_LEVELS.forEach((l, i) => { if (xp >= l.min) idx = i; });
+  const cur = TYPING_LEVELS[idx], next = TYPING_LEVELS[idx + 1] || null;
+  return { idx, name: cur.name, next, pct: next ? Math.round((xp - cur.min) / (next.min - cur.min) * 100) : 100, toNext: next ? next.min - xp : 0 };
+}
 const TYPING_SNIPPETS = [
   ["co-ban", 'print("Xin chao")', "In một dòng chữ ra màn hình"],
   ["co-ban", 'name = input("Ten: ")', "Nhập một chuỗi từ bàn phím"],
@@ -3790,11 +4096,217 @@ const TYPING_SNIPPETS = [
   ["ham", "class SinhVien:", "Khai báo lớp (class)"],
   ["ham", "def __init__(self, ten):", "Hàm khởi tạo của lớp"],
   ["ham", "self.ten = ten", "Lưu thuộc tính cho đối tượng"],
+  // ---- Mở rộng: Toán & số, Thư viện chuẩn, Lớp & lỗi, Thuật toán ----
+  ["toan", "math.sqrt(16)", "Căn bậc hai"],
+  ["toan", "math.floor(3.7)", "Làm tròn xuống số nguyên"],
+  ["toan", "math.ceil(3.2)", "Làm tròn lên số nguyên"],
+  ["toan", "math.pi", "Hằng số pi"],
+  ["toan", "math.gcd(12, 18)", "Ước chung lớn nhất"],
+  ["toan", "math.lcm(4, 6)", "Bội chung nhỏ nhất"],
+  ["toan", "math.factorial(5)", "Giai thừa của 5"],
+  ["toan", "2 ** 10", "Lũy thừa: 2 mũ 10"],
+  ["toan", "pow(2, 10, 1000)", "Lũy thừa 2^10 lấy dư cho 1000"],
+  ["toan", "abs(-7)", "Giá trị tuyệt đối"],
+  ["toan", "round(3.14159, 2)", "Làm tròn đến 2 chữ số thập phân"],
+  ["toan", "q, r = divmod(17, 5)", "Lấy thương và số dư cùng lúc"],
+  ["toan", "if n % 2 == 0:", "Kiểm tra n là số chẵn"],
+  ["toan", "if n % 2 == 1:", "Kiểm tra n là số lẻ"],
+  ["toan", "last = n % 10", "Lấy chữ số cuối của n"],
+  ["toan", "n //= 10", "Bỏ chữ số cuối của n"],
+  ["toan", "s = sum(int(c) for c in str(n))", "Tính tổng các chữ số của n"],
+  ["toan", "bin(10)", "Đổi sang nhị phân"],
+  ["toan", "int(\"1010\", 2)", "Đổi số nhị phân sang thập phân"],
+  ["toan", "hex(255)", "Đổi sang hệ thập lục phân"],
+  ["toan", "MOD = 10 ** 9 + 7", "Hằng số modulo quen thuộc"],
+  ["toan", "ans = a * b % MOD", "Nhân rồi lấy dư"],
+  ["toan", "max(a, b, c)", "Số lớn nhất trong ba số"],
+  ["toan", "min(a, b, c)", "Số nhỏ nhất trong ba số"],
+  ["toan", "r = math.isqrt(n)", "Căn bậc hai nguyên của n"],
+  ["toan", "if r * r == n:", "Kiểm tra n có phải số chính phương"],
+  ["toan", "math.hypot(3, 4)", "Độ dài cạnh huyền"],
+  ["toan", "math.sin(math.pi / 2)", "Sin của góc 90 độ"],
+  ["toan", "math.log(100, 10)", "Logarit cơ số 10 của 100"],
+  ["toan", "math.log2(8)", "Logarit cơ số 2"],
+  ["toan", "math.inf", "Giá trị vô cực"],
+  ["toan", "INF = float(\"inf\")", "Đặt giá trị vô cực để so sánh"],
+  ["toan", "avg = sum(a) / len(a)", "Trung bình cộng của list"],
+  ["toan", "print(f\"{n:05d}\")", "In số nguyên, đệm số 0 cho đủ 5 chữ số"],
+  ["toan", "print(f\"{n:,}\")", "In số có dấu phẩy ngăn cách hàng nghìn"],
+  ["toan", "total += i * i", "Cộng dồn bình phương"],
+  ["toan", "isinstance(x, int)", "Kiểm tra x có phải số nguyên"],
+  ["toan", "if a <= x < b:", "So sánh dây chuyền: x nằm trong [a, b)"],
+  ["toan", "x = 1e9", "Số thực viết dạng khoa học"],
+  ["toan", "int(3.99)", "Bỏ phần thập phân, được 3"],
+  ["toan", "float(5) / 2", "Chia số thực"],
+  ["toan", "-7 // 2", "Chia nguyên làm tròn xuống: -4"],
+  ["toan", "n = abs(n)", "Lấy trị tuyệt đối rồi gán lại"],
+  ["toan", "cnt = 0", "Khởi tạo biến đếm"],
+  ["toan", "total = 0", "Khởi tạo biến tổng"],
+  ["toan", "a, b = b, a", "Hoán đổi giá trị hai biến"],
+  ["toan", "x = x * x - 1", "Cập nhật giá trị bằng biểu thức"],
+  ["toan", "print(round(x))", "Làm tròn số rồi in ra"],
+  ["thuvien", "import random", "Nạp thư viện số ngẫu nhiên"],
+  ["thuvien", "random.randint(1, 100)", "Số nguyên ngẫu nhiên từ 1 đến 100"],
+  ["thuvien", "random.choice(a)", "Chọn ngẫu nhiên một phần tử"],
+  ["thuvien", "random.shuffle(a)", "Xáo trộn list tại chỗ"],
+  ["thuvien", "random.random()", "Số thực ngẫu nhiên từ 0 đến 1"],
+  ["thuvien", "random.sample(a, 3)", "Chọn 3 phần tử khác nhau"],
+  ["thuvien", "random.seed(42)", "Cố định hạt giống ngẫu nhiên"],
+  ["thuvien", "from collections import Counter", "Nạp bộ đếm tần suất"],
+  ["thuvien", "cnt = Counter(s)", "Đếm số lần xuất hiện mỗi ký tự"],
+  ["thuvien", "cnt.most_common(3)", "Ba phần tử xuất hiện nhiều nhất"],
+  ["thuvien", "from collections import deque", "Nạp hàng đợi hai đầu"],
+  ["thuvien", "q = deque()", "Tạo hàng đợi rỗng"],
+  ["thuvien", "q.popleft()", "Lấy phần tử ở đầu hàng đợi"],
+  ["thuvien", "q.appendleft(x)", "Thêm phần tử vào đầu hàng đợi"],
+  ["thuvien", "from collections import defaultdict", "Nạp dict có giá trị mặc định"],
+  ["thuvien", "d = defaultdict(int)", "Dict mặc định giá trị 0"],
+  ["thuvien", "d = defaultdict(list)", "Dict mặc định là list rỗng"],
+  ["thuvien", "import itertools", "Nạp thư viện lặp nâng cao"],
+  ["thuvien", "itertools.permutations(a)", "Mọi hoán vị của a"],
+  ["thuvien", "itertools.combinations(a, 2)", "Mọi tổ hợp chập 2"],
+  ["thuvien", "itertools.product(a, b)", "Tích Descartes của hai tập"],
+  ["thuvien", "from itertools import accumulate", "Nạp hàm cộng dồn"],
+  ["thuvien", "pre = list(accumulate(a))", "Mảng tổng cộng dồn"],
+  ["thuvien", "import heapq", "Nạp hàng đợi ưu tiên"],
+  ["thuvien", "heapq.heappush(h, x)", "Đẩy x vào heap"],
+  ["thuvien", "heapq.heappop(h)", "Lấy phần tử nhỏ nhất khỏi heap"],
+  ["thuvien", "heapq.heapify(a)", "Biến list thành heap"],
+  ["thuvien", "import bisect", "Nạp tìm kiếm nhị phân"],
+  ["thuvien", "bisect.bisect_left(a, x)", "Vị trí chèn x bên trái trong list đã sắp xếp"],
+  ["thuvien", "bisect.bisect_right(a, x)", "Vị trí chèn x bên phải trong list đã sắp xếp"],
+  ["thuvien", "bisect.insort(a, x)", "Chèn x giữ nguyên thứ tự sắp xếp"],
+  ["thuvien", "data = sys.stdin.read().split()", "Đọc toàn bộ input rồi tách từ"],
+  ["thuvien", "sys.setrecursionlimit(10 ** 6)", "Tăng giới hạn đệ quy"],
+  ["thuvien", "sys.exit()", "Thoát chương trình ngay"],
+  ["thuvien", "sys.stdout.write(\"ok\")", "Ghi thẳng ra đầu ra chuẩn"],
+  ["thuvien", "import time", "Nạp thư viện thời gian"],
+  ["thuvien", "start = time.time()", "Lấy mốc thời gian hiện tại"],
+  ["thuvien", "time.sleep(1)", "Tạm dừng 1 giây"],
+  ["thuvien", "import datetime", "Nạp thư viện ngày giờ"],
+  ["thuvien", "datetime.date.today()", "Ngày hôm nay"],
+  ["thuvien", "import os", "Nạp thư viện hệ điều hành"],
+  ["thuvien", "os.path.exists(\"a.txt\")", "Kiểm tra file có tồn tại"],
+  ["thuvien", "import json", "Nạp thư viện JSON"],
+  ["thuvien", "json.dumps(d)", "Đổi dict thành chuỗi JSON"],
+  ["thuvien", "json.loads(s)", "Đổi chuỗi JSON thành dict"],
+  ["thuvien", "from functools import lru_cache", "Nạp bộ nhớ đệm cho hàm"],
+  ["thuvien", "@lru_cache(maxsize=None)", "Ghi nhớ kết quả hàm để chạy nhanh hơn"],
+  ["thuvien", "import re", "Nạp thư viện biểu thức chính quy"],
+  ["thuvien", "re.findall(r\"\\d+\", s)", "Tìm mọi số trong chuỗi"],
+  ["thuvien", "import string", "Nạp hằng số chuỗi"],
+  ["thuvien", "string.ascii_lowercase", "Bảng chữ cái thường a-z"],
+  ["thuvien", "from fractions import Fraction", "Nạp kiểu phân số"],
+  ["thuvien", "copy.deepcopy(a)", "Sao chép sâu một list lồng nhau"],
+  ["lop", "class Animal:", "Khai báo lớp Animal"],
+  ["lop", "def __init__(self, name):", "Hàm khởi tạo nhận tên"],
+  ["lop", "self.name = name", "Lưu tên vào đối tượng"],
+  ["lop", "def speak(self):", "Phương thức của đối tượng"],
+  ["lop", "return self.name", "Trả về thuộc tính của đối tượng"],
+  ["lop", "class Dog(Animal):", "Lớp Dog kế thừa từ Animal"],
+  ["lop", "super().__init__(name)", "Gọi hàm khởi tạo của lớp cha"],
+  ["lop", "def __str__(self):", "Cách in đối tượng bằng print()"],
+  ["lop", "return f\"{self.name}\"", "Trả về chuỗi mô tả đối tượng"],
+  ["lop", "def __repr__(self):", "Cách hiển thị đối tượng khi debug"],
+  ["lop", "def __len__(self):", "Cho phép dùng len() với đối tượng"],
+  ["lop", "def __eq__(self, other):", "Định nghĩa phép so sánh =="],
+  ["lop", "def __lt__(self, other):", "Định nghĩa phép so sánh <"],
+  ["lop", "def __add__(self, other):", "Định nghĩa phép cộng +"],
+  ["lop", "@staticmethod", "Phương thức tĩnh, không cần self"],
+  ["lop", "@classmethod", "Phương thức của lớp, nhận cls"],
+  ["lop", "@property", "Biến phương thức thành thuộc tính"],
+  ["lop", "def area(self):", "Phương thức tính diện tích"],
+  ["lop", "obj = Animal(\"Mimi\")", "Tạo một đối tượng"],
+  ["lop", "obj.speak()", "Gọi phương thức của đối tượng"],
+  ["lop", "isinstance(obj, Animal)", "Kiểm tra đối tượng thuộc lớp nào"],
+  ["lop", "hasattr(obj, \"name\")", "Kiểm tra đối tượng có thuộc tính"],
+  ["lop", "getattr(obj, \"name\")", "Lấy thuộc tính theo tên"],
+  ["lop", "setattr(obj, \"age\", 3)", "Gán thuộc tính theo tên"],
+  ["lop", "class Stack:", "Khai báo lớp ngăn xếp"],
+  ["lop", "self.items = []", "Danh sách bên trong đối tượng"],
+  ["lop", "self.items.append(x)", "Đẩy phần tử vào ngăn xếp"],
+  ["lop", "return self.items.pop()", "Lấy phần tử trên cùng"],
+  ["lop", "return len(self.items) == 0", "Kiểm tra ngăn xếp rỗng"],
+  ["lop", "raise ValueError(\"Sai gia tri\")", "Chủ động báo lỗi giá trị"],
+  ["lop", "raise Exception(\"Loi\")", "Ném một ngoại lệ"],
+  ["lop", "except Exception as e:", "Bắt mọi lỗi và lưu vào e"],
+  ["lop", "except ZeroDivisionError:", "Bắt lỗi chia cho 0"],
+  ["lop", "except (ValueError, TypeError):", "Bắt nhiều loại lỗi cùng lúc"],
+  ["lop", "finally:", "Khối luôn chạy dù có lỗi hay không"],
+  ["lop", "assert n > 0", "Khẳng định điều kiện, sai sẽ báo lỗi"],
+  ["lop", "print(e)", "In nội dung lỗi"],
+  ["lop", "class MyError(Exception):", "Tự định nghĩa loại lỗi"],
+  ["lop", "pass", "Câu lệnh rỗng, chưa làm gì"],
+  ["lop", "from dataclasses import dataclass", "Nạp lớp dữ liệu gọn"],
+  ["lop", "@dataclass", "Tự sinh hàm khởi tạo cho lớp"],
+  ["lop", "def __getitem__(self, i):", "Cho phép truy cập obj[i]"],
+  ["lop", "def __iter__(self):", "Cho phép duyệt đối tượng bằng for"],
+  ["lop", "yield i", "Trả về từng giá trị (generator)"],
+  ["lop", "def __enter__(self):", "Hỗ trợ khối with"],
+  ["lop", "type(obj).__name__", "Lấy tên kiểu của đối tượng"],
+  ["lop", "del obj", "Xóa biến đối tượng"],
+  ["lop", "self.x, self.y = x, y", "Gán hai thuộc tính một dòng"],
+  ["lop", "print(Animal.__name__)", "In tên của lớp"],
+  ["lop", "obj.age += 1", "Tăng thuộc tính của đối tượng"],
+  ["thuat-toan", "def gcd(a, b):", "Hàm tìm ước chung lớn nhất"],
+  ["thuat-toan", "while b:", "Lặp đến khi b bằng 0"],
+  ["thuat-toan", "a, b = b, a % b", "Bước lặp của thuật toán Euclid"],
+  ["thuat-toan", "return a", "Trả về kết quả a"],
+  ["thuat-toan", "def is_prime(n):", "Hàm kiểm tra số nguyên tố"],
+  ["thuat-toan", "if n < 2:", "Số nhỏ hơn 2 không phải số nguyên tố"],
+  ["thuat-toan", "return False", "Trả về sai"],
+  ["thuat-toan", "for i in range(2, int(n ** 0.5) + 1):", "Duyệt ước đến căn bậc hai của n"],
+  ["thuat-toan", "if n % i == 0:", "Kiểm tra i có là ước của n"],
+  ["thuat-toan", "return True", "Trả về đúng"],
+  ["thuat-toan", "sieve = [True] * (n + 1)", "Mảng sàng số nguyên tố"],
+  ["thuat-toan", "sieve[0] = sieve[1] = False", "0 và 1 không phải số nguyên tố"],
+  ["thuat-toan", "for j in range(i * i, n + 1, i):", "Duyệt các bội của i"],
+  ["thuat-toan", "sieve[j] = False", "Loại bỏ bội số"],
+  ["thuat-toan", "def fib(n):", "Hàm tính số Fibonacci"],
+  ["thuat-toan", "a, b = 0, 1", "Hai số Fibonacci đầu tiên"],
+  ["thuat-toan", "a, b = b, a + b", "Sinh số Fibonacci tiếp theo"],
+  ["thuat-toan", "def fact(n):", "Hàm tính giai thừa"],
+  ["thuat-toan", "return n * fact(n - 1)", "Gọi đệ quy tính giai thừa"],
+  ["thuat-toan", "if n <= 1:", "Điều kiện dừng của đệ quy"],
+  ["thuat-toan", "return 1", "Trả về 1"],
+  ["thuat-toan", "def binary_search(a, x):", "Hàm tìm kiếm nhị phân"],
+  ["thuat-toan", "lo, hi = 0, len(a) - 1", "Khoảng tìm kiếm ban đầu"],
+  ["thuat-toan", "mid = (lo + hi) // 2", "Vị trí giữa khoảng"],
+  ["thuat-toan", "if a[mid] == x:", "Tìm thấy phần tử ở giữa"],
+  ["thuat-toan", "lo = mid + 1", "Thu hẹp sang nửa phải"],
+  ["thuat-toan", "hi = mid - 1", "Thu hẹp sang nửa trái"],
+  ["thuat-toan", "a.sort(key=lambda x: x[1])", "Sắp xếp theo phần tử thứ hai"],
+  ["thuat-toan", "for i in range(n - 1):", "Vòng ngoài của sắp xếp nổi bọt"],
+  ["thuat-toan", "for j in range(n - 1 - i):", "Vòng trong của sắp xếp nổi bọt"],
+  ["thuat-toan", "if a[j] > a[j + 1]:", "Hai phần tử kề nhau sai thứ tự"],
+  ["thuat-toan", "a[j], a[j + 1] = a[j + 1], a[j]", "Đổi chỗ hai phần tử kề nhau"],
+  ["thuat-toan", "dp = [0] * (n + 1)", "Mảng quy hoạch động"],
+  ["thuat-toan", "dp[i] = dp[i - 1] + dp[i - 2]", "Công thức truy hồi kiểu Fibonacci"],
+  ["thuat-toan", "dp = [[0] * m for _ in range(n)]", "Bảng quy hoạch động hai chiều"],
+  ["thuat-toan", "prefix = [0] * (n + 1)", "Mảng tổng tiền tố"],
+  ["thuat-toan", "prefix[i] = prefix[i - 1] + a[i - 1]", "Tính tổng tiền tố"],
+  ["thuat-toan", "s = prefix[r] - prefix[l - 1]", "Tổng đoạn từ l đến r"],
+  ["thuat-toan", "visited = [False] * n", "Đánh dấu đỉnh đã thăm"],
+  ["thuat-toan", "graph = [[] for _ in range(n)]", "Danh sách kề của đồ thị"],
+  ["thuat-toan", "graph[u].append(v)", "Thêm cạnh từ u đến v"],
+  ["thuat-toan", "def dfs(u):", "Hàm duyệt đồ thị theo chiều sâu"],
+  ["thuat-toan", "visited[u] = True", "Đánh dấu đã thăm đỉnh u"],
+  ["thuat-toan", "for v in graph[u]:", "Duyệt các đỉnh kề với u"],
+  ["thuat-toan", "if not visited[v]:", "Chỉ đi tiếp nếu chưa thăm"],
+  ["thuat-toan", "dfs(v)", "Đệ quy sang đỉnh kề"],
+  ["thuat-toan", "q = deque([start])", "Hàng đợi BFS xuất phát từ start"],
+  ["thuat-toan", "dist = [-1] * n", "Khoảng cách chưa biết"],
+  ["thuat-toan", "if s == s[::-1]:", "Kiểm tra chuỗi đối xứng"],
+  ["thuat-toan", "while lo < hi:", "Hai con trỏ chạy vào giữa"],
+  ["thuat-toan", "best = max(best, cur)", "Cập nhật giá trị lớn nhất"],
+  ["thuat-toan", "cur = max(a[i], cur + a[i])", "Dãy con liên tiếp có tổng lớn nhất"],
+  ["thuat-toan", "return dp[n]", "Trả về đáp án của bài quy hoạch động"],
 ].map(([cat, code, hint]) => ({ cat, code, hint }));
 
 const TYPING_MODES = {
   timed: { label: "Thử thách 60 giây", desc: "Gõ càng nhiều lệnh đúng càng tốt trước khi hết giờ.", seconds: 60 },
   free: { label: "Luyện 15 lệnh", desc: "Không giới hạn thời gian. Gõ chính xác 15 lệnh liên tiếp.", count: 15 },
+  review: { label: "Ôn lệnh chưa thuộc", desc: "Chỉ gồm các lệnh em chưa gõ đúng hoàn toàn lần nào. Gõ đúng một lần là tính là đã thuộc.", count: 15 },
 };
 
 function shuffleList(list) {
@@ -3916,21 +4428,40 @@ function TypingGameView({ currentUser }) {
   const pressTimer = useRef(null);
   const game = useRef(null);
   const bestKey = (m) => `typing-best:${currentUser.id}:${m}`;
-  const [bests, setBests] = useState(() => ({ timed: lsGet(bestKey("timed")), free: lsGet(bestKey("free")) }));
+  const [bests, setBests] = useState(() => ({ timed: lsGet(bestKey("timed")), free: lsGet(bestKey("free")), review: lsGet(bestKey("review")) }));
+  const profileKey = `typing-profile:${currentUser.id}`;
+  const masteredKey = `typing-mastered:${currentUser.id}`;
+  const [profile, setProfile] = useState(() => lsGet(profileKey) || { xp: 0, games: 0, bestWpm: 0 });
+  const [mastered, setMastered] = useState(() => new Set(Array.isArray(lsGet(masteredKey)) ? lsGet(masteredKey) : []));
+  const [countdown, setCountdown] = useState(0);
 
-  const pool = useMemo(() => TYPING_SNIPPETS.filter((s) => category === "all" || s.cat === category), [category]);
-  const demoPool = useMemo(() => shuffleList(pool).slice(0, 6), [pool]);
+  const categoryPool = useMemo(() => TYPING_SNIPPETS.filter((s) => category === "all" || s.cat === category), [category]);
+  const unmasteredPool = useMemo(() => categoryPool.filter((s) => !mastered.has(s.code)), [categoryPool, mastered]);
+  const pool = mode === "review" && unmasteredPool.length > 0 ? unmasteredPool : categoryPool;
+  const demoPool = useMemo(() => shuffleList(categoryPool).slice(0, 6), [categoryPool]);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
 
   function newGame() {
-    const need = mode === "timed" ? 300 : TYPING_MODES.free.count;
+    const need = mode === "timed" ? 300 : TYPING_MODES[mode].count;
     let queue = [];
     while (queue.length < need) queue = queue.concat(shuffleList(pool));
     queue = queue.slice(0, need);
-    game.current = { queue, idx: 0, score: 0, done: 0, chars: 0, keys: 0, errors: 0, combo: 0, bestCombo: 0, missed: [], startedAt: Date.now(), flash: "" };
-    setTyped(""); setResult(null); setGain(null); setPhase("play");
-    setTimeout(() => inputRef.current?.focus(), 30);
+    game.current = { queue, idx: 0, score: 0, done: 0, chars: 0, keys: 0, errors: 0, combo: 0, bestCombo: 0, missed: [], learned: new Set(), snipErr: false, startedAt: Date.now(), flash: "" };
+    setTyped(""); setResult(null); setGain(null);
+    setCountdown(3); setPhase("ready");
   }
+  // Đếm ngược 3-2-1 rồi mới bắt đầu tính giờ
+  useEffect(() => {
+    if (phase !== "ready") return undefined;
+    if (countdown <= 0) {
+      if (game.current) game.current.startedAt = Date.now();
+      setPhase("play");
+      setTimeout(() => inputRef.current?.focus(), 30);
+      return undefined;
+    }
+    const t = setTimeout(() => setCountdown((c) => c - 1), 700);
+    return () => clearTimeout(t);
+  }, [phase, countdown]);
   function finish() {
     const g = game.current;
     if (!g || g.finished) return;
@@ -3943,7 +4474,17 @@ function TypingGameView({ currentUser }) {
     const previous = lsGet(bestKey(mode));
     const isRecord = g.score > 0 && (!previous || g.score > previous.score);
     if (isRecord) { const rec = { score: g.score, wpm, accuracy, date: summary.date }; lsSet(bestKey(mode), rec); setBests((b) => ({ ...b, [mode]: rec })); }
-    setResult({ ...summary, isRecord, previous });
+    // Tích lũy điểm kinh nghiệm, cấp bậc và các lệnh đã thuộc
+    const oldProfile = lsGet(profileKey) || { xp: 0, games: 0, bestWpm: 0 };
+    const newProfile = { xp: oldProfile.xp + g.score, games: oldProfile.games + 1, bestWpm: Math.max(oldProfile.bestWpm || 0, wpm) };
+    lsSet(profileKey, newProfile); setProfile(newProfile);
+    const levelUp = typingLevel(newProfile.xp).idx > typingLevel(oldProfile.xp).idx ? typingLevel(newProfile.xp).name : "";
+    const known = new Set(Array.isArray(lsGet(masteredKey)) ? lsGet(masteredKey) : []);
+    const before = known.size;
+    g.learned.forEach((code) => known.add(code));
+    if (known.size !== before) { lsSet(masteredKey, [...known]); setMastered(known); }
+    const stars = g.done >= 5 ? (accuracy >= 97 && (mode !== "timed" || wpm >= 25) ? 3 : accuracy >= 90 ? 2 : 1) : (g.done > 0 ? 1 : 0);
+    setResult({ ...summary, isRecord, previous, xpGain: g.score, levelUp, newlyLearned: known.size - before, stars });
     setPhase("result");
   }
   useEffect(() => {
@@ -3961,7 +4502,7 @@ function TypingGameView({ currentUser }) {
     const g = game.current;
     g.idx += 1;
     setTyped("");
-    if (mode === "free" && g.idx >= TYPING_MODES.free.count) finish();
+    if (mode !== "timed" && g.idx >= TYPING_MODES[mode].count) finish();
   }
   function onKeyDown(event) {
     if (event.key === "Escape") { quit(); return; }
@@ -3983,7 +4524,7 @@ function TypingGameView({ currentUser }) {
     for (let i = typed.length; i < value.length; i += 1) {
       g.keys += 1;
       if (value[i] !== snippet.code[i]) {
-        g.errors += 1; g.combo = 0; g.flash = "bad";
+        g.errors += 1; g.combo = 0; g.flash = "bad"; g.snipErr = true;
         if (!g.missed.some((m) => m.code === snippet.code)) g.missed.push(snippet);
       }
     }
@@ -3991,6 +4532,8 @@ function TypingGameView({ currentUser }) {
       const points = Math.round(snippet.code.length * 10 * (1 + Math.min(g.combo, 10) * 0.1));
       g.score += points; g.chars += snippet.code.length; g.done += 1; g.combo += 1;
       g.bestCombo = Math.max(g.bestCombo, g.combo); g.flash = "ok";
+      if (!g.snipErr) g.learned.add(snippet.code);
+      g.snipErr = false;
       setGain({ n: points, id: Date.now() });
       nextSnippet();
     } else {
@@ -4002,7 +4545,7 @@ function TypingGameView({ currentUser }) {
     const g = game.current;
     if (!g || g.finished) return;
     const snippet = g.queue[g.idx];
-    g.combo = 0;
+    g.combo = 0; g.snipErr = false;
     if (!g.missed.some((m) => m.code === snippet.code)) g.missed.push(snippet);
     nextSnippet(); bump(); inputRef.current?.focus();
   }
@@ -4010,47 +4553,83 @@ function TypingGameView({ currentUser }) {
 
   /* ---------------- Màn hình chọn ---------------- */
   if (phase === "menu") {
+    const lv = typingLevel(profile.xp);
+    const masteredCount = TYPING_SNIPPETS.filter((x) => mastered.has(x.code)).length;
+    const modeIcon = { timed: <Clock size={18} />, free: <ListChecks size={18} />, review: <RefreshCw size={18} /> };
     return (
       <div className="nb-tg">
-        <header className="nb-tg-head">
-          <h2>Giải trí</h2>
-          <p>Gõ nhanh và đúng các hàm, câu lệnh hay gặp để nhớ cú pháp, bớt sai chính tả khi làm bài.</p>
+        <header className="nb-tg-hero">
+          <div className="nb-tg-hero-text">
+            <span className="nb-tg-hero-tag"><Keyboard size={14} /> Giải trí · Gõ lệnh Python</span>
+            <h2>Gõ nhanh, gõ chuẩn, nhớ lâu</h2>
+            <p>{TYPING_SNIPPETS.length} hàm và câu lệnh Python hay gặp. Luyện gõ để nhớ cú pháp, bớt sai chính tả khi làm bài.</p>
+          </div>
+          <div className="nb-tg-hero-stats">
+            <div><strong>{TYPING_SNIPPETS.length}</strong><span>lệnh</span></div>
+            <div><strong>{masteredCount}</strong><span>đã thuộc</span></div>
+            <div><strong>{profile.games}</strong><span>ván đã chơi</span></div>
+            <div><strong>{profile.bestWpm || 0}</strong><span>từ/phút cao nhất</span></div>
+          </div>
         </header>
         <div className="nb-tg-menu">
           <div className="nb-tg-choose">
             <section className="nb-tg-block">
-              <h3>Chủ đề</h3>
+              <h3>Chọn chủ đề</h3>
               <div className="nb-tg-topics" role="radiogroup" aria-label="Chủ đề">
                 {TYPING_CATEGORIES.map((c) => {
-                  const list = TYPING_SNIPPETS.filter((s) => c.key === "all" || s.cat === c.key);
+                  const list = TYPING_SNIPPETS.filter((x) => c.key === "all" || x.cat === c.key);
+                  const known = list.filter((x) => mastered.has(x.code)).length;
+                  const st = TYPING_TOPIC_STYLE[c.key] || TYPING_TOPIC_STYLE.all;
                   return (
-                    <button key={c.key} role="radio" aria-checked={category === c.key} className={`nb-tg-topic ${category === c.key ? "active" : ""}`} onClick={() => setCategory(c.key)}>
-                      <strong>{c.label}</strong>
-                      <code>{c.key === "all" ? "print(), for, def, ..." : list[0].code}</code>
-                      <span>{list.length} lệnh</span>
+                    <button key={c.key} role="radio" aria-checked={category === c.key} className={`nb-tg-topic ${category === c.key ? "active" : ""}`} style={{ "--tg-accent": st.color }} onClick={() => setCategory(c.key)}>
+                      <span className="nb-tg-topic-mark">{st.mark}</span>
+                      <span className="nb-tg-topic-main">
+                        <strong>{c.label}</strong>
+                        <code>{c.key === "all" ? "print(), for, def, ..." : list[0].code}</code>
+                      </span>
+                      <span className="nb-tg-topic-count">{known}/{list.length} đã thuộc</span>
+                      <i className="nb-tg-topic-bar"><b style={{ width: `${list.length ? Math.round(known / list.length * 100) : 0}%` }} /></i>
                     </button>
                   );
                 })}
               </div>
             </section>
             <section className="nb-tg-block">
-              <h3>Chế độ</h3>
+              <h3>Chọn chế độ</h3>
               <div className="nb-tg-modes" role="radiogroup" aria-label="Chế độ">
                 {Object.entries(TYPING_MODES).map(([key, m]) => (
                   <button key={key} role="radio" aria-checked={mode === key} className={`nb-tg-mode ${mode === key ? "active" : ""}`} onClick={() => setMode(key)}>
-                    <span className="nb-tg-mode-icon">{key === "timed" ? <Clock size={18} /> : <ListChecks size={18} />}</span>
+                    <span className="nb-tg-mode-icon">{modeIcon[key]}</span>
                     <span className="nb-tg-mode-text"><strong>{m.label}</strong><span>{m.desc}</span></span>
                     <small>{bests[key] ? `Kỷ lục ${bests[key].score}` : "Chưa chơi"}</small>
                   </button>
                 ))}
               </div>
+              {mode === "review" && unmasteredPool.length === 0 && <p className="nb-sub">Em đã thuộc hết lệnh của chủ đề này. Hệ thống sẽ ôn lại toàn bộ chủ đề.</p>}
             </section>
           </div>
           <aside className="nb-tg-side">
+            <section className="nb-tg-level">
+              <div className="nb-tg-level-top"><Award size={18} /><div><span>Cấp bậc của em</span><strong>{lv.name}</strong></div></div>
+              <i className="nb-tg-level-bar"><b style={{ width: `${lv.pct}%` }} /></i>
+              <small>{lv.next ? `${profile.xp} điểm · còn ${lv.toNext} điểm để lên “${lv.next.name}”` : `${profile.xp} điểm · cấp cao nhất`}</small>
+            </section>
             <TypingDemo snippets={demoPool} />
             <button className="nb-btn nb-btn-primary nb-tg-start-btn" onClick={newGame}><Play size={17} /> Bắt đầu chơi</button>
-            <p className="nb-sub">Gõ đúng liên tiếp để tăng combo, điểm nhân tối đa gấp đôi. Sai một ký tự là mất combo.</p>
+            <p className="nb-sub">Gõ đúng liên tiếp để tăng combo, điểm nhân tối đa gấp đôi. Sai một ký tự là mất combo. Nhấn Esc để thoát giữa chừng.</p>
           </aside>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === "ready") {
+    return (
+      <div className="nb-tg">
+        <div className="nb-tg-ready" role="status" aria-live="assertive">
+          <span>Sẵn sàng · {TYPING_MODES[mode].label}</span>
+          <strong key={countdown}>{countdown > 0 ? countdown : "Gõ!"}</strong>
+          <p>Đặt hai ngón trỏ lên phím F và J. Các lệnh sẽ hiện ngay sau đây.</p>
         </div>
       </div>
     );
@@ -4063,9 +4642,12 @@ function TypingGameView({ currentUser }) {
         <div className="nb-tg-result">
           <section className="nb-tg-result-main">
             <span className="nb-tg-result-mode">{TYPING_MODES[result.mode].label}</span>
+            <div className="nb-tg-stars" aria-label={`${result.stars} trên 3 sao`}>{[1, 2, 3].map((n) => <i key={n} className={n <= result.stars ? "on" : ""} style={{ animationDelay: `${n * 140}ms` }}>★</i>)}</div>
             <h2>{typingTitle(result.wpm)}</h2>
             <div className="nb-tg-wpm"><strong>{result.wpm}</strong><span>từ mỗi phút</span></div>
             {result.isRecord && <span className="nb-tg-record"><Award size={15} /> Kỷ lục mới của em</span>}
+            {result.levelUp && <span className="nb-tg-record levelup"><Trophy size={15} /> Lên cấp: {result.levelUp}</span>}
+            <p className="nb-sub">+{result.xpGain} điểm cấp bậc{result.newlyLearned > 0 ? ` · thuộc thêm ${result.newlyLearned} lệnh` : ""}</p>
             {result.previous && !result.isRecord && <p className="nb-sub">Kỷ lục hiện tại: {result.previous.score} điểm, {result.previous.wpm} từ/phút.</p>}
             <div className="nb-tg-actions">
               <button className="nb-btn nb-btn-primary" onClick={newGame}><RefreshCw size={16} /> Chơi lại</button>
@@ -4116,7 +4698,7 @@ function TypingGameView({ currentUser }) {
             <b>{Math.ceil(left)}</b>
           </div>
         ) : (
-          <div className="nb-tg-progress"><span>Lệnh {Math.min(g.idx + 1, TYPING_MODES.free.count)}/{TYPING_MODES.free.count}</span><i><b style={{ width: `${(g.idx / TYPING_MODES.free.count) * 100}%` }} /></i></div>
+          <div className="nb-tg-progress"><span>Lệnh {Math.min(g.idx + 1, TYPING_MODES[mode].count)}/{TYPING_MODES[mode].count}</span><i><b style={{ width: `${(g.idx / TYPING_MODES[mode].count) * 100}%` }} /></i></div>
         )}
         <button className="nb-btn nb-btn-ghost" onClick={skip}>Bỏ qua <ChevronRight size={16} /></button>
       </div>
@@ -6066,6 +6648,65 @@ function App() {
         .nb-xm-problem-modal .nb-testcase-editor { flex-shrink: 0; }
         .nb-xm-picker .nb-xm-picker-list { flex-shrink: 1; min-height: 120px; }
         .nb-xm-statement-input { min-height: 220px; line-height: 1.6; resize: vertical; }
+        /* ---- Hiển thị đề bài ---- */
+        .nb-st { font-size: 14px; line-height: 1.75; color: var(--ink); }
+        .nb-st .nb-st-p { margin: 0 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .nb-st .nb-st-h { margin: 18px 0 8px; color: var(--ink); letter-spacing: -.01em; line-height: 1.3; }
+        .nb-st .nb-st-h1 { font-size: 18px; } .nb-st .nb-st-h2 { font-size: 16px; } .nb-st .nb-st-h3 { font-size: 14.5px; }
+        .nb-st .nb-st-label { display: flex; align-items: center; gap: 8px; margin: 18px 0 8px; }
+        .nb-st .nb-st-label span { font-size: 11.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--pen-blue); padding: 3px 10px; border-radius: 999px; background: rgba(4,166,199,.1); }
+        .nb-st .nb-st-label::after { content: ""; flex: 1; height: 1px; background: var(--paper-line); }
+        .nb-st .nb-st-tag { display: inline-block; margin-right: 8px; padding: 1px 9px; border-radius: 999px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--pen-blue); background: rgba(4,166,199,.1); }
+        .nb-st .nb-st-code { font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: .88em; padding: 1px 6px; border-radius: 5px; background: #eef4f8; border: 1px solid #dbe7ee; color: #0b4f66; white-space: pre-wrap; }
+        .nb-st .nb-st-pre { margin: 0 0 14px; padding: 12px 14px; border-radius: 10px; background: #0f2233; color: #e6f1f7; font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.6; overflow-x: auto; white-space: pre; }
+        .nb-st .nb-st-list { margin: 0 0 12px; padding-left: 4px; list-style: none; counter-reset: stitem; }
+        .nb-st .nb-st-list li { position: relative; padding-left: 26px; margin: 4px 0; overflow-wrap: anywhere; }
+        .nb-st .nb-st-list li::before { content: ""; position: absolute; left: 8px; top: .72em; width: 6px; height: 6px; border-radius: 50%; background: var(--pen-blue); }
+        .nb-st .nb-st-list.ordered li { counter-increment: stitem; }
+        .nb-st .nb-st-list.ordered li::before { content: counter(stitem); top: .15em; left: 0; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 800; color: #fff; background: var(--pen-blue); }
+        .nb-st sup, .nb-st sub { font-size: .72em; line-height: 0; }
+        .nb-st .nb-st-sup { vertical-align: super; } .nb-st .nb-st-sub { vertical-align: sub; }
+        .nb-st .nb-st-table-wrap { overflow-x: auto; margin: 0 0 14px; border: 1px solid var(--paper-line); border-radius: 10px; }
+        .nb-st .nb-st-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .nb-st .nb-st-table th, .nb-st .nb-st-table td { padding: 7px 12px; text-align: left; border-bottom: 1px solid var(--paper-line); }
+        .nb-st .nb-st-table th { background: #f1f8fa; font-weight: 700; }
+        .nb-st .nb-st-table tr:last-child td { border-bottom: none; }
+        .nb-st-help { margin: 6px 0 8px; }
+        .nb-st-help-row { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; font-size: 12px; color: var(--slate); line-height: 1.8; }
+        .nb-st-help-row code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; background: #eef4f8; padding: 1px 5px; border-radius: 4px; color: #0b4f66; }
+        .nb-st-preview { margin-top: 8px; padding: 14px 16px; border: 1px dashed var(--paper-line); border-radius: 12px; background: #fbfdfe; max-height: 340px; overflow: auto; }
+        .nb-xm-lang-note { display: flex; flex-direction: column; gap: 2px; justify-content: center; }
+        .nb-xm-lang-note strong { font-size: 13px; } .nb-xm-lang-note small { color: var(--slate); font-size: 11px; }
+        /* ---- Chọn ngôn ngữ trong đề thi ---- */
+        .nb-lang-picker { padding: 22px; border: 1.5px dashed var(--paper-line); border-radius: 14px; background: linear-gradient(180deg, #fbfdfe, #f2f9fb); }
+        .nb-lang-picker h4 { margin: 4px 0 6px; font-size: 18px; }
+        .nb-lang-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+        .nb-lang-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px 10px; cursor: pointer; border: 1.5px solid #dbe7ee; border-radius: 14px; background: #fff; transition: transform .15s, box-shadow .15s, border-color .15s; font: inherit; color: inherit; }
+        .nb-lang-card:hover, .nb-lang-card:focus-visible { transform: translateY(-2px); border-color: var(--pen-blue); box-shadow: 0 8px 20px rgba(4,166,199,.16); outline: none; }
+        .nb-lang-card small { color: var(--slate); font-size: 11px; }
+        .nb-lang-mark { width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; font-weight: 800; font-size: 17px; color: #fff; background: linear-gradient(135deg, #04a6c7, #1b6fb5); margin-bottom: 4px; }
+        .lang-python .nb-lang-mark { background: linear-gradient(135deg, #3776ab, #f4c430); color: #10263a; }
+        .lang-c .nb-lang-mark { background: linear-gradient(135deg, #5b6c83, #2b3a4f); }
+        .lang-cpp .nb-lang-mark { background: linear-gradient(135deg, #00599c, #3b8fd9); }
+        .nb-lang-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+        .nb-lang-bar span { font-size: 12px; font-weight: 700; color: var(--slate); margin-right: 4px; }
+        .nb-lang-bar button { cursor: pointer; padding: 5px 12px; border-radius: 999px; border: 1.5px solid #dbe7ee; background: #fff; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+        .nb-lang-bar button.active { background: var(--pen-blue); border-color: var(--pen-blue); color: #fff; }
+        @media (max-width: 560px) { .nb-lang-grid { grid-template-columns: 1fr; } .nb-lang-card { flex-direction: row; justify-content: flex-start; padding: 12px 16px; gap: 12px; } .nb-lang-mark { margin: 0; width: 42px; height: 42px; } }
+        /* ---- Rời màn hình / cộng giờ ---- */
+        .nb-xm-viol-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; color: var(--slate); background: #eef4f8; }
+        .nb-xm-viol-chip.has { color: #9a5b00; background: #fff3d6; }
+        .nb-xm-viol { display: inline-block; min-width: 24px; padding: 2px 8px; border-radius: 999px; font-weight: 700; font-size: 12px; background: #eef4f8; color: var(--slate); text-align: center; }
+        .nb-xm-viol.has { background: #fff3d6; color: #9a5b00; }
+        .nb-xm-extra { color: var(--pen-blue); font-weight: 700; }
+        .nb-xm-away { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 12px 16px; border-radius: 12px; border: 1px solid #f3d38a; background: #fff8e6; color: #7a4a00; animation: nbAwayIn .25s ease-out; }
+        .nb-xm-away > div { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+        .nb-xm-away svg { flex-shrink: 0; }
+        @keyframes nbAwayIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+        .nb-xm-extend { max-width: 460px; }
+        .nb-xm-extend > * { flex-shrink: 0; }
+        .nb-xm-extend-body { padding: 4px 22px 8px; display: flex; flex-direction: column; gap: 14px; }
+        .nb-xm-extend-quick { display: flex; flex-wrap: wrap; gap: 8px; }
         .nb-xm-desc-input { min-height: 110px; line-height: 1.6; resize: vertical; }
         .nb-xm-problem-modal { gap: 14px; }
         .nb-xm-problem-modal .nb-modal-head { padding-bottom: 12px; border-bottom: 1px solid #e9edf4; align-items: center; }
@@ -6293,6 +6934,66 @@ function App() {
           .nb-tg-wpm strong { font-size: 58px; }
           .nb-tg-result-main { padding: 22px; }
           .nb-tg-missed { grid-template-columns: 1fr; }
+        }
+                /* ---- Giải trí: giao diện nâng cấp ---- */
+        .nb-tg-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 26px 28px; margin-bottom: 20px; border-radius: 18px; color: #fff; background: radial-gradient(120% 140% at 0% 0%, #1b4fc4 0%, #0f2a52 45%, #0b1b33 100%); position: relative; overflow: hidden; }
+        .nb-tg-hero::after { content: "</>"; position: absolute; right: 22px; bottom: -22px; font: 800 120px/1 'JetBrains Mono', monospace; color: rgba(255,255,255,.05); pointer-events: none; }
+        .nb-tg-hero-text { max-width: 520px; position: relative; z-index: 1; }
+        .nb-tg-hero-tag { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(255,255,255,.12); }
+        .nb-tg-hero h2 { margin: 12px 0 8px; font-size: 30px; letter-spacing: -.02em; line-height: 1.2; }
+        .nb-tg-hero p { margin: 0; color: #c3d4ec; font-size: 14px; line-height: 1.65; }
+        .nb-tg-hero-stats { display: grid; grid-template-columns: repeat(4, minmax(78px, 1fr)); gap: 10px; position: relative; z-index: 1; }
+        .nb-tg-hero-stats > div { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 10px; border-radius: 14px; background: rgba(255,255,255,.09); border: 1px solid rgba(255,255,255,.12); backdrop-filter: blur(4px); }
+        .nb-tg-hero-stats strong { font: 700 24px 'JetBrains Mono', monospace; color: #7fe3f2; }
+        .nb-tg-hero-stats span { font-size: 11px; color: #b9cbe4; text-align: center; }
+        .nb-tg-topics { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; background: transparent; border: 0; border-radius: 0; overflow: visible; }
+        .nb-tg-topic { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: auto auto auto; gap: 2px 12px; align-items: center; padding: 14px; border: 1.5px solid #e1e8f2; border-left-width: 1.5px; border-radius: 14px; background: #fff; cursor: pointer; transition: transform .15s, box-shadow .15s, border-color .15s; }
+        .nb-tg-topic:first-child { border-top: 1.5px solid #e1e8f2; }
+        .nb-tg-topic:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(15,42,82,.1); background: #fff; }
+        .nb-tg-topic.active { border-color: var(--tg-accent); background: #fff; box-shadow: 0 0 0 3px color-mix(in srgb, var(--tg-accent) 18%, transparent); }
+        .nb-tg-topic-mark { grid-row: 1 / span 2; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; color: #fff; background: var(--tg-accent); font: 700 13px 'JetBrains Mono', monospace; letter-spacing: -.02em; }
+        .nb-tg-topic .nb-tg-topic-mark { color: #fff; }
+        .nb-tg-topic-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .nb-tg-topic-main code { max-width: 100%; }
+        .nb-tg-topic.active .nb-tg-topic-main code { color: var(--tg-accent); }
+        .nb-tg-topic-count { grid-column: 2; font-size: 11.5px; color: var(--slate); }
+        .nb-tg-topic-bar { grid-column: 1 / -1; display: block; height: 5px; margin-top: 8px; border-radius: 99px; background: #e8eef5; overflow: hidden; }
+        .nb-tg-topic-bar b { display: block; height: 100%; border-radius: 99px; background: var(--tg-accent); transition: width .4s; }
+        .nb-tg-modes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .nb-tg-mode small { grid-column: 1 / -1; }
+        .nb-tg-level { display: flex; flex-direction: column; gap: 9px; padding: 15px 16px; border-radius: 14px; background: #fff; border: 1px solid #e1e8f2; }
+        .nb-tg-level-top { display: flex; align-items: center; gap: 12px; }
+        .nb-tg-level-top svg { flex-shrink: 0; width: 38px; height: 38px; padding: 8px; border-radius: 12px; color: #6b4a00; background: linear-gradient(135deg, #ffe08a, #ffc23d); }
+        .nb-tg-level-top div { display: flex; flex-direction: column; }
+        .nb-tg-level-top span { font-size: 11.5px; color: var(--slate); }
+        .nb-tg-level-top strong { font-size: 15px; }
+        .nb-tg-level-bar { display: block; height: 7px; border-radius: 99px; background: #e8eef5; overflow: hidden; }
+        .nb-tg-level-bar b { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #2563eb, #22b8c7); transition: width .5s; }
+        .nb-tg-level small { color: var(--slate); font-size: 11.5px; }
+        .nb-tg-ready { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 380px; border-radius: 18px; color: #fff; text-align: center; background: radial-gradient(120% 140% at 50% 0%, #1b4fc4 0%, #0f2a52 50%, #0b1b33 100%); }
+        .nb-tg-ready span { color: #b9cbe4; font-size: 14px; font-weight: 600; }
+        .nb-tg-ready strong { font: 700 112px/1 'JetBrains Mono', monospace; color: #7fe3f2; animation: nbTgPop .7s ease-out; }
+        .nb-tg-ready p { margin: 0; color: #9fb4d2; font-size: 13px; }
+        @keyframes nbTgPop { 0% { transform: scale(.6); opacity: 0; } 35% { transform: scale(1.08); opacity: 1; } 100% { transform: scale(1); } }
+        .nb-tg-stars { display: flex; gap: 8px; }
+        .nb-tg-stars i { font-style: normal; font-size: 34px; line-height: 1; color: rgba(255,255,255,.18); }
+        .nb-tg-stars i.on { color: #ffcf4d; text-shadow: 0 0 18px rgba(255,207,77,.55); animation: nbTgStar .5s ease-out backwards; }
+        @keyframes nbTgStar { 0% { transform: scale(.2) rotate(-40deg); opacity: 0; } 70% { transform: scale(1.25) rotate(8deg); } 100% { transform: scale(1); opacity: 1; } }
+        .nb-tg-record.levelup { background: #9cf0c8; color: #064a2e; }
+        .nb-tg-line { background-image: linear-gradient(90deg, rgba(255,255,255,.03), transparent 40%); }
+        .nb-tg-editor { box-shadow: 0 18px 40px rgba(8,20,40,.28); }
+        .nb-tg-tab::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: #ff5f57; box-shadow: 16px 0 0 #febc2e, 32px 0 0 #28c840; margin-right: 38px; }
+        .nb-tg-combo.hot { animation: nbTgHot 1.2s ease-in-out infinite; }
+        @keyframes nbTgHot { 0%,100% { background: transparent; } 50% { background: rgba(255,190,60,.12); } }
+        @media (max-width: 860px) { .nb-tg-hero-stats { width: 100%; } }
+        @media (max-width: 760px) { .nb-tg-modes { grid-template-columns: 1fr; } }
+        @media (max-width: 640px) {
+          .nb-tg-hero { padding: 20px; } .nb-tg-hero h2 { font-size: 23px; }
+          .nb-tg-hero-stats { grid-template-columns: repeat(2, 1fr); }
+          .nb-tg-topics { grid-template-columns: 1fr 1fr; }
+          .nb-tg-topic { grid-template-columns: 1fr; } .nb-tg-topic-mark { grid-row: auto; width: 36px; height: 36px; margin-bottom: 4px; }
+          .nb-tg-topic-main code { display: none; } .nb-tg-topic-count { grid-column: 1; }
+          .nb-tg-ready strong { font-size: 84px; }
         }
         @media (prefers-reduced-motion: reduce) {
           .nb-tg *, .nb-tg-editor { animation: none !important; transition: none !important; }
