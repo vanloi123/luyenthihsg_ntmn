@@ -1650,132 +1650,245 @@ function DailyActivityPanel({ submissions, students }) {
   );
 }
 
+function timeAgoVi(value, nowMs = Date.now()) {
+  const t = new Date(value || 0).getTime();
+  if (!t) return "";
+  const diff = Math.max(0, nowMs - t);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "Vừa xong";
+  if (min < 60) return `${min} phút trước`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} giờ trước`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day} ngày trước`;
+  return new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit" }).format(new Date(t));
+}
+
+function OvKpi({ icon, tone, label, value, sub, trend, bar }) {
+  return (
+    <div className="nb-ov-kpi">
+      <span className={`nb-ov-kpi-icon ${tone}`}>{icon}</span>
+      <div className="nb-ov-kpi-body">
+        <small>{label}</small>
+        <strong>{value}</strong>
+        {bar != null && <i className="nb-ov-kpi-bar"><b style={{ width: `${Math.max(0, Math.min(100, bar))}%` }} /></i>}
+        <span>{sub}{trend != null && trend !== 0 && <em className={trend > 0 ? "up" : "down"}>{trend > 0 ? "▲" : "▼"} {Math.abs(trend)}</em>}</span>
+      </div>
+    </div>
+  );
+}
+
+function OvPanel({ eyebrow, title, action, onAction, children, className = "" }) {
+  return (
+    <section className={`nb-ov-panel ${className}`}>
+      <header><div><span className="nb-ov-eyebrow">{eyebrow}</span><h2>{title}</h2></div>{action && <button className="nb-link-button" onClick={onAction}>{action} <ChevronRight size={14} /></button>}</header>
+      {children}
+    </section>
+  );
+}
+
+function OvEmpty({ icon, title, text }) {
+  return <div className="nb-ov-empty">{icon}<strong>{title}</strong><span>{text}</span></div>;
+}
+
 function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, problems, onNavigate }) {
   const isTeacher = currentUser.role === "teacher" || currentUser.role === "admin";
-  const firstName = currentUser.name.split(" ").slice(-1)[0];
+  const todayLabel = new Intl.DateTimeFormat("vi-VN", { weekday: "long", day: "numeric", month: "numeric" }).format(new Date());
+  const activeContest = contests.find((contest) => contest.status === "active");
+  const byTimeDesc = (a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
 
   if (!isTeacher) {
     const rankSorted = [...students].sort((a, b) => (points(b.id) - points(a.id)) || (solvedCount(b.id) - solvedCount(a.id)));
     const rank = rankSorted.findIndex((student) => student.id === currentUser.id) + 1;
-    const activeContest = contests.find((contest) => contest.status === "active");
-    const recentActivity = submissions.filter((submission) => submission.studentId === currentUser.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 5);
+    const mine = submissions.filter((submission) => submission.studentId === currentUser.id).sort(byTimeDesc);
+    const recentActivity = mine.slice(0, 5);
     const solved = solvedCount(currentUser.id);
+    const remaining = Math.max(0, problemsCount - solved);
     const progress = problemsCount ? Math.round((solved / problemsCount) * 100) : 0;
-    const bestRecent = recentActivity.find((submission) => submission.verdict === "AC");
+    const bestRecent = mine.find((submission) => submission.verdict === "AC");
 
     return (
-      <div className="nb-home-page">
+      <div className="nb-ov">
         <SisterSiteBanner />
-        <div className="nb-home-hero student"><div><div className="nb-eyebrow">Bảng điều khiển cá nhân · Đội tuyển Tin học</div><h1>Chào {firstName}</h1><p>Tiếp tục nhịp học hôm nay và tiến gần hơn đến mục tiêu của em.</p></div><div className="nb-home-hero-rank"><Award size={21} /><span><strong>#{rank > 0 ? rank : "—"}</strong><small>thứ hạng hiện tại</small></span></div></div>
-        <div className="nb-home-stat-grid"><div className="nb-home-stat"><span className="blue"><TrendingUp size={17} /></span><div><strong>{points(currentUser.id)}</strong><small>Tổng điểm</small></div></div><div className="nb-home-stat"><span className="gold"><Award size={17} /></span><div><strong>#{rank > 0 ? rank : "—"}</strong><small>Xếp hạng lớp</small></div></div><div className="nb-home-stat"><span className="green"><ListChecks size={17} /></span><div><strong>{solved}/{problemsCount}</strong><small>Bài đã giải</small></div></div><div className="nb-home-stat"><span className="red"><Flame size={17} /></span><div><strong>{currentUser.streak || 0}</strong><small>Ngày liên tục</small></div></div></div>
+        <header className="nb-ov-head">
+          <div><span className="nb-ov-date">{todayLabel}</span><h1>Chào {currentUser.name}</h1><p>Mỗi ngày một bài, em sẽ tiến bộ thấy rõ.</p></div>
+          <div className="nb-ov-head-chips">
+            <span className="nb-ov-chip gold"><Award size={14} /> Hạng {rank > 0 ? `#${rank}` : "—"}</span>
+            <span className="nb-ov-chip red"><Flame size={14} /> {currentUser.streak || 0} ngày liên tục</span>
+          </div>
+        </header>
 
-        <div className="nb-home-main-grid"><section className="nb-home-progress-card"><div className="nb-home-card-head"><div><div className="nb-eyebrow">Mục tiêu học tập</div><h2>Tiến độ luyện tập</h2></div><span className="nb-home-percent">{progress}%</span></div><p className="nb-sub">Em đã hoàn thành {solved} trên tổng số {problemsCount} bài tập trong ngân hàng.</p><div className="nb-home-progress"><span style={{ width: `${progress}%` }} /></div><div className="nb-home-progress-foot"><span>Tiếp tục duy trì nhịp học đều đặn</span><strong>{problemsCount - solved > 0 ? `${problemsCount - solved} bài còn lại` : "Đã hoàn thành tất cả"}</strong></div><div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Luyện tập ngay</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("lessons")}><BookOpen size={15} /> Xem bài giảng</button></div></section><section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}><div className="nb-home-card-head"><div><div className="nb-eyebrow">Đề thi thử</div><h2>{activeContest ? "Kỳ thi đang mở" : "Sẵn sàng cho thử thách?"}</h2></div><span className={activeContest ? "nb-home-live-dot" : "nb-home-clock-icon"}>{activeContest ? <span /> : <Clock size={19} />}</span></div>{activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemCount} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Play size={15} /> Vào thi thử</button></> : <><p className="nb-sub">Hiện chưa có đề đang mở. Em có thể xem lịch và chuẩn bị trước cho kỳ thi tiếp theo.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Clock size={15} /> Xem lịch đề thi</button></>}</section></div>
+        {activeContest ? (
+          <section className="nb-ov-focus live">
+            <span className="nb-ov-focus-icon"><span className="nb-home-live-dot"><span /></span></span>
+            <div className="nb-ov-focus-text"><small>Việc cần làm ngay</small><strong>Đề thi đang mở: {activeContest.title}</strong><span><Clock size={13} /> {activeContest.duration} phút · <ListChecks size={13} /> {activeContest.problemCount} bài</span></div>
+            <button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Play size={15} /> Vào thi</button>
+          </section>
+        ) : (
+          <section className="nb-ov-focus">
+            <span className="nb-ov-focus-icon"><Code2 size={20} /></span>
+            <div className="nb-ov-focus-text"><small>Việc tiếp theo</small><strong>{remaining > 0 ? `Còn ${remaining} bài chờ em chinh phục` : "Em đã hoàn thành tất cả bài hiện có"}</strong><span>{bestRecent ? `Bài giải tốt gần nhất: ${bestRecent.problemTitle || bestRecent.problemId}.` : "Chọn một bài để bắt đầu xây dựng thành tích."}</span></div>
+            <button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Luyện tập ngay</button>
+          </section>
+        )}
 
-        <div className="nb-home-lower-grid"><section className="nb-panel nb-home-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Nhật ký học tập</div><h2>Hoạt động gần đây</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("problems")}>Xem tất cả <ChevronRight size={14} /></button></div>{recentActivity.length === 0 ? <div className="nb-home-empty"><Code2 size={22} /><strong>Chưa có hoạt động</strong><span>Bắt đầu giải bài đầu tiên để theo dõi tiến độ.</span></div> : <div className="nb-home-activity-list">{recentActivity.map((submission, index) => <div className="nb-home-activity-item" key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><div><strong>{submission.verdict === "AC" ? "Đã giải thành công" : "Đã nộp bài"}</strong><small>{submission.problemTitle || submission.problemId} · {submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test` : submission.verdict}</small></div><span className="nb-home-activity-score">{submission.score ?? 0}đ</span></div>)}</div>}</section><section className="nb-panel nb-home-next"><div className="nb-eyebrow">Gợi ý tiếp theo</div><h2>{bestRecent ? "Duy trì đà tiến bộ" : "Bắt đầu hành trình"}</h2><p className="nb-sub">{bestRecent ? `Bài gần nhất em giải tốt là ${bestRecent.problemTitle || bestRecent.problemId}. Hãy thử một bài khó hơn.` : "Hãy chọn một bài giảng hoặc bài tập để bắt đầu xây dựng thành tích."}</p><div className="nb-home-next-links"><button onClick={() => onNavigate?.("problems")}><span><Code2 size={15} /> Bài tập đề xuất</span><ChevronRight size={15} /></button><button onClick={() => onNavigate?.("lessons")}><span><BookOpen size={15} /> Học lý thuyết</span><ChevronRight size={15} /></button><button onClick={() => onNavigate?.("leaderboard")}><span><Trophy size={15} /> Xem bảng xếp hạng</span><ChevronRight size={15} /></button></div></section></div>
+        <div className="nb-ov-kpis">
+          <OvKpi icon={<TrendingUp size={17} />} tone="blue" label="Tổng điểm" value={points(currentUser.id)} sub="Điểm tích lũy" />
+          <OvKpi icon={<Award size={17} />} tone="gold" label="Xếp hạng lớp" value={rank > 0 ? `#${rank}` : "—"} sub={`trên ${students.length} học sinh`} />
+          <OvKpi icon={<ListChecks size={17} />} tone="green" label="Bài đã giải" value={`${solved}/${problemsCount}`} sub={`${progress}% ngân hàng bài`} bar={progress} />
+          <OvKpi icon={<Flame size={17} />} tone="red" label="Chuỗi ngày học" value={currentUser.streak || 0} sub="ngày liên tục" />
+        </div>
+
+        <div className="nb-ov-grid two">
+          <OvPanel eyebrow="Nhật ký học tập" title="Hoạt động gần đây" action="Xem bài tập" onAction={() => onNavigate?.("problems")}>
+            {recentActivity.length === 0 ? <OvEmpty icon={<Code2 size={22} />} title="Chưa có hoạt động" text="Giải bài đầu tiên để theo dõi tiến độ." /> : (
+              <ul className="nb-ov-list">{recentActivity.map((s, i) => (
+                <li key={s.id || i}>
+                  <span className={`nb-ov-dot ${s.verdict === "AC" ? "ok" : "warn"}`}>{s.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span>
+                  <div><strong>{s.problemTitle || s.problemId}</strong><small>{s.passedTests != null && s.totalTests != null ? `${s.passedTests}/${s.totalTests} test` : s.verdict} · {timeAgoVi(s.createdAt)}</small></div>
+                  <b>{s.score ?? 0}đ</b>
+                </li>))}</ul>
+            )}
+          </OvPanel>
+          <OvPanel eyebrow="Lối tắt" title="Học gì tiếp theo?">
+            <div className="nb-ov-links">
+              <button onClick={() => onNavigate?.("lessons")}><span className="nb-ov-link-icon blue"><BookOpen size={16} /></span><span><strong>Bài giảng</strong><small>Ôn lý thuyết trước khi làm bài</small></span><ChevronRight size={15} /></button>
+              <button onClick={() => onNavigate?.("assignments")}><span className="nb-ov-link-icon green"><ListChecks size={16} /></span><span><strong>Bài được giao</strong><small>Việc thầy cô giao riêng cho em</small></span><ChevronRight size={15} /></button>
+              <button onClick={() => onNavigate?.("leaderboard")}><span className="nb-ov-link-icon gold"><Trophy size={16} /></span><span><strong>Bảng xếp hạng</strong><small>So sánh với cả lớp</small></span><ChevronRight size={15} /></button>
+              <button onClick={() => onNavigate?.("typing")}><span className="nb-ov-link-icon red"><Keyboard size={16} /></span><span><strong>Giải trí: Gõ lệnh Python</strong><small>Luyện gõ nhanh, nhớ cú pháp</small></span><ChevronRight size={15} /></button>
+            </div>
+          </OvPanel>
+        </div>
       </div>
     );
   }
 
-  const safeProblems = problems || [];
+  /* ---------------- Giáo viên ---------------- */
   const now = Date.now();
-  const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-  const fourteenDaysAgo = now - (14 * 24 * 60 * 60 * 1000);
-  const avgPoints = students.length ? Math.round(students.reduce((sum, student) => sum + points(student.id), 0) / students.length) : 0;
+  const DAY = 24 * 60 * 60 * 1000;
+  const inWindow = (s, from, to) => { const t = new Date(s.createdAt || 0).getTime(); return t >= from && t < to; };
+  const weekly = submissions.filter((s) => inWindow(s, now - 7 * DAY, now + DAY));
+  const prevWeek = submissions.filter((s) => inWindow(s, now - 14 * DAY, now - 7 * DAY));
+  const weeklyActive = new Set(weekly.map((s) => s.studentId)).size;
+  const weeklyAc = weekly.filter((s) => s.verdict === "AC").length;
+  const acRate = weekly.length ? Math.round((weeklyAc / weekly.length) * 100) : 0;
+  const avgPoints = students.length ? Math.round(students.reduce((sum, st) => sum + points(st.id), 0) / students.length) : 0;
+  const activePct = students.length ? Math.round((weeklyActive / students.length) * 100) : 0;
+  const openThreads = discussions.filter((d) => (d.replies || []).length === 0);
   const topThree = [...students].sort((a, b) => (points(b.id) - points(a.id)) || (solvedCount(b.id) - solvedCount(a.id))).slice(0, 3);
-  const openThreads = discussions.filter((discussion) => (discussion.replies || []).length === 0);
-  const activeContest = contests.find((contest) => contest.status === "active");
-  const weeklySubmissions = submissions.filter((submission) => {
-    const timestamp = new Date(submission.createdAt || 0).getTime();
-    return timestamp >= sevenDaysAgo;
+
+  const lastByStudent = new Map();
+  const byProblem = new Map();
+  submissions.forEach((s) => {
+    const t = new Date(s.createdAt || 0).getTime();
+    if (t > (lastByStudent.get(s.studentId) || 0)) lastByStudent.set(s.studentId, t);
+    if (!byProblem.has(s.problemId)) byProblem.set(s.problemId, []);
+    byProblem.get(s.problemId).push(s);
   });
-  const weeklyActiveStudents = new Set(weeklySubmissions.map((submission) => submission.studentId)).size;
-  const totalSolved = students.reduce((sum, student) => sum + solvedCount(student.id), 0);
-  const activityByStudent = new Map();
-  const activityByProblem = new Map();
-  submissions.forEach((submission) => {
-    if (!activityByStudent.has(submission.studentId)) activityByStudent.set(submission.studentId, []);
-    activityByStudent.get(submission.studentId).push(submission);
-    if (!activityByProblem.has(submission.problemId)) activityByProblem.set(submission.problemId, []);
-    activityByProblem.get(submission.problemId).push(submission);
-  });
-  const problemInsights = safeProblems.map((problem) => {
-    const attempts = activityByProblem.get(problem.id) || [];
-    const accepted = attempts.filter((submission) => submission.verdict === "AC").length;
-    return {
-      problem,
-      attempts: attempts.length,
-      accepted,
-      successRate: attempts.length ? Math.round((accepted / attempts.length) * 100) : 0,
-    };
-  }).filter((item) => item.attempts > 0)
-    .sort((a, b) => (a.successRate - b.successRate) || (b.attempts - a.attempts))
-    .slice(0, 5);
-  const studentSignals = students.map((student) => {
-    const studentSubmissions = activityByStudent.get(student.id) || [];
-    const recentSubmissions = studentSubmissions.filter((submission) => new Date(submission.createdAt || 0).getTime() >= fourteenDaysAgo);
-    const lastSubmission = studentSubmissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))[0];
-    const label = recentSubmissions.length === 0 ? "14 ngày chưa hoạt động" : `${solvedCount(student.id)} bài đã giải`;
-    return { student, attempts: studentSubmissions.length, recentAttempts: recentSubmissions.length, lastSubmission, label };
-  }).sort((a, b) => (a.recentAttempts - b.recentAttempts) || (solvedCount(a.student.id) - solvedCount(b.student.id)) || (a.attempts - b.attempts))
-    .slice(0, 5);
-  const studentNameById = new Map(students.map((s) => [s.id, s.name]));
-  const recentClassActivity = submissions.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)).slice(0, 10);
+  const inactive = students
+    .map((st) => ({ student: st, last: lastByStudent.get(st.id) || 0 }))
+    .filter((x) => x.last < now - 14 * DAY)
+    .sort((a, b) => a.last - b.last);
+  const hardProblems = (problems || []).map((problem) => {
+    const list = byProblem.get(problem.id) || [];
+    const ac = list.filter((s) => s.verdict === "AC").length;
+    return { problem, attempts: list.length, ac, rate: list.length ? Math.round((ac / list.length) * 100) : 0 };
+  }).filter((x) => x.attempts >= 3).sort((a, b) => (a.rate - b.rate) || (b.attempts - a.attempts)).slice(0, 4);
+  const nameById = new Map(students.map((st) => [st.id, st.name]));
+  const recent = submissions.slice().sort(byTimeDesc).slice(0, 7);
+
+  const todo = [];
+  if (openThreads.length > 0) todo.push({ key: "q", tone: "red", icon: <MessageSquare size={17} />, title: `${openThreads.length} câu hỏi chờ trả lời`, text: "Học sinh đang chờ thầy cô phản hồi", go: "discussion" });
+  if (activeContest) todo.push({ key: "x", tone: "green", icon: <Clock size={17} />, title: "Đang có đề thi mở", text: `${activeContest.title} · ${activeContest.duration} phút`, go: "contests" });
+  if (inactive.length > 0) todo.push({ key: "i", tone: "gold", icon: <Users size={17} />, title: `${inactive.length} học sinh 14 ngày chưa nộp bài`, text: "Cần nhắc nhở hoặc hỗ trợ", go: "leaderboard" });
 
   return (
-    <div className="nb-home-page">
+    <div className="nb-ov">
       <SisterSiteBanner />
-      <div className="nb-home-hero teacher">
-        <div>
-          <div className="nb-eyebrow">Bảng điều khiển giáo viên · Đội tuyển Tin học</div>
-          <h1>Tổng quan đội tuyển</h1>
-          <p>Theo dõi nhịp học, phát hiện điểm nghẽn và xử lý việc cần làm trong một màn hình.</p>
+      <header className="nb-ov-head">
+        <div><span className="nb-ov-date">{todayLabel}</span><h1>Tổng quan đội tuyển</h1><p>{weekly.length} lượt nộp trong 7 ngày qua từ {weeklyActive}/{students.length} học sinh.</p></div>
+        <div className="nb-ov-head-actions">
+          <button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Quản lý bài</button>
+          <button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Plus size={15} /> Tạo đề thi</button>
         </div>
-        <div className="nb-home-hero-tools">
-          <button className="nb-home-hero-action" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Quản lý bài</button>
-          <button className="nb-home-hero-action" onClick={() => onNavigate?.("contests")}><Clock size={15} /> Tạo đề thi</button>
+      </header>
+
+      <section className="nb-ov-todo" aria-label="Việc cần xử lý">
+        {todo.length === 0
+          ? <div className="nb-ov-todo-ok"><CheckCircle2 size={18} /> Không có việc cần xử lý. Mọi thứ đang ổn.</div>
+          : todo.map((t) => (
+            <button key={t.key} className={`nb-ov-todo-card ${t.tone}`} onClick={() => onNavigate?.(t.go)}>
+              <span className="nb-ov-todo-icon">{t.icon}</span>
+              <span className="nb-ov-todo-text"><strong>{t.title}</strong><small>{t.text}</small></span>
+              <ChevronRight size={16} />
+            </button>))}
+      </section>
+
+      <div className="nb-ov-kpis">
+        <OvKpi icon={<Users size={17} />} tone="blue" label="Học sinh hoạt động" value={`${weeklyActive}/${students.length}`} sub={`${activePct}% trong 7 ngày`} bar={activePct} />
+        <OvKpi icon={<TrendingUp size={17} />} tone="green" label="Lượt nộp 7 ngày" value={weekly.length} sub="so với tuần trước" trend={weekly.length - prevWeek.length} />
+        <OvKpi icon={<CheckCircle2 size={17} />} tone="gold" label="Tỷ lệ đúng 7 ngày" value={`${acRate}%`} sub={`${weeklyAc} lượt AC`} bar={acRate} />
+        <OvKpi icon={<Award size={17} />} tone="red" label="Điểm trung bình" value={avgPoints} sub="mỗi học sinh" />
+      </div>
+
+      <div className="nb-ov-grid main">
+        <div className="nb-ov-col wide"><DailyActivityPanel submissions={submissions} students={students} /></div>
+        <div className="nb-ov-col">
+          {openThreads.length > 0 && (
+            <OvPanel eyebrow="Hộp việc cần làm" title="Câu hỏi chờ trả lời" action="Mở thảo luận" onAction={() => onNavigate?.("discussion")}>
+              <ul className="nb-ov-list">{openThreads.slice(0, 3).map((d) => (
+                <li key={d.id} className="clickable" onClick={() => onNavigate?.("discussion")}>
+                  <span className="nb-ov-dot info"><MessageSquare size={14} /></span>
+                  <div><strong>{d.author}</strong><small>{String(d.content || "").slice(0, 60)}{String(d.content || "").length > 60 ? "…" : ""}</small></div>
+                </li>))}</ul>
+            </OvPanel>
+          )}
+          <OvPanel eyebrow="Theo dõi cá nhân" title="Học sinh cần hỗ trợ" action="Xem lớp" onAction={() => onNavigate?.("leaderboard")}>
+            {inactive.length === 0 ? <OvEmpty icon={<CheckCircle2 size={22} />} title="Cả lớp đều hoạt động" text="Không ai quá 14 ngày chưa nộp bài." /> : (
+              <ul className="nb-ov-list">{inactive.slice(0, 5).map(({ student, last }) => (
+                <li key={student.id}>
+                  <Avatar name={student.name} size={30} />
+                  <div><strong>{student.name}</strong><small>{last ? `Nộp gần nhất ${timeAgoVi(last, now)}` : "Chưa nộp bài nào"}</small></div>
+                  <span className="nb-ov-tag risk">Cần nhắc</span>
+                </li>))}
+              {inactive.length > 5 && <li className="more">và {inactive.length - 5} học sinh khác</li>}</ul>
+            )}
+          </OvPanel>
         </div>
       </div>
 
-      <div className="nb-home-stat-grid">
-        <div className="nb-home-stat"><span className="blue"><Users size={17} /></span><div><strong>{students.length}</strong><small>Học sinh</small><em>{weeklyActiveStudents} hoạt động 7 ngày</em></div></div>
-        <div className="nb-home-stat"><span className="green"><TrendingUp size={17} /></span><div><strong>{weeklySubmissions.length}</strong><small>Lượt nộp tuần này</small><em>{weeklyActiveStudents} học sinh tham gia</em></div></div>
-        <div className="nb-home-stat"><span className="gold"><Award size={17} /></span><div><strong>{avgPoints}</strong><small>Điểm trung bình</small><em>{totalSolved} lượt giải đúng</em></div></div>
-        <div className="nb-home-stat"><span className="red"><MessageSquare size={17} /></span><div><strong>{openThreads.length}</strong><small>Câu hỏi chờ trả lời</small><em>{problemInsights.length} bài cần xem</em></div></div>
+      <div className="nb-ov-grid three">
+        <OvPanel eyebrow="Phân tích bài tập" title="Bài có tỷ lệ đúng thấp" action="Mở kho bài" onAction={() => onNavigate?.("problems")}>
+          {hardProblems.length === 0 ? <OvEmpty icon={<Code2 size={22} />} title="Chưa đủ dữ liệu" text="Cần ít nhất 3 lượt nộp cho một bài." /> : (
+            <ul className="nb-ov-list">{hardProblems.map((x) => (
+              <li key={x.problem.id}>
+                <div className="grow"><strong>{x.problem.title}</strong><small>{x.ac}/{x.attempts} lượt đúng</small><i className="nb-ov-meter"><b className={x.rate < 40 ? "low" : ""} style={{ width: `${x.rate}%` }} /></i></div>
+                <b className="rate">{x.rate}%</b>
+              </li>))}</ul>
+          )}
+        </OvPanel>
+        <OvPanel eyebrow="Thành tích lớp" title="Học sinh nổi bật" action="Bảng xếp hạng" onAction={() => onNavigate?.("leaderboard")}>
+          {topThree.length === 0 ? <OvEmpty icon={<Users size={22} />} title="Chưa có dữ liệu" text="Xuất hiện khi học sinh bắt đầu nộp bài." /> : (
+            <ul className="nb-ov-list">{topThree.map((st, i) => (
+              <li key={st.id}>
+                <span className={`nb-ov-rank r${i + 1}`}>{i + 1}</span>
+                <Avatar name={st.name} size={30} />
+                <div><strong>{st.name}</strong><small>{solvedCount(st.id)} bài đã giải</small></div>
+                <b>{points(st.id)}đ</b>
+              </li>))}</ul>
+          )}
+        </OvPanel>
+        <OvPanel eyebrow="Theo thời gian thực" title="Hoạt động gần đây">
+          {recent.length === 0 ? <OvEmpty icon={<Code2 size={22} />} title="Chưa có lượt nộp" text="Các lượt nộp mới sẽ hiện ở đây." /> : (
+            <ul className="nb-ov-list">{recent.map((s, i) => (
+              <li key={s.id || i}>
+                <span className={`nb-ov-dot ${s.verdict === "AC" ? "ok" : "warn"}`}>{s.verdict === "AC" ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}</span>
+                <div><strong>{nameById.get(s.studentId) || "Học sinh"}</strong><small>{s.problemTitle || s.problemId} · {timeAgoVi(s.createdAt, now)}</small></div>
+                <b className={s.verdict === "AC" ? "ok" : ""}>{s.verdict}</b>
+              </li>))}</ul>
+          )}
+        </OvPanel>
       </div>
-
-      <div className="nb-home-main-grid">
-        <section className="nb-home-class-card">
-          <div className="nb-home-card-head"><div><div className="nb-eyebrow">Theo dõi 7 ngày</div><h2>Nhịp luyện tập của lớp</h2></div><span className="nb-home-percent">{students.length ? Math.round((weeklyActiveStudents / students.length) * 100) : 0}%</span></div>
-          <p className="nb-sub">{weeklyActiveStudents}/{students.length} học sinh đã có hoạt động trong 7 ngày qua.</p>
-          <div className="nb-home-progress"><span style={{ width: `${students.length ? (weeklyActiveStudents / students.length) * 100 : 0}%` }} /></div>
-          <div className="nb-home-progress-foot"><span>{weeklySubmissions.length} lượt nộp trong tuần</span><strong>{students.length - weeklyActiveStudents} học sinh chưa hoạt động</strong></div>
-          <div className="nb-home-actions"><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Xem bài tập</button><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("leaderboard")}><Trophy size={15} /> Xem bảng xếp hạng</button></div>
-        </section>
-        <section className={`nb-home-contest-card ${activeContest ? "live" : ""}`}>
-          <div className="nb-home-card-head"><div><div className="nb-eyebrow">Trạng thái kỳ thi</div><h2>{activeContest ? "Đang có đề mở" : "Chưa có đề đang mở"}</h2></div><Clock size={19} /></div>
-          {activeContest ? <><h3>{activeContest.title}</h3><div className="nb-home-contest-meta"><span><Clock size={13} /> {activeContest.duration} phút</span><span><ListChecks size={13} /> {activeContest.problemCount} bài</span></div><button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Eye size={15} /> Quản lý kỳ thi</button></> : <><p className="nb-sub">Tạo hoặc mở một kỳ thi để học sinh bắt đầu thử sức.</p><button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("contests")}><Plus size={15} /> Mở khu vực đề thi</button></>}
-        </section>
-      </div>
-
-      <DailyActivityPanel submissions={submissions} students={students} />
-
-      <div className="nb-home-insight-grid">
-        <section className="nb-panel nb-home-insight-card">
-          <div className="nb-home-section-head"><div><div className="nb-eyebrow">Phân tích bài tập</div><h2>Bài có tỷ lệ đúng thấp</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("problems")}>Mở kho bài <ChevronRight size={14} /></button></div>
-          {problemInsights.length === 0 ? <div className="nb-home-empty"><Code2 size={22} /><strong>Chưa đủ dữ liệu</strong><span>Cần có lượt nộp bài để bắt đầu phân tích.</span></div> : <div className="nb-home-insight-list">{problemInsights.map((item) => <div className="nb-home-insight-row" key={item.problem.id}><span className={`nb-home-insight-icon ${item.successRate < 50 ? "warning" : "steady"}`}>{item.successRate < 50 ? <AlertCircle size={15} /> : <TrendingUp size={15} />}</span><div><strong>{item.problem.title}</strong><small>{item.accepted}/{item.attempts} lượt AC · {item.attempts} lượt nộp</small><div className="nb-home-insight-track"><span style={{ width: `${item.successRate}%` }} /></div></div><b>{item.successRate}%</b></div>)}</div>}
-        </section>
-        <section className="nb-panel nb-home-insight-card">
-          <div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo dõi cá nhân</div><h2>Học sinh cần hỗ trợ</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("leaderboard")}>Xem lớp <ChevronRight size={14} /></button></div>
-          {studentSignals.length === 0 ? <div className="nb-home-empty"><Users size={22} /><strong>Chưa có học sinh</strong><span>Dữ liệu sẽ xuất hiện khi lớp được thêm vào.</span></div> : <div className="nb-home-signal-list">{studentSignals.map((signal) => <div className="nb-home-signal-row" key={signal.student.id}><Avatar name={signal.student.name} size={30} /><div><strong>{signal.student.name}</strong><small>{signal.label}</small></div><span className={signal.recentAttempts === 0 ? "risk" : "watch"}>{signal.recentAttempts === 0 ? "Cần nhắc" : "Theo dõi"}</span></div>)}</div>}
-        </section>
-      </div>
-
-      <div className="nb-home-lower-grid">
-        <section className="nb-panel nb-home-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Thành tích lớp</div><h2>Học sinh nổi bật</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("leaderboard")}>Xem bảng đầy đủ <ChevronRight size={14} /></button></div>{topThree.length === 0 ? <div className="nb-home-empty"><Users size={22} /><strong>Chưa có dữ liệu</strong><span>Thành tích sẽ xuất hiện khi học sinh bắt đầu nộp bài.</span></div> : <div className="nb-home-student-list">{topThree.map((student, index) => <div className="nb-home-student-row" key={student.id}><span className={`nb-home-rank rank-${index + 1}`}>{index + 1}</span><Avatar name={student.name} size={32} /><div><strong>{student.name}</strong><small>{solvedCount(student.id)} bài đã giải · {points(student.id)} điểm</small></div><b>{points(student.id)}<small>đ</small></b></div>)}</div>}</section>
-        <section className="nb-panel nb-home-questions"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Hộp việc cần làm</div><h2>Câu hỏi chờ trả lời</h2></div><button className="nb-link-button" onClick={() => onNavigate?.("discussion")}>Mở thảo luận <ChevronRight size={14} /></button></div>{openThreads.length === 0 ? <div className="nb-home-empty"><CheckCircle2 size={22} /><strong>Đã xử lý hết</strong><span>Hiện không có câu hỏi nào đang chờ giáo viên.</span></div> : <div className="nb-home-question-list">{openThreads.slice(0, 4).map((discussion) => <button className="nb-home-question-row" key={discussion.id} onClick={() => onNavigate?.("discussion")}><span className="nb-home-question-icon"><MessageSquare size={14} /></span><span><strong>{discussion.author}</strong><small>{String(discussion.content || "").slice(0, 72)}{String(discussion.content || "").length > 72 ? "…" : ""}</small></span><ChevronRight size={15} /></button>)}</div>}</section>
-      </div>
-
-      <section className="nb-panel nb-home-class-activity"><div className="nb-home-section-head"><div><div className="nb-eyebrow">Theo thời gian thực</div><h2>Hoạt động gần đây của lớp</h2></div><span className="nb-pill nb-pill-ac">{recentClassActivity.length} cập nhật</span></div>{recentClassActivity.length === 0 ? <p className="nb-sub">Chưa có lượt nộp bài gần đây.</p> : <div className="nb-home-class-feed">{recentClassActivity.map((submission, index) => <div key={submission.id || index}><span className={`nb-home-activity-icon ${submission.verdict === "AC" ? "success" : "warning"}`}>{submission.verdict === "AC" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}</span><span><strong>{studentNameById.get(submission.studentId) || submission.studentId}</strong> đã nộp <b>{submission.problemTitle || submission.problemId}</b><small>{submission.verdict} · {submission.score ?? 0} điểm · {formatSubmissionDate(submission.createdAt)}</small></span></div>)}</div>}</section>
     </div>
   );
 }
@@ -5375,6 +5488,83 @@ function App() {
         }
 
         .nb-home-page { display: flex; flex-direction: column; gap: 18px; }
+        /* ---- Tổng quan (bố cục mới) ---- */
+        .nb-ov { display: flex; flex-direction: column; gap: 16px; }
+        .nb-ov-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+        .nb-ov-date { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--slate); text-transform: capitalize; }
+        .nb-ov-head h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; color: var(--ink); line-height: 1.2; }
+        .nb-ov-head p { margin: 4px 0 0; font-size: 13.5px; color: var(--slate); }
+        .nb-ov-head-actions, .nb-ov-head-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+        .nb-ov-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
+        .nb-ov-chip.gold { background: #fff3d6; color: #8a5a00; } .nb-ov-chip.red { background: #fde8e8; color: #a12b2b; }
+        .nb-ov-todo { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+        .nb-ov-todo-ok { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 14px; background: #eefaf3; border: 1px solid #c8ecd9; color: #0b5a38; font-size: 13.5px; font-weight: 600; grid-column: 1 / -1; }
+        .nb-ov-todo-card { display: flex; align-items: center; gap: 12px; padding: 13px 14px; text-align: left; font: inherit; color: var(--ink); cursor: pointer; border-radius: 14px; border: 1px solid; background: #fff; transition: transform .15s, box-shadow .15s; }
+        .nb-ov-todo-card:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(15,42,82,.08); }
+        .nb-ov-todo-card.red { border-color: #f4c7c7; background: #fff6f6; } .nb-ov-todo-card.green { border-color: #c8ecd9; background: #f3fbf7; } .nb-ov-todo-card.gold { border-color: #f3d9a0; background: #fffaf0; }
+        .nb-ov-todo-icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #fff; }
+        .nb-ov-todo-card.red .nb-ov-todo-icon { color: #b23a3a; } .nb-ov-todo-card.green .nb-ov-todo-icon { color: #1f8a5b; } .nb-ov-todo-card.gold .nb-ov-todo-icon { color: #a8741f; }
+        .nb-ov-todo-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .nb-ov-todo-text strong { font-size: 13.5px; } .nb-ov-todo-text small { font-size: 12px; color: var(--slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-ov-focus { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 16px; background: #fff; border: 1px solid var(--paper-line); }
+        .nb-ov-focus.live { background: linear-gradient(120deg, #effaf4, #fff); border-color: #bfe7d4; }
+        .nb-ov-focus-icon { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: #e7f6fa; color: var(--pen-blue); }
+        .nb-ov-focus.live .nb-ov-focus-icon { background: #dff5ea; }
+        .nb-ov-focus-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .nb-ov-focus-text small { font-size: 11.5px; font-weight: 700; color: var(--pen-blue); text-transform: uppercase; letter-spacing: .05em; }
+        .nb-ov-focus-text strong { font-size: 16px; }
+        .nb-ov-focus-text span { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 12.5px; color: var(--slate); }
+        .nb-ov-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        .nb-ov-kpi { display: flex; gap: 12px; align-items: flex-start; padding: 15px; border-radius: 14px; background: #fff; border: 1px solid var(--paper-line); }
+        .nb-ov-kpi-icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; }
+        .nb-ov-kpi-icon.blue { background: #e4f3fb; color: #1b6fb5; } .nb-ov-kpi-icon.green { background: #e3f6ec; color: #1f8a5b; } .nb-ov-kpi-icon.gold { background: #fff3d6; color: #a8741f; } .nb-ov-kpi-icon.red { background: #fde8e8; color: #b23a3a; }
+        .nb-ov-kpi-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+        .nb-ov-kpi-body small { font-size: 12px; color: var(--slate); font-weight: 600; }
+        .nb-ov-kpi-body strong { font: 700 24px/1.1 'JetBrains Mono', monospace; color: var(--ink); }
+        .nb-ov-kpi-body > span { font-size: 11.5px; color: var(--slate); }
+        .nb-ov-kpi-body em { margin-left: 6px; font-style: normal; font-weight: 700; } .nb-ov-kpi-body em.up { color: #1f8a5b; } .nb-ov-kpi-body em.down { color: #b23a3a; }
+        .nb-ov-kpi-bar { display: block; height: 5px; border-radius: 99px; background: #e8eef5; overflow: hidden; margin: 2px 0; }
+        .nb-ov-kpi-bar b { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #04A6C7, #2563eb); }
+        .nb-ov-grid { display: grid; gap: 16px; align-items: start; }
+        .nb-ov-grid.main { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+        .nb-ov-grid.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
+        .nb-ov-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .nb-ov-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+        .nb-ov-panel { padding: 16px 18px; border-radius: 14px; background: #fff; border: 1px solid var(--paper-line); min-width: 0; }
+        .nb-ov-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+        .nb-ov-eyebrow { display: block; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--slate); }
+        .nb-ov-panel h2 { margin: 2px 0 0; font-size: 16px; color: var(--ink); }
+        .nb-ov-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+        .nb-ov-list li { display: flex; align-items: center; gap: 11px; padding: 10px 0; border-top: 1px solid #edf3f6; min-width: 0; }
+        .nb-ov-list li:first-child { border-top: 0; }
+        .nb-ov-list li.clickable { cursor: pointer; } .nb-ov-list li.clickable:hover strong { color: var(--pen-blue); }
+        .nb-ov-list li.more { justify-content: center; font-size: 12px; color: var(--slate); padding-bottom: 0; }
+        .nb-ov-list li > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .nb-ov-list strong { font-size: 13.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-ov-list small { font-size: 12px; color: var(--slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-ov-list li > b { flex: none; font: 700 13px 'JetBrains Mono', monospace; color: var(--ink-soft); }
+        .nb-ov-list li > b.ok { color: #1f8a5b; } .nb-ov-list li > b.rate { color: #b23a3a; }
+        .nb-ov-list .nb-avatar { flex: none; }
+        .nb-ov-dot { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; }
+        .nb-ov-dot.ok { background: #e3f6ec; color: #1f8a5b; } .nb-ov-dot.warn { background: #fff3d6; color: #a8741f; } .nb-ov-dot.info { background: #e4f3fb; color: #1b6fb5; }
+        .nb-ov-tag { flex: none; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .nb-ov-tag.risk { background: #fde8e8; color: #a12b2b; }
+        .nb-ov-rank { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 800; background: #eef2f7; color: var(--slate); }
+        .nb-ov-rank.r1 { background: #ffe08a; color: #6b4a00; } .nb-ov-rank.r2 { background: #dfe6ee; color: #44546a; } .nb-ov-rank.r3 { background: #f2cfae; color: #6b3d12; }
+        .nb-ov-meter { display: block; height: 5px; border-radius: 99px; background: #e8eef5; overflow: hidden; margin-top: 4px; }
+        .nb-ov-meter b { display: block; height: 100%; background: #04A6C7; border-radius: 99px; } .nb-ov-meter b.low { background: #d95757; }
+        .nb-ov-list li > div.grow { flex: 1; }
+        .nb-ov-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px 10px; text-align: center; color: var(--slate); font-size: 12.5px; }
+        .nb-ov-empty strong { color: var(--ink); font-size: 13.5px; }
+        .nb-ov-links { display: flex; flex-direction: column; gap: 6px; }
+        .nb-ov-links button { display: flex; align-items: center; gap: 12px; padding: 10px 12px; text-align: left; font: inherit; color: var(--ink); cursor: pointer; border-radius: 12px; border: 1px solid #edf3f6; background: #fbfdfe; transition: background .15s, border-color .15s; }
+        .nb-ov-links button:hover { background: #f1f9fb; border-color: var(--paper-line); }
+        .nb-ov-links button > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 1px; } .nb-ov-links small { color: var(--slate); font-size: 12px; }
+        .nb-ov-link-icon { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; }
+        .nb-ov-link-icon.blue { background: #e4f3fb; color: #1b6fb5; } .nb-ov-link-icon.green { background: #e3f6ec; color: #1f8a5b; } .nb-ov-link-icon.gold { background: #fff3d6; color: #a8741f; } .nb-ov-link-icon.red { background: #fde8e8; color: #b23a3a; }
+        @media (max-width: 1100px) { .nb-ov-grid.three { grid-template-columns: 1fr 1fr; } .nb-ov-grid.three > :last-child { grid-column: 1 / -1; } }
+        @media (max-width: 900px) { .nb-ov-grid.main, .nb-ov-grid.two { grid-template-columns: 1fr; } .nb-ov-kpis { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 640px) { .nb-ov-grid.three { grid-template-columns: 1fr; } .nb-ov-head h1 { font-size: 22px; } .nb-ov-focus { flex-wrap: wrap; } .nb-ov-focus .nb-btn { width: 100%; justify-content: center; } .nb-ov-kpi { padding: 12px; } .nb-ov-kpi-body strong { font-size: 20px; } .nb-ov-head-actions { width: 100%; } .nb-ov-head-actions .nb-btn { flex: 1; justify-content: center; } }
         .nb-sister-link { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border: 1px solid var(--paper-line); border-radius: 99px; background: #fff; color: var(--pen-blue); font: 600 12px inherit; text-decoration: none; transition: border-color .12s, background .12s; }
         .nb-sister-link:hover { border-color: var(--pen-blue); background: rgba(4,166,199,0.07); }
         .nb-home-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 25px 27px; border-radius: 14px; color: #fff; box-shadow: 0 10px 24px rgba(4,166,199,0.16); }
