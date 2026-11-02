@@ -1664,16 +1664,40 @@ function timeAgoVi(value, nowMs = Date.now()) {
   return new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit" }).format(new Date(t));
 }
 
-function OvKpi({ icon, tone, label, value, sub, trend, bar }) {
+function OvRing({ value, tone }) {
+  const R = 17, C = 2 * Math.PI * R;
+  const v = Math.max(0, Math.min(100, value));
+  return (
+    <svg className={`nb-ov-ring ${tone}`} viewBox="0 0 44 44" aria-hidden="true">
+      <circle cx="22" cy="22" r={R} className="bg" />
+      <circle cx="22" cy="22" r={R} className="fg" strokeDasharray={C} strokeDashoffset={C * (1 - v / 100)} />
+      <text x="22" y="26" textAnchor="middle">{Math.round(v)}</text>
+    </svg>
+  );
+}
+function OvSpark({ data, tone }) {
+  const max = Math.max(1, ...data);
+  const w = 88, h = 34, step = w / Math.max(1, data.length - 1);
+  const pts = data.map((v, i) => [i * step, h - 4 - (v / max) * (h - 10)]);
+  const line = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+  return (
+    <svg className={`nb-ov-spark ${tone}`} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+      <path d={`${line} L${w} ${h} L0 ${h} Z`} className="area" />
+      <path d={line} className="line" />
+      <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r="2.6" className="dot" />
+    </svg>
+  );
+}
+function OvKpi({ label, value, sub, trend, ring, spark, tone = "teal", icon }) {
   return (
     <div className="nb-ov-kpi">
-      <span className={`nb-ov-kpi-icon ${tone}`}>{icon}</span>
-      <div className="nb-ov-kpi-body">
-        <small>{label}</small>
+      <div className="nb-ov-kpi-main">
+        <small>{icon}{label}</small>
         <strong>{value}</strong>
-        {bar != null && <i className="nb-ov-kpi-bar"><b style={{ width: `${Math.max(0, Math.min(100, bar))}%` }} /></i>}
         <span>{sub}{trend != null && trend !== 0 && <em className={trend > 0 ? "up" : "down"}>{trend > 0 ? "▲" : "▼"} {Math.abs(trend)}</em>}</span>
       </div>
+      {ring != null && <OvRing value={ring} tone={tone} />}
+      {spark && <OvSpark data={spark} tone={tone} />}
     </div>
   );
 }
@@ -1689,6 +1713,11 @@ function OvPanel({ eyebrow, title, action, onAction, children, className = "" })
 
 function OvEmpty({ icon, title, text }) {
   return <div className="nb-ov-empty">{icon}<strong>{title}</strong><span>{text}</span></div>;
+}
+
+function greetingByHour() {
+  const h = new Date().getHours();
+  return h < 11 ? "Chào buổi sáng" : h < 14 ? "Chào buổi trưa" : h < 18 ? "Chào buổi chiều" : "Chào buổi tối";
 }
 
 function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, problems, onNavigate }) {
@@ -1711,7 +1740,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
       <div className="nb-ov">
         <SisterSiteBanner />
         <header className="nb-ov-head">
-          <div><span className="nb-ov-date">{todayLabel}</span><h1>Chào {currentUser.name}</h1><p>Mỗi ngày một bài, em sẽ tiến bộ thấy rõ.</p></div>
+          <div className="nb-ov-head-text"><span className="nb-ov-date">{todayLabel}</span><h1>{greetingByHour()}, {currentUser.name}</h1><p>Mỗi ngày một bài, em sẽ tiến bộ thấy rõ.</p></div>
           <div className="nb-ov-head-chips">
             <span className="nb-ov-chip gold"><Award size={14} /> Hạng {rank > 0 ? `#${rank}` : "—"}</span>
             <span className="nb-ov-chip red"><Flame size={14} /> {currentUser.streak || 0} ngày liên tục</span>
@@ -1733,10 +1762,10 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
         )}
 
         <div className="nb-ov-kpis">
-          <OvKpi icon={<TrendingUp size={17} />} tone="blue" label="Tổng điểm" value={points(currentUser.id)} sub="Điểm tích lũy" />
-          <OvKpi icon={<Award size={17} />} tone="gold" label="Xếp hạng lớp" value={rank > 0 ? `#${rank}` : "—"} sub={`trên ${students.length} học sinh`} />
-          <OvKpi icon={<ListChecks size={17} />} tone="green" label="Bài đã giải" value={`${solved}/${problemsCount}`} sub={`${progress}% ngân hàng bài`} bar={progress} />
-          <OvKpi icon={<Flame size={17} />} tone="red" label="Chuỗi ngày học" value={currentUser.streak || 0} sub="ngày liên tục" />
+          <OvKpi label="Tổng điểm" value={points(currentUser.id)} sub="điểm tích lũy" tone="teal" />
+          <OvKpi label="Xếp hạng lớp" value={rank > 0 ? `#${rank}` : "—"} sub={`trên ${students.length} học sinh`} tone="gold" />
+          <OvKpi label="Bài đã giải" value={`${solved}/${problemsCount}`} sub="trong ngân hàng bài" ring={progress} tone="green" />
+          <OvKpi label="Chuỗi ngày học" value={currentUser.streak || 0} sub="ngày liên tục" tone="rose" />
         </div>
 
         <div className="nb-ov-grid two">
@@ -1775,6 +1804,11 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
   const avgPoints = students.length ? Math.round(students.reduce((sum, st) => sum + points(st.id), 0) / students.length) : 0;
   const activePct = students.length ? Math.round((weeklyActive / students.length) * 100) : 0;
   const openThreads = discussions.filter((d) => (d.replies || []).length === 0);
+  const sparkDays = Array.from({ length: 7 }, (_, i) => {
+    const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    const from = d0.getTime() - (6 - i) * DAY;
+    return submissions.filter((x) => inWindow(x, from, from + DAY)).length;
+  });
   const topThree = [...students].sort((a, b) => (points(b.id) - points(a.id)) || (solvedCount(b.id) - solvedCount(a.id))).slice(0, 3);
 
   const lastByStudent = new Map();
@@ -1806,7 +1840,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     <div className="nb-ov">
       <SisterSiteBanner />
       <header className="nb-ov-head">
-        <div><span className="nb-ov-date">{todayLabel}</span><h1>Tổng quan đội tuyển</h1><p>{weekly.length} lượt nộp trong 7 ngày qua từ {weeklyActive}/{students.length} học sinh.</p></div>
+        <div className="nb-ov-head-text"><span className="nb-ov-date">{todayLabel}</span><h1>{greetingByHour()}, {currentUser.name}</h1><p>Tuần này lớp có <b>{weekly.length}</b> lượt nộp từ <b>{weeklyActive}/{students.length}</b> học sinh.</p></div>
         <div className="nb-ov-head-actions">
           <button className="nb-btn nb-btn-ghost" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Quản lý bài</button>
           <button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("contests")}><Plus size={15} /> Tạo đề thi</button>
@@ -1814,21 +1848,22 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
       </header>
 
       <section className="nb-ov-todo" aria-label="Việc cần xử lý">
+        <header><strong>Cần xử lý hôm nay</strong>{todo.length > 0 && <span className="nb-ov-count">{todo.length}</span>}</header>
         {todo.length === 0
-          ? <div className="nb-ov-todo-ok"><CheckCircle2 size={18} /> Không có việc cần xử lý. Mọi thứ đang ổn.</div>
-          : todo.map((t) => (
-            <button key={t.key} className={`nb-ov-todo-card ${t.tone}`} onClick={() => onNavigate?.(t.go)}>
+          ? <div className="nb-ov-todo-ok"><CheckCircle2 size={18} /> Không có việc cần xử lý, mọi thứ đang ổn.</div>
+          : <div className="nb-ov-todo-rows">{todo.map((t) => (
+            <button key={t.key} className={`nb-ov-todo-row ${t.tone}`} onClick={() => onNavigate?.(t.go)}>
               <span className="nb-ov-todo-icon">{t.icon}</span>
               <span className="nb-ov-todo-text"><strong>{t.title}</strong><small>{t.text}</small></span>
               <ChevronRight size={16} />
-            </button>))}
+            </button>))}</div>}
       </section>
 
       <div className="nb-ov-kpis">
-        <OvKpi icon={<Users size={17} />} tone="blue" label="Học sinh hoạt động" value={`${weeklyActive}/${students.length}`} sub={`${activePct}% trong 7 ngày`} bar={activePct} />
-        <OvKpi icon={<TrendingUp size={17} />} tone="green" label="Lượt nộp 7 ngày" value={weekly.length} sub="so với tuần trước" trend={weekly.length - prevWeek.length} />
-        <OvKpi icon={<CheckCircle2 size={17} />} tone="gold" label="Tỷ lệ đúng 7 ngày" value={`${acRate}%`} sub={`${weeklyAc} lượt AC`} bar={acRate} />
-        <OvKpi icon={<Award size={17} />} tone="red" label="Điểm trung bình" value={avgPoints} sub="mỗi học sinh" />
+        <OvKpi label="Học sinh hoạt động" value={`${weeklyActive}/${students.length}`} sub="trong 7 ngày qua" ring={activePct} tone="teal" />
+        <OvKpi label="Lượt nộp tuần" value={weekly.length} sub="vs tuần trước" trend={weekly.length - prevWeek.length} spark={sparkDays} tone="blue" />
+        <OvKpi label="Tỷ lệ đúng" value={`${acRate}%`} sub={`${weeklyAc} lượt AC / 7 ngày`} ring={acRate} tone="green" />
+        <OvKpi label="Điểm trung bình" value={avgPoints} sub="mỗi học sinh" tone="gold" />
       </div>
 
       <div className="nb-ov-grid main">
@@ -1883,7 +1918,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
             <ul className="nb-ov-list">{recent.map((s, i) => (
               <li key={s.id || i}>
                 <span className={`nb-ov-dot ${s.verdict === "AC" ? "ok" : "warn"}`}>{s.verdict === "AC" ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}</span>
-                <div><strong>{nameById.get(s.studentId) || "Học sinh"}</strong><small>{s.problemTitle || s.problemId} · {timeAgoVi(s.createdAt, now)}</small></div>
+                <div><strong>{nameById.get(s.studentId) || "Học sinh"}</strong><small>{timeAgoVi(s.createdAt, now)} · {s.problemTitle || s.problemId}</small></div>
                 <b className={s.verdict === "AC" ? "ok" : ""}>{s.verdict}</b>
               </li>))}</ul>
           )}
@@ -5488,83 +5523,115 @@ function App() {
         }
 
         .nb-home-page { display: flex; flex-direction: column; gap: 18px; }
-        /* ---- Tổng quan (bố cục mới) ---- */
-        .nb-ov { display: flex; flex-direction: column; gap: 16px; }
-        .nb-ov-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-        .nb-ov-date { display: block; margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--slate); text-transform: capitalize; }
-        .nb-ov-head h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; color: var(--ink); line-height: 1.2; }
-        .nb-ov-head p { margin: 4px 0 0; font-size: 13.5px; color: var(--slate); }
+        /* ---- Tổng quan ---- */
+        .nb-ov { --ov-shadow: 0 1px 2px rgba(16,42,67,.04), 0 10px 28px -14px rgba(16,42,67,.14); --ov-line: #E3EEF1; display: flex; flex-direction: column; gap: 18px; }
+        .nb-ov > * { animation: nbOvIn .45s ease both; }
+        .nb-ov > *:nth-child(2) { animation-delay: .04s; } .nb-ov > *:nth-child(3) { animation-delay: .08s; } .nb-ov > *:nth-child(4) { animation-delay: .12s; } .nb-ov > *:nth-child(5) { animation-delay: .16s; }
+        @keyframes nbOvIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+        @media (prefers-reduced-motion: reduce) { .nb-ov > * { animation: none; } }
+        .nb-ov-head { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; padding: 24px 28px; border-radius: 20px; overflow: hidden; border: 1px solid var(--ov-line); background: linear-gradient(120deg, #EAF7FA 0%, #F7FCFD 55%, #FFFFFF 100%); box-shadow: var(--ov-shadow); }
+        .nb-ov-head::before { content: ""; position: absolute; right: -60px; top: -90px; width: 300px; height: 300px; border-radius: 50%; background: radial-gradient(circle, rgba(4,166,199,.16), rgba(4,166,199,0) 68%); pointer-events: none; }
+        .nb-ov-head::after { content: ""; position: absolute; right: 140px; bottom: -110px; width: 220px; height: 220px; border-radius: 50%; background: radial-gradient(circle, rgba(46,158,109,.10), rgba(46,158,109,0) 70%); pointer-events: none; }
+        .nb-ov-head > * { position: relative; z-index: 1; }
+        .nb-ov-date { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 8px; padding: 3px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 700; letter-spacing: .02em; color: #0A7389; background: rgba(4,166,199,.1); text-transform: capitalize; }
+        .nb-ov-head h1 { margin: 0; font-size: 27px; font-weight: 800; letter-spacing: -.025em; color: var(--ink); line-height: 1.2; }
+        .nb-ov-head p { margin: 6px 0 0; font-size: 14px; color: #52677A; } .nb-ov-head p b { color: var(--ink); font-weight: 700; }
         .nb-ov-head-actions, .nb-ov-head-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-        .nb-ov-chip { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
-        .nb-ov-chip.gold { background: #fff3d6; color: #8a5a00; } .nb-ov-chip.red { background: #fde8e8; color: #a12b2b; }
-        .nb-ov-todo { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
-        .nb-ov-todo-ok { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 14px; background: #eefaf3; border: 1px solid #c8ecd9; color: #0b5a38; font-size: 13.5px; font-weight: 600; grid-column: 1 / -1; }
-        .nb-ov-todo-card { display: flex; align-items: center; gap: 12px; padding: 13px 14px; text-align: left; font: inherit; color: var(--ink); cursor: pointer; border-radius: 14px; border: 1px solid; background: #fff; transition: transform .15s, box-shadow .15s; }
-        .nb-ov-todo-card:hover { transform: translateY(-1px); box-shadow: 0 8px 18px rgba(15,42,82,.08); }
-        .nb-ov-todo-card.red { border-color: #f4c7c7; background: #fff6f6; } .nb-ov-todo-card.green { border-color: #c8ecd9; background: #f3fbf7; } .nb-ov-todo-card.gold { border-color: #f3d9a0; background: #fffaf0; }
-        .nb-ov-todo-icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #fff; }
-        .nb-ov-todo-card.red .nb-ov-todo-icon { color: #b23a3a; } .nb-ov-todo-card.green .nb-ov-todo-icon { color: #1f8a5b; } .nb-ov-todo-card.gold .nb-ov-todo-icon { color: #a8741f; }
-        .nb-ov-todo-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-        .nb-ov-todo-text strong { font-size: 13.5px; } .nb-ov-todo-text small { font-size: 12px; color: var(--slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .nb-ov-focus { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 16px; background: #fff; border: 1px solid var(--paper-line); }
-        .nb-ov-focus.live { background: linear-gradient(120deg, #effaf4, #fff); border-color: #bfe7d4; }
-        .nb-ov-focus-icon { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 12px; background: #e7f6fa; color: var(--pen-blue); }
-        .nb-ov-focus.live .nb-ov-focus-icon { background: #dff5ea; }
+        .nb-ov-chip { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 700; background: #fff; border: 1px solid var(--ov-line); box-shadow: 0 1px 2px rgba(16,42,67,.04); }
+        .nb-ov-chip.gold { color: #8a5a00; } .nb-ov-chip.red { color: #a12b2b; }
+
+        .nb-ov-todo { padding: 6px 8px 8px; border-radius: 18px; background: #fff; border: 1px solid var(--ov-line); box-shadow: var(--ov-shadow); }
+        .nb-ov-todo > header { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; font-size: 13px; color: var(--ink); }
+        .nb-ov-count { display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; font-size: 11.5px; font-weight: 800; color: #fff; background: var(--red-pen); }
+        .nb-ov-todo-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 4px; }
+        .nb-ov-todo-ok { display: flex; align-items: center; gap: 10px; margin: 2px 4px 4px; padding: 12px 14px; border-radius: 12px; background: #F0FAF5; color: #0B5A38; font-size: 13.5px; font-weight: 600; }
+        .nb-ov-todo-row { position: relative; display: flex; align-items: center; gap: 12px; padding: 11px 12px 11px 16px; text-align: left; font: inherit; color: var(--ink); cursor: pointer; border: 0; border-radius: 12px; background: transparent; transition: background .15s; }
+        .nb-ov-todo-row::before { content: ""; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 3px; border-radius: 3px; background: currentColor; opacity: .85; }
+        .nb-ov-todo-row.red { color: var(--red-pen); } .nb-ov-todo-row.green { color: var(--ac-green); } .nb-ov-todo-row.gold { color: var(--gold); }
+        .nb-ov-todo-row:hover { background: #F4FAFB; }
+        .nb-ov-todo-icon { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: color-mix(in srgb, currentColor 11%, #fff); }
+        .nb-ov-todo-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; color: var(--ink); }
+        .nb-ov-todo-text strong { font-size: 13.5px; } .nb-ov-todo-text small { font-size: 12px; color: #6B7F90; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-ov-todo-row > svg:last-child { color: #9FB2BF; flex: none; }
+
+        .nb-ov-focus { display: flex; align-items: center; gap: 16px; padding: 18px 20px; border-radius: 18px; background: #fff; border: 1px solid var(--ov-line); box-shadow: var(--ov-shadow); }
+        .nb-ov-focus.live { background: linear-gradient(120deg, #EDF9F3, #FFFFFF 70%); border-color: #CBEBDC; }
+        .nb-ov-focus-icon { flex: none; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 14px; background: #E5F5F9; color: var(--pen-blue); }
+        .nb-ov-focus.live .nb-ov-focus-icon { background: #DDF3E8; }
         .nb-ov-focus-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-        .nb-ov-focus-text small { font-size: 11.5px; font-weight: 700; color: var(--pen-blue); text-transform: uppercase; letter-spacing: .05em; }
-        .nb-ov-focus-text strong { font-size: 16px; }
-        .nb-ov-focus-text span { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 12.5px; color: var(--slate); }
-        .nb-ov-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-        .nb-ov-kpi { display: flex; gap: 12px; align-items: flex-start; padding: 15px; border-radius: 14px; background: #fff; border: 1px solid var(--paper-line); }
-        .nb-ov-kpi-icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; }
-        .nb-ov-kpi-icon.blue { background: #e4f3fb; color: #1b6fb5; } .nb-ov-kpi-icon.green { background: #e3f6ec; color: #1f8a5b; } .nb-ov-kpi-icon.gold { background: #fff3d6; color: #a8741f; } .nb-ov-kpi-icon.red { background: #fde8e8; color: #b23a3a; }
-        .nb-ov-kpi-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-        .nb-ov-kpi-body small { font-size: 12px; color: var(--slate); font-weight: 600; }
-        .nb-ov-kpi-body strong { font: 700 24px/1.1 'JetBrains Mono', monospace; color: var(--ink); }
-        .nb-ov-kpi-body > span { font-size: 11.5px; color: var(--slate); }
-        .nb-ov-kpi-body em { margin-left: 6px; font-style: normal; font-weight: 700; } .nb-ov-kpi-body em.up { color: #1f8a5b; } .nb-ov-kpi-body em.down { color: #b23a3a; }
-        .nb-ov-kpi-bar { display: block; height: 5px; border-radius: 99px; background: #e8eef5; overflow: hidden; margin: 2px 0; }
-        .nb-ov-kpi-bar b { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #04A6C7, #2563eb); }
-        .nb-ov-grid { display: grid; gap: 16px; align-items: start; }
+        .nb-ov-focus-text small { font-size: 11px; font-weight: 800; color: #0A7389; text-transform: uppercase; letter-spacing: .07em; }
+        .nb-ov-focus.live .nb-ov-focus-text small { color: #1B7A52; }
+        .nb-ov-focus-text strong { font-size: 16.5px; letter-spacing: -.01em; }
+        .nb-ov-focus-text span { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 12.5px; color: #6B7F90; }
+
+        .nb-ov-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-radius: 18px; background: #fff; border: 1px solid var(--ov-line); box-shadow: var(--ov-shadow); overflow: hidden; }
+        .nb-ov-kpi { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 20px 22px; min-width: 0; position: relative; }
+        .nb-ov-kpi + .nb-ov-kpi::before { content: ""; position: absolute; left: 0; top: 22px; bottom: 22px; width: 1px; background: var(--ov-line); }
+        .nb-ov-kpi-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+        .nb-ov-kpi-main small { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: #6B7F90; }
+        .nb-ov-kpi-main strong { font-size: 30px; font-weight: 800; letter-spacing: -.03em; line-height: 1.1; color: var(--ink); font-variant-numeric: tabular-nums; }
+        .nb-ov-kpi-main > span { font-size: 12px; color: #6B7F90; }
+        .nb-ov-kpi-main em { margin-left: 6px; font-style: normal; font-weight: 700; } .nb-ov-kpi-main em.up { color: var(--ac-green); } .nb-ov-kpi-main em.down { color: var(--red-pen); }
+        .nb-ov-ring { flex: none; width: 52px; height: 52px; transform: rotate(-90deg); }
+        .nb-ov-ring circle { fill: none; stroke-width: 4.5; stroke-linecap: round; }
+        .nb-ov-ring .bg { stroke: #E8F0F3; } .nb-ov-ring .fg { stroke: var(--pen-blue); transition: stroke-dashoffset .8s ease; }
+        .nb-ov-ring.green .fg { stroke: var(--ac-green); } .nb-ov-ring.gold .fg { stroke: var(--gold); }
+        .nb-ov-ring text { transform: rotate(90deg); transform-origin: 22px 22px; font: 800 11px 'Be Vietnam Pro', sans-serif; fill: var(--ink); stroke: none; }
+        .nb-ov-spark { flex: none; width: 72px; height: 34px; overflow: visible; }
+        .nb-ov-spark .line { fill: none; stroke: #2F6FB0; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+        .nb-ov-spark .area { fill: rgba(47,111,176,.10); stroke: none; } .nb-ov-spark .dot { fill: #2F6FB0; }
+
+        .nb-ov-grid { display: grid; gap: 18px; align-items: start; }
         .nb-ov-grid.main { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
         .nb-ov-grid.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
         .nb-ov-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        .nb-ov-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
-        .nb-ov-panel { padding: 16px 18px; border-radius: 14px; background: #fff; border: 1px solid var(--paper-line); min-width: 0; }
-        .nb-ov-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-        .nb-ov-eyebrow { display: block; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--slate); }
-        .nb-ov-panel h2 { margin: 2px 0 0; font-size: 16px; color: var(--ink); }
-        .nb-ov-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-        .nb-ov-list li { display: flex; align-items: center; gap: 11px; padding: 10px 0; border-top: 1px solid #edf3f6; min-width: 0; }
-        .nb-ov-list li:first-child { border-top: 0; }
-        .nb-ov-list li.clickable { cursor: pointer; } .nb-ov-list li.clickable:hover strong { color: var(--pen-blue); }
-        .nb-ov-list li.more { justify-content: center; font-size: 12px; color: var(--slate); padding-bottom: 0; }
+        .nb-ov-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+        .nb-ov-panel { padding: 18px 20px; border-radius: 18px; background: #fff; border: 1px solid var(--ov-line); box-shadow: var(--ov-shadow); min-width: 0; }
+        .nb-ov-panel > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+        .nb-ov-eyebrow { display: block; font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #8296A4; }
+        .nb-ov-panel h2 { margin: 3px 0 0; font-size: 16px; font-weight: 800; letter-spacing: -.01em; color: var(--ink); }
+        .nb-ov .nb-link-button { font-size: 12.5px; font-weight: 700; color: #0A7389; white-space: nowrap; }
+        .nb-ov-list { list-style: none; margin: 0 -8px; padding: 0; display: flex; flex-direction: column; }
+        .nb-ov-list li { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: 10px; min-width: 0; transition: background .15s; }
+        .nb-ov-list li + li { box-shadow: 0 -1px 0 #EEF4F6; }
+        .nb-ov-list li:hover { background: #F6FBFC; }
+        .nb-ov-list li.clickable { cursor: pointer; }
+        .nb-ov-list li.more { justify-content: center; font-size: 12px; color: #8296A4; } .nb-ov-list li.more:hover { background: transparent; }
         .nb-ov-list li > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-        .nb-ov-list strong { font-size: 13.5px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .nb-ov-list small { font-size: 12px; color: var(--slate); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .nb-ov-list li > b { flex: none; font: 700 13px 'JetBrains Mono', monospace; color: var(--ink-soft); }
-        .nb-ov-list li > b.ok { color: #1f8a5b; } .nb-ov-list li > b.rate { color: #b23a3a; }
+        .nb-ov-list strong { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-ov-list small { font-size: 12px; color: #6B7F90; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nb-ov-list li > b { flex: none; font-size: 13px; font-weight: 800; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+        .nb-ov-list li > b.ok { color: var(--ac-green); } .nb-ov-list li > b.rate { color: var(--red-pen); }
         .nb-ov-list .nb-avatar { flex: none; }
-        .nb-ov-dot { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; }
-        .nb-ov-dot.ok { background: #e3f6ec; color: #1f8a5b; } .nb-ov-dot.warn { background: #fff3d6; color: #a8741f; } .nb-ov-dot.info { background: #e4f3fb; color: #1b6fb5; }
-        .nb-ov-tag { flex: none; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
-        .nb-ov-tag.risk { background: #fde8e8; color: #a12b2b; }
-        .nb-ov-rank { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; font-size: 12px; font-weight: 800; background: #eef2f7; color: var(--slate); }
-        .nb-ov-rank.r1 { background: #ffe08a; color: #6b4a00; } .nb-ov-rank.r2 { background: #dfe6ee; color: #44546a; } .nb-ov-rank.r3 { background: #f2cfae; color: #6b3d12; }
-        .nb-ov-meter { display: block; height: 5px; border-radius: 99px; background: #e8eef5; overflow: hidden; margin-top: 4px; }
-        .nb-ov-meter b { display: block; height: 100%; background: #04A6C7; border-radius: 99px; } .nb-ov-meter b.low { background: #d95757; }
-        .nb-ov-list li > div.grow { flex: 1; }
-        .nb-ov-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 22px 10px; text-align: center; color: var(--slate); font-size: 12.5px; }
+        .nb-ov-dot { flex: none; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; }
+        .nb-ov-dot.ok { background: #E3F5EC; color: var(--ac-green); } .nb-ov-dot.warn { background: #FBF0DC; color: var(--gold); } .nb-ov-dot.info { background: #E3F2F8; color: #1B7FA5; }
+        .nb-ov-tag { flex: none; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .nb-ov-tag.risk { background: #FBEAEA; color: #A12B2B; }
+        .nb-ov-rank { flex: none; display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; font-size: 12px; font-weight: 800; background: #EEF2F6; color: #6B7F90; }
+        .nb-ov-rank.r1 { background: #FCE7A6; color: #6b4a00; } .nb-ov-rank.r2 { background: #E3E9F0; color: #44546a; } .nb-ov-rank.r3 { background: #F3D7BC; color: #6b3d12; }
+        .nb-ov-meter { display: block; height: 6px; border-radius: 99px; background: #EAF1F4; overflow: hidden; margin-top: 5px; }
+        .nb-ov-meter b { display: block; height: 100%; background: var(--pen-blue); border-radius: 99px; } .nb-ov-meter b.low { background: #D96B6B; }
+        .nb-ov-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 26px 10px; text-align: center; color: #8296A4; font-size: 12.5px; }
         .nb-ov-empty strong { color: var(--ink); font-size: 13.5px; }
-        .nb-ov-links { display: flex; flex-direction: column; gap: 6px; }
-        .nb-ov-links button { display: flex; align-items: center; gap: 12px; padding: 10px 12px; text-align: left; font: inherit; color: var(--ink); cursor: pointer; border-radius: 12px; border: 1px solid #edf3f6; background: #fbfdfe; transition: background .15s, border-color .15s; }
-        .nb-ov-links button:hover { background: #f1f9fb; border-color: var(--paper-line); }
-        .nb-ov-links button > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 1px; } .nb-ov-links small { color: var(--slate); font-size: 12px; }
-        .nb-ov-link-icon { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; }
-        .nb-ov-link-icon.blue { background: #e4f3fb; color: #1b6fb5; } .nb-ov-link-icon.green { background: #e3f6ec; color: #1f8a5b; } .nb-ov-link-icon.gold { background: #fff3d6; color: #a8741f; } .nb-ov-link-icon.red { background: #fde8e8; color: #b23a3a; }
+        .nb-ov-links { display: flex; flex-direction: column; gap: 4px; margin: 0 -8px; }
+        .nb-ov-links button { display: flex; align-items: center; gap: 12px; padding: 10px 8px; text-align: left; font: inherit; color: var(--ink); cursor: pointer; border: 0; border-radius: 12px; background: transparent; transition: background .15s; }
+        .nb-ov-links button:hover { background: #F4FAFB; }
+        .nb-ov-links button > span:nth-child(2) { flex: 1; display: flex; flex-direction: column; gap: 1px; } .nb-ov-links strong { font-size: 13.5px; } .nb-ov-links small { color: #6B7F90; font-size: 12px; }
+        .nb-ov-links > button > svg { color: #9FB2BF; }
+        .nb-ov-link-icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px; }
+        .nb-ov-link-icon.blue { background: #E3F2F8; color: #1B7FA5; } .nb-ov-link-icon.green { background: #E3F5EC; color: var(--ac-green); } .nb-ov-link-icon.gold { background: #FBF0DC; color: var(--gold); } .nb-ov-link-icon.red { background: #FBEAEA; color: var(--red-pen); }
         @media (max-width: 1100px) { .nb-ov-grid.three { grid-template-columns: 1fr 1fr; } .nb-ov-grid.three > :last-child { grid-column: 1 / -1; } }
-        @media (max-width: 900px) { .nb-ov-grid.main, .nb-ov-grid.two { grid-template-columns: 1fr; } .nb-ov-kpis { grid-template-columns: 1fr 1fr; } }
-        @media (max-width: 640px) { .nb-ov-grid.three { grid-template-columns: 1fr; } .nb-ov-head h1 { font-size: 22px; } .nb-ov-focus { flex-wrap: wrap; } .nb-ov-focus .nb-btn { width: 100%; justify-content: center; } .nb-ov-kpi { padding: 12px; } .nb-ov-kpi-body strong { font-size: 20px; } .nb-ov-head-actions { width: 100%; } .nb-ov-head-actions .nb-btn { flex: 1; justify-content: center; } }
+        @media (max-width: 900px) {
+          .nb-ov-grid.main, .nb-ov-grid.two { grid-template-columns: 1fr; }
+          .nb-ov-kpis { grid-template-columns: 1fr 1fr; } .nb-ov-kpi + .nb-ov-kpi::before { display: none; }
+          .nb-ov-kpi:nth-child(odd) { box-shadow: 1px 0 0 var(--ov-line); } .nb-ov-kpi:nth-child(n+3) { box-shadow: 0 -1px 0 var(--ov-line); } .nb-ov-kpi:nth-child(3) { box-shadow: 1px -1px 0 var(--ov-line); }
+        }
+        @media (max-width: 640px) {
+          .nb-ov-grid.three { grid-template-columns: 1fr; } .nb-ov-head { padding: 18px; } .nb-ov-head h1 { font-size: 21px; }
+          .nb-ov-focus { flex-wrap: wrap; } .nb-ov-focus .nb-btn { width: 100%; justify-content: center; }
+          .nb-ov-kpi { padding: 14px; } .nb-ov-kpi-main strong { font-size: 24px; } .nb-ov-ring { width: 40px; height: 40px; } .nb-ov-spark { display: none; }
+          .nb-ov-head-actions { width: 100%; } .nb-ov-head-actions .nb-btn { flex: 1; justify-content: center; }
+        }
         .nb-sister-link { align-self: flex-start; display: inline-flex; align-items: center; gap: 7px; padding: 8px 13px; border: 1px solid var(--paper-line); border-radius: 99px; background: #fff; color: var(--pen-blue); font: 600 12px inherit; text-decoration: none; transition: border-color .12s, background .12s; }
         .nb-sister-link:hover { border-color: var(--pen-blue); background: rgba(4,166,199,0.07); }
         .nb-home-hero { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 25px 27px; border-radius: 14px; color: #fff; box-shadow: 0 10px 24px rgba(4,166,199,0.16); }
