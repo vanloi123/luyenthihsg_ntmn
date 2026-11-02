@@ -1424,7 +1424,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
 
   return (
     <div className="nb-modal-overlay" onClick={onClose}>
-      <div className="nb-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="nb-modal nb-practice-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
           <div>
             <div className="nb-eyebrow">{problem.id} · {needsLanguage ? "Chọn ngôn ngữ" : editorMeta.label} · {problem.points} điểm</div>
@@ -6114,6 +6114,8 @@ function App() {
         .nb-modal-head { display: flex; justify-content: space-between; align-items: flex-start; padding: 20px 22px; border-bottom: 1px solid var(--paper-line); }
         .nb-modal-body { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px 22px; }
         .nb-modal-col { display: flex; flex-direction: column; }
+        .nb-practice-modal { max-width: min(1480px, 96vw); max-height: 94vh; }
+        .nb-practice-modal .nb-modal-body { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 26px; }
         .nb-sample { background: #fff; border: 1px solid var(--paper-line); border-radius: 8px; padding: 10px; margin-top: 14px; }
         .nb-sample-title { color: var(--ink); font-size: 12px; font-weight: 700; margin-bottom: 9px; }
         .nb-sample-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
