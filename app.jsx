@@ -1176,35 +1176,64 @@ function formatSubmissionDate(value) {
   catch (e) { return "Thời gian chưa có"; }
 }
 
-const PYTHON_KEYWORDS = new Set("and as assert async await break case class continue def del elif else except False finally for from global if import in is lambda match None nonlocal not or pass raise return True try while with yield print range len int float str list dict set tuple input open enumerate zip sum min max".split(" "));
-const C_KEYWORDS = new Set("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Bool _Complex _Imaginary NULL printf scanf malloc free".split(" "));
-const CPP_KEYWORDS = new Set("alignas alignof auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long namespace new nullptr operator private protected public register return short signed sizeof static struct template this throw true try typedef typename union unsigned using virtual void volatile while std string cin cout endl".split(" "));
+const PY_KEYWORDS_REAL = new Set("False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield".split(" "));
+const PY_EDITOR_BUILTINS = new Set("abs all any bin bool chr dict divmod enumerate filter float format frozenset hex input int isinstance len list map max min oct open ord pow print range repr reversed round set sorted str sum tuple type zip".split(" "));
+const C_KEYWORDS_REAL = new Set("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while bool true false NULL".split(" "));
+const CPP_KEYWORDS_REAL = new Set("alignas alignof auto bool break case catch char class const constexpr continue default delete do double else enum explicit export extern false float for friend if inline int long namespace new nullptr operator private protected public register return short signed sizeof static struct template this throw true try typedef typename union unsigned using virtual void volatile while".split(" "));
+const C_BUILTINS = new Set("printf scanf puts gets getchar putchar malloc calloc free strlen strcpy strcmp memset abs sqrt pow main".split(" "));
+const CPP_BUILTINS = new Set("cout cin cerr endl std string vector map set pair queue stack deque sort min max swap abs sqrt pow printf scanf getline size push_back make_pair main".split(" "));
 
+// Tô màu theo phong cách Thonny: từ khóa đậm, hàm dựng sẵn, số, chuỗi, chú thích.
 function highlightCodeLine(line, language) {
-  const keywords = language === "python" ? PYTHON_KEYWORDS : language === "c" ? C_KEYWORDS : CPP_KEYWORDS;
-  const commentPattern = language === "python" ? "#.*" : "\\/\\/.*";
-  const tokenPattern = new RegExp(
-    `(${commentPattern}|\\"(?:\\\\.|[^\\"])*\\"|'(?:\\\\.|[^'])*'|\\b\\d+(?:\\.\\d+)?\\b|\\b[A-Za-z_][A-Za-z0-9_]*\\b|==|!=|<=|>=|&&|\\|\\||\\+\\+|--|\\+=|-=|\\*=|\\/=|%=|->|::|\\/\\/|[+\\-*/%=<>!&|^~])`,
-    "g"
-  );
-  const parts = [];
+  const isPy = language === "python";
+  if (!isPy && /^\s*#/.test(line)) return <span className="nb-syntax-builtin">{line}</span>;
+  const keywords = isPy ? PY_KEYWORDS_REAL : language === "c" ? C_KEYWORDS_REAL : CPP_KEYWORDS_REAL;
+  const builtins = isPy ? PY_EDITOR_BUILTINS : language === "c" ? C_BUILTINS : CPP_BUILTINS;
+  const comment = isPy ? "#.*" : "\\/\\/.*|\\/\\*.*?(?:\\*\\/|$)";
+  const tokenPattern = new RegExp(`(${comment})|("(?:\\\\.|[^"\\\\])*(?:"|$)|'(?:\\\\.|[^'\\\\])*(?:'|$))|(0[xX][0-9a-fA-F]+|\\b\\d+(?:\\.\\d*)?(?:[eE][+-]?\\d+)?\\b|\\.\\d+)|([A-Za-z_][A-Za-z0-9_]*)`, "g");
+  const out = [];
   let cursor = 0;
-  let match;
-  while ((match = tokenPattern.exec(line))) {
-    if (match.index > cursor) parts.push({ value: line.slice(cursor, match.index), className: "" });
-    const token = match[0];
-    let className = "";
-    if ((language === "python" && token.startsWith("#")) || (language !== "python" && token.startsWith("//"))) className = "nb-syntax-comment";
-    else if (token.startsWith("\"") || token.startsWith("'")) className = "nb-syntax-string";
-    else if (/^\d/.test(token)) className = "nb-syntax-number";
-    else if (keywords.has(token)) className = "nb-syntax-keyword";
-    else if (/^(print|input|len|range|int|float|str|sum|cout|cin|std)$/.test(token)) className = "nb-syntax-function";
-    else if (/^(==|!=|<=|>=|&&|\|\||\+\+|--|\+=|-=|\*=|\/=|%=|->|::|\/\/|[+\-*/%=<>!&|^~])$/.test(token)) className = "nb-syntax-operator";
-    parts.push({ value: token, className });
-    cursor = match.index + token.length;
+  let expectName = false;
+  let m;
+  let k = 0;
+  const plain = (t) => { if (t) out.push(<React.Fragment key={k++}>{t}</React.Fragment>); };
+  while ((m = tokenPattern.exec(line))) {
+    plain(line.slice(cursor, m.index));
+    cursor = m.index + m[0].length;
+    let cls = "";
+    if (m[1]) cls = "nb-syntax-comment";
+    else if (m[2]) cls = "nb-syntax-string";
+    else if (m[3]) cls = "nb-syntax-number";
+    else {
+      const w = m[4];
+      if (expectName) { cls = "nb-syntax-def"; expectName = false; }
+      else if (keywords.has(w)) { cls = "nb-syntax-keyword"; if (isPy && (w === "def" || w === "class")) expectName = true; }
+      else if (builtins.has(w)) cls = "nb-syntax-builtin";
+    }
+    if (m[4] && !cls) { expectName = false; plain(m[0]); continue; }
+    out.push(<span key={k++} className={cls}>{m[0]}</span>);
   }
-  if (cursor < line.length) parts.push({ value: line.slice(cursor), className: "" });
-  return parts.map((part, index) => part.className ? <span key={index} className={part.className}>{part.value}</span> : <React.Fragment key={index}>{part.value}</React.Fragment>);
+  plain(line.slice(cursor));
+  return out;
+}
+
+function guessCodeLanguage(code) {
+  const text = String(code || "");
+  if (/#include|std::|cout\s*<<|cin\s*>>|using\s+namespace/.test(text)) return /std::|cout|cin|namespace|<iostream>|<vector>/.test(text) ? "cpp" : "c";
+  if (/\bprintf\s*\(|\bscanf\s*\(/.test(text) && /;\s*$/m.test(text)) return "c";
+  return "python";
+}
+
+// Hiển thị code chỉ-đọc với số dòng và màu giống trình soạn thảo
+function CodeView({ code, language, className = "" }) {
+  const lang = LANGUAGE_META[language] ? language : guessCodeLanguage(code);
+  const lines = String(code || "").replace(/\s+$/, "").split("\n");
+  return (
+    <div className={`nb-codeview ${className}`}>
+      <div className="nb-codeview-gutter" aria-hidden="true">{lines.map((_, i) => <span key={i}>{i + 1}</span>)}</div>
+      <pre className="nb-codeview-code"><code>{lines.map((line, i) => <React.Fragment key={i}>{highlightCodeLine(line, lang)}{i < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</code></pre>
+    </div>
+  );
 }
 
 function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
@@ -1213,12 +1242,15 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
   const lines = String(code || "").split("\n");
   const textareaRef = useRef(null);
   const INDENT = "    ";
-  const LINE_HEIGHT = 22;
+  const LINE_HEIGHT = 24;
+  const [caretCol, setCaretCol] = useState(1);
 
   function syncActiveLine(event) {
     const target = event.currentTarget;
     const before = target.value.slice(0, target.selectionStart);
-    setActiveLine(before.split("\n").length - 1);
+    const beforeLines = before.split("\n");
+    setActiveLine(beforeLines.length - 1);
+    setCaretCol(beforeLines[beforeLines.length - 1].length + 1);
   }
 
   function applyEdit(nextCode, nextStart, nextEnd = nextStart) {
@@ -1323,7 +1355,7 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
 
   return (
     <div className="nb-thonny-editor">
-      <div className="nb-editor-toolbar"><span><Code2 size={14} /> {(LANGUAGE_META[language] || LANGUAGE_META.cpp).label} · Editor</span><span>Ln {Math.min(lines.length, 999)} · {code.length} ký tự</span></div>
+      <div className="nb-editor-toolbar"><span className="nb-editor-tab"><Code2 size={13} /> bai_lam{(LANGUAGE_META[language] || LANGUAGE_META.cpp).extension}</span><span className="nb-editor-lang">{(LANGUAGE_META[language] || LANGUAGE_META.cpp).label}</span></div>
       <div className="nb-editor-workspace">
         <div className="nb-editor-gutter" style={{ transform: `translate(${-scroll.left}px, ${-scroll.top}px)` }}>{lines.map((_, index) => <span key={index} className={index === activeLine ? "active" : ""}>{index + 1}</span>)}</div>
         <div className="nb-editor-code-layer">
@@ -1332,7 +1364,7 @@ function CodeEditor({ code, onChange, language, onSubmit, readOnly }) {
           <textarea ref={textareaRef} className="nb-code-input" value={code} onChange={(event) => onChange(event.target.value)} onKeyDown={handleKeyDown} onKeyUp={syncActiveLine} onClick={syncActiveLine} onSelect={syncActiveLine} onScroll={(event) => setScroll({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} spellCheck={false} readOnly={readOnly} aria-label="Trình soạn thảo mã nguồn" />
         </div>
       </div>
-      <div className="nb-editor-status"><span>{readOnly ? "Chế độ chỉ xem" : "Enter sau : tự thụt 4 khoảng · Shift+Tab lùi dòng · Ctrl/Cmd + Enter nộp bài"}</span><span>{(LANGUAGE_META[language] || LANGUAGE_META.cpp).label}</span></div>
+      <div className="nb-editor-status"><span>{readOnly ? "Chế độ chỉ xem" : "Tab thụt · Shift+Tab lùi · Ctrl+Enter nộp bài"}</span><span className="nb-editor-pos">Dòng {activeLine + 1}, cột {caretCol} · {lines.length} dòng</span></div>
     </div>
   );
 }
@@ -1418,7 +1450,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
               <button type="button" className="nb-history-toggle" onClick={() => setHistoryOpen((open) => !open)}><RefreshCw size={14} /> Lịch sử code đã nộp ({orderedHistory.length})<ChevronRight size={14} className={historyOpen ? "nb-history-chevron open" : "nb-history-chevron"} /></button>
               {historyOpen && <div className="nb-history-body">
                 <div className="nb-history-list">{orderedHistory.map((submission) => <button type="button" key={submission.id} className={"nb-history-item " + (selectedHistory?.id === submission.id ? "active" : "")} onClick={() => setSelectedHistoryId(submission.id)}><div><VerdictPill verdict={submission.verdict} /><span className="nb-history-date">{formatSubmissionDate(submission.createdAt)}</span></div><strong>{submission.score ?? 0}/{submission.problemPoints ?? problem.points}đ</strong><small>{submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test đạt` : "Bản nộp cũ"}</small></button>)}</div>
-                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" onClick={async () => { try { const c = selectedHistory.sourceCode || await fetchSourceCode(selectedHistory.id); if (c) { if (chooseLanguage && LANGUAGE_META[selectedHistory.language]) setChosenLanguage(selectedHistory.language); setCode(c); setResult(null); setHistoryOpen(false); } } catch (e) { /* ignore */ } }}><Code2 size={14} /> Khôi phục vào editor</button></div><LazySourceCode submission={selectedHistory} emptyMessage="Lượt nộp này được tạo trước khi hệ thống lưu source code." /></div>}
+                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" onClick={async () => { try { const c = selectedHistory.sourceCode || await fetchSourceCode(selectedHistory.id); if (c) { if (chooseLanguage && LANGUAGE_META[selectedHistory.language]) setChosenLanguage(selectedHistory.language); setCode(c); setResult(null); setHistoryOpen(false); } } catch (e) { /* ignore */ } }}><Code2 size={14} /> Khôi phục vào editor</button></div><LazySourceCode submission={selectedHistory} language={chooseLanguage ? selectedHistory.language : editorLanguage} emptyMessage="Lượt nộp này được tạo trước khi hệ thống lưu source code." /></div>}
               </div>}
             </div>}
           </div>
@@ -2565,7 +2597,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   );
 }
 
-function LazySourceCode({ submission, emptyMessage }) {
+function LazySourceCode({ submission, emptyMessage, language }) {
   const [code, setCode] = useState(submission.sourceCode || "");
   const [state, setState] = useState(submission.sourceCode ? "ready" : "loading");
   useEffect(() => {
@@ -2579,7 +2611,7 @@ function LazySourceCode({ submission, emptyMessage }) {
   }, [submission.id, submission.sourceCode]);
   if (state === "loading") return <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Đang tải code…</p>;
   if (state === "error") return <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Không tải được code, thử lại sau.</p>;
-  return code ? <pre className="nb-history-code">{code}</pre> : <p className="nb-sub" style={{ padding: "0 14px 14px" }}>{emptyMessage}</p>;
+  return code ? <CodeView code={code} language={language} /> : <p className="nb-sub" style={{ padding: "0 14px 14px" }}>{emptyMessage}</p>;
 }
 
 function SubmissionReviewModal({ problem, submissions, students, onClose }) {
@@ -2984,7 +3016,7 @@ function ExamCode({ submission }) {
   }, [submission.id, submission.sourceCode]);
   if (state === "loading") return <p className="nb-sub" style={{ padding: 14 }}>Đang tải code…</p>;
   if (state === "error") return <p className="nb-sub" style={{ padding: 14 }}>Không tải được code, thử lại sau.</p>;
-  return code ? <pre className="nb-history-code">{code}</pre> : <p className="nb-sub" style={{ padding: 14 }}>Lượt nộp này không có mã nguồn được lưu.</p>;
+  return code ? <CodeView code={code} language={submission.language} /> : <p className="nb-sub" style={{ padding: 14 }}>Lượt nộp này không có mã nguồn được lưu.</p>;
 }
 
 function SolutionPanel({ solution, teacherNote }) {
@@ -2995,7 +3027,7 @@ function SolutionPanel({ solution, teacherNote }) {
       <div className="nb-xm-solution-head"><strong><Award size={15} /> Code mẫu của thầy cô</strong><span>{meta.label}</span></div>
       {teacherNote && <p className="nb-xm-solution-teacher">{teacherNote}</p>}
       {solution.note && <p className="nb-xm-solution-note">{solution.note}</p>}
-      <pre className="nb-history-code">{solution.code}</pre>
+      <CodeView code={solution.code} language={solution.language} />
     </section>
   );
 }
@@ -5433,7 +5465,7 @@ function App() {
   return (
     <div className="nb-root">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Inconsolata:wght@400;500;700&display=swap');
 
         * { box-sizing: border-box; }
         .nb-root {
@@ -6092,31 +6124,41 @@ function App() {
         .nb-problem-statement p { margin: 0 0 10px; white-space: pre-wrap; }
         .nb-problem-statement-image { display: block; max-width: 100%; max-height: 360px; object-fit: contain; margin: 0 0 14px; border: 1px solid var(--paper-line); border-radius: 8px; background: #fff; padding: 5px; }
         .nb-code-editor { width: 100%; min-height: 200px; background: var(--ink); color: #D7F1F5; font-family: 'JetBrains Mono', monospace; font-size: 12.5px; border-radius: 8px; border: none; padding: 14px; resize: vertical; box-sizing: border-box; }
-        .nb-thonny-editor { border: 1px solid #181a1f; border-radius: 9px; overflow: hidden; background: #282c34; box-shadow: 0 6px 18px rgba(10,12,16,0.28); }
-        .nb-editor-toolbar, .nb-editor-status { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 12px; color: #9da5b4; background: #21252b; font: 11px/1.2 'JetBrains Mono', monospace; letter-spacing: .01em; }
-        .nb-editor-toolbar span:first-child { display: flex; align-items: center; gap: 6px; color: #61afef; font-weight: 600; }
-        .nb-editor-status { color: #6b7385; background: #21252b; border-top: 1px solid #181a1f; font-size: 10px; }
-        .nb-editor-workspace { display: flex; position: relative; min-height: 330px; max-height: 480px; overflow: hidden; background: #282c34; }
-        .nb-editor-gutter { flex: 0 0 46px; padding: 14px 7px 14px 0; color: #495162; background: #282c34; border-right: 1px solid #21252b; text-align: right; user-select: none; font: 14px/22px 'JetBrains Mono', monospace; }
-        .nb-editor-gutter span { display: block; height: 22px; transition: color .1s; }
-        .nb-editor-gutter span.active { color: #abb2bf; font-weight: 600; }
+        /* ---- Trình soạn thảo: giao diện sáng giống Thonny ---- */
+        .nb-thonny-editor { --code-font: Consolas, "Cascadia Mono", Inconsolata, "JetBrains Mono", "Courier New", monospace; border: 1px solid #c9ccd1; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 2px 10px rgba(16,42,67,0.08); }
+        .nb-editor-toolbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; padding: 6px 10px 0; background: #ECECEC; border-bottom: 1px solid #c9ccd1; font: 12.5px/1.2 'Be Vietnam Pro', sans-serif; }
+        .nb-editor-tab { display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px; margin-bottom: -1px; border: 1px solid #c9ccd1; border-bottom-color: #fff; border-radius: 7px 7px 0 0; background: #fff; color: #222; font: 600 12.5px var(--code-font); }
+        .nb-editor-tab svg { color: #3b6fb6; }
+        .nb-editor-lang { padding: 0 4px 7px; color: #6b6f76; font-size: 11.5px; }
+        .nb-editor-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 12px; color: #5b5f66; background: #ECECEC; border-top: 1px solid #c9ccd1; font: 11px/1.3 'Be Vietnam Pro', sans-serif; }
+        .nb-editor-workspace { display: flex; position: relative; min-height: 340px; max-height: 520px; overflow: hidden; background: #fff; }
+        .nb-editor-gutter { flex: 0 0 52px; padding: 12px 10px 12px 0; color: #8a8a8a; background: #E2E2E2; text-align: right; user-select: none; font: 16px/24px var(--code-font); }
+        .nb-editor-gutter span { display: block; height: 24px; }
+        .nb-editor-gutter span.active { color: #333; font-weight: 700; }
         .nb-editor-code-layer { position: relative; flex: 1; min-width: 0; overflow: hidden; }
-        .nb-editor-active-line { position: absolute; left: 0; right: 0; top: 14px; height: 22px; background: rgba(255,255,255,0.045); pointer-events: none; z-index: 0; }
+        .nb-editor-active-line { position: absolute; left: 0; right: 0; top: 12px; height: 24px; background: #F1F6FD; box-shadow: inset 0 1px 0 #E3ECF8, inset 0 -1px 0 #E3ECF8; pointer-events: none; z-index: 0; }
         .nb-code-highlight, .nb-code-input {
-          position: absolute; inset: 0; width: max-content; min-width: 100%; min-height: 100%; margin: 0; padding: 14px 16px; border: 0; box-sizing: border-box;
-          font: 14px/22px 'JetBrains Mono', monospace; letter-spacing: .2px; tab-size: 4; white-space: pre;
-          font-feature-settings: "calt" 1, "liga" 1; font-variant-ligatures: contextual;
+          position: absolute; inset: 0; width: max-content; min-width: 100%; min-height: 100%; margin: 0; padding: 12px 14px; border: 0; box-sizing: border-box;
+          font: 16px/24px var(--code-font); letter-spacing: 0; tab-size: 4; white-space: pre; font-variant-ligatures: none;
         }
-        .nb-code-highlight { pointer-events: none; color: #abb2bf; background: transparent; z-index: 1; }
+        .nb-code-highlight { pointer-events: none; color: #000; background: transparent; z-index: 1; }
         .nb-code-highlight code { font: inherit; }
-        .nb-code-input { z-index: 2; resize: none; overflow: auto; color: transparent; caret-color: #528bff; background: transparent; outline: none; -webkit-text-fill-color: transparent; }
-        .nb-code-input::selection { background: rgba(97,175,239,0.28); }
-        .nb-syntax-comment { color: #5c6370; font-style: italic; }
-        .nb-syntax-string { color: #98c379; }
-        .nb-syntax-number { color: #d19a66; }
-        .nb-syntax-keyword { color: #c678dd; }
-        .nb-syntax-function { color: #61afef; }
-        .nb-syntax-operator { color: #56b6c2; }
+        .nb-code-input { z-index: 2; resize: none; overflow: auto; color: transparent; caret-color: #000; background: transparent; outline: none; -webkit-text-fill-color: transparent; }
+        .nb-code-input::selection { background: #BBD7F7; }
+        .nb-syntax-keyword { color: #7F0055; font-weight: 700; }
+        .nb-syntax-builtin { color: #7F0055; }
+        .nb-syntax-def { color: #1F3C9E; font-weight: 700; }
+        .nb-syntax-number { color: #B35900; }
+        .nb-syntax-string { color: #2B8A00; }
+        .nb-syntax-comment { color: #7a7a7a; font-style: italic; }
+        .nb-syntax-function, .nb-syntax-operator { color: inherit; }
+        /* Code chỉ-đọc (bài đã nộp, code mẫu) */
+        .nb-codeview { --code-font: Consolas, "Cascadia Mono", Inconsolata, "JetBrains Mono", "Courier New", monospace; display: flex; max-height: 420px; overflow: auto; border: 1px solid #c9ccd1; border-radius: 8px; background: #fff; }
+        .nb-codeview-gutter { position: sticky; left: 0; flex: none; padding: 10px 10px 10px 8px; min-width: 44px; text-align: right; color: #8a8a8a; background: #E2E2E2; user-select: none; font: 14px/22px var(--code-font); }
+        .nb-codeview-gutter span { display: block; }
+        .nb-codeview-code { flex: 1; margin: 0; padding: 10px 14px; width: max-content; min-width: 0; color: #000; font: 14px/22px var(--code-font); white-space: pre; tab-size: 4; background: transparent; }
+        .nb-codeview-code code { font: inherit; }
+        .nb-history-code-wrap { padding: 8px; }
         .nb-modal-actions { margin-top: 10px; display: flex; }
         .nb-solver-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; color: var(--slate); font-size: 11.5px; }
         .nb-solver-meta strong { color: var(--ink); font-family: 'JetBrains Mono', monospace; }
@@ -7136,7 +7178,7 @@ function App() {
         .nb-xm-solution-head span { font: 600 11.5px 'JetBrains Mono', monospace; }
         .nb-xm-solution-note, .nb-xm-solution-teacher { margin: 0; padding: 10px 14px 0; font-size: 13px; color: var(--ink); }
         .nb-xm-solution-teacher { color: var(--slate); font-size: 12px; }
-        .nb-xm-solution .nb-history-code { margin: 10px 14px 14px; max-height: 260px; overflow: auto; }
+        .nb-xm-solution .nb-codeview { margin: 10px 14px 14px; max-height: 300px; }
         .nb-xm-solution-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 12px 16px; border-radius: 12px; border: 1px solid #f3d38a; background: #fff8e6; color: #7a4a00; }
         .nb-xm-solution-banner.open { border-color: #bfe7d4; background: #f0faf5; color: #0b5a38; }
         .nb-xm-solution-banner > div { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
@@ -7204,7 +7246,7 @@ function App() {
         .nb-xm-sub-item strong { font: 700 13px 'JetBrains Mono', monospace; }
         .nb-xm-sub-item.active { border-color: var(--pen-blue); background: rgba(4,166,199,.06); }
         .nb-xm-code { min-width: 0; max-height: 340px; overflow: auto; border: 1px solid #e1e8f2; border-radius: 10px; background: #fbfdff; }
-        .nb-xm-code .nb-history-code { margin: 0; border: 0; border-radius: 0; max-height: none; }
+        .nb-xm-code .nb-codeview { margin: 0; border: 0; border-radius: 0; max-height: none; }
         .nb-xm-viewer .nb-modal-actions { padding: 0 20px 18px; }
         .nb-xm-summary { grid-template-columns: repeat(4, 1fr); margin: 0; }
         .nb-xm-table th small { margin-left: 3px; opacity: .7; font-weight: 400; }
