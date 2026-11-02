@@ -6144,7 +6144,8 @@ function App() {
         .nb-code-highlight { pointer-events: none; color: #000; background: transparent; z-index: 1; }
         .nb-code-highlight code { font: inherit; }
         .nb-code-input { z-index: 2; resize: none; overflow: auto; color: transparent; caret-color: #000; background: transparent; outline: none; -webkit-text-fill-color: transparent; }
-        .nb-code-input::selection { background: #BBD7F7; }
+        .nb-code-input::selection { background: rgba(70, 140, 230, 0.32); -webkit-text-fill-color: transparent; }
+        .nb-code-input::-moz-selection { background: rgba(70, 140, 230, 0.32); }
         .nb-syntax-keyword { color: #7F0055; font-weight: 700; }
         .nb-syntax-builtin { color: #7F0055; }
         .nb-syntax-def { color: #1F3C9E; font-weight: 700; }
