@@ -10,7 +10,7 @@ import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, SISTER_SITE_URL, SISTER_SITE_LABEL } from "./config.js";
 
 /* ---------------------------------------------------------------------- */
-
+/*  SUPABASE DATA LAYER                                                     */
 /* ---------------------------------------------------------------------- */
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -171,6 +171,9 @@ async function dbSetLessonProgress(studentId, topicId, progress) {
   if (error) throw error;
 }
 
+// Tải TOÀN BỘ dòng của một bảng bằng cách gọi nhiều trang (range) liên tiếp,
+// tránh bị cắt mất dữ liệu khi bảng vượt quá giới hạn "Max Rows" của Supabase
+// (mặc định 1000 dòng/lần gọi), bất kể sau này bảng phình to đến đâu.
 async function fetchAllRows(table, { order, pageSize = 1000, columns = "*", gte = null } = {}) {
   let allRows = [];
   let from = 0;
@@ -199,7 +202,10 @@ async function fetchSourceCode(submissionId) {
   if (error) throw error;
   return data?.source_code || "";
 }
-
+// light=true: bỏ qua topics + problems (nặng, ít thay đổi) để tiết kiệm băng thông; trả về null cho 2 mục đó.
+// scope: "full" = tất cả; "medium" = bài nộp mới + tài khoản/thảo luận/bài giao + danh sách đề;
+// "fast" = chỉ bài nộp mới + danh sách đề. Bài giảng/đề bài (nặng) chỉ tải ở "full".
+// since: chỉ lấy bài nộp từ mốc này trở đi (tải gia tăng) — dùng cho "fast"/"medium".
 async function fetchAll({ scope = "full", since = null } = {}) {
   const full = scope === "full";
   const medium = scope !== "fast";
@@ -246,7 +252,7 @@ async function fetchAll({ scope = "full", since = null } = {}) {
     assignments: assignmentsR.data ? assignmentsR.data.map(mapAssignment) : null,
   };
 }
-
+// Gộp bài nộp mới vào danh sách hiện có (theo id), giữ source code đã có và thứ tự thời gian.
 function mergeIncremental(prev, incoming) {
   if (!incoming.length) return prev;
   const byId = new Map((prev || []).map((x) => [x.id, x]));
@@ -1796,34 +1802,55 @@ function lastDaysCounts(m, n = 7) {
   return out;
 }
 
-/* Huy hiệu tính theo NGÀY: dựa trên số bài AC lần đầu trong hôm nay, sang ngày mới làm lại từ đầu */
+/* Huy hiệu: các huy hiệu theo bài AC tính theo NGÀY (làm mới mỗi ngày), huy hiệu chuỗi tính theo số ngày liền đạt mục tiêu */
 function computeBadges(todayCount, streak = 0) {
   const G = WEEKLY_GOAL_DEFAULT;
-  const defs = [
-    { id: "first", icon: <CheckCircle2 size={20} />, name: "AC đầu tiên", need: 1, tone: "blue" },
-    { id: "goal", icon: <Target size={20} />, name: "Đạt mục tiêu", need: G, tone: "green" },
-    { id: "chal", icon: <Flame size={20} />, name: "Vượt thử thách", need: G + CHALLENGE_STEP, tone: "red" },
-    { id: "super", icon: <Trophy size={20} />, name: "Siêu năng suất", need: G + 2 * CHALLENGE_STEP, tone: "gold" },
-    { id: "a10", icon: <Code2 size={20} />, name: "10 bài AC", need: 10, tone: "blue" },
-    { id: "a30", icon: <Award size={20} />, name: "30 bài AC", need: 30, tone: "gold" },
-  ].map((d) => ({ ...d, earned: todayCount >= d.need, hint: d.need === 1 ? "Giải đúng bài đầu tiên trong ngày" : `AC ${d.need} bài trong ngày (còn ${Math.max(0, d.need - todayCount)})` }));
-  const streakDefs = [
-    { id: "s3", icon: <Flame size={20} />, name: "3 ngày liên tiếp", need: 3, tone: "green" },
-    { id: "s7", icon: <Flame size={20} />, name: "7 ngày liên tiếp", need: 7, tone: "gold" },
-  ].map((d) => ({ ...d, earned: streak >= d.need, hint: `Đạt mục tiêu ${d.need} ngày liền (còn ${Math.max(0, d.need - streak)} ngày)` }));
-  return [...defs, ...streakDefs];
+  const daily = [
+    { id: "first", icon: <CheckCircle2 size={26} />, name: "AC đầu tiên", need: 1, tone: "sky" },
+    { id: "goal", icon: <Target size={26} />, name: "Đạt mục tiêu", need: G, tone: "emerald" },
+    { id: "chal", icon: <Flame size={26} />, name: "Vượt thử thách", need: G + CHALLENGE_STEP, tone: "amber" },
+    { id: "super", icon: <Trophy size={26} />, name: "Siêu năng suất", need: G + 2 * CHALLENGE_STEP, tone: "violet" },
+    { id: "a10", icon: <Code2 size={26} />, name: "10 bài AC", need: 10, tone: "rose" },
+    { id: "a30", icon: <Award size={26} />, name: "30 bài AC", need: 30, tone: "gold" },
+  ].map((d) => ({ ...d, cur: todayCount, unit: "bài", kind: "day", sub: d.need === 1 ? "Giải đúng bài đầu tiên trong ngày" : `AC ${d.need} bài trong một ngày` }));
+  const streaks = [
+    { id: "s3", icon: <Flame size={26} />, name: "3 ngày liên tiếp", need: 3, tone: "teal" },
+    { id: "s7", icon: <Flame size={26} />, name: "7 ngày liên tiếp", need: 7, tone: "gold" },
+  ].map((d) => ({ ...d, cur: streak, unit: "ngày", kind: "streak", sub: `Đạt mục tiêu ${d.need} ngày liền` }));
+  return [...daily, ...streaks].map((d) => ({ ...d, earned: d.cur >= d.need, pct: Math.min(100, Math.round((d.cur / d.need) * 100)) }));
+}
+
+/* Ảnh huy hiệu: đặt file badges/<id>.png (id: first, goal, chal, super, a10, a30, s3, s7) cạnh index.html.
+   Không có ảnh thì tự dùng biểu tượng mặc định. */
+function BadgeMedal({ badge }) {
+  const [failed, setFailed] = useState(false);
+  const hasImg = !failed;
+  return (
+    <span className={`nb-medal ${hasImg ? "has-img" : ""}`} style={{ "--p": `${badge.pct * 3.6}deg` }}>
+      <span className="nb-medal-face">
+        {hasImg && <img src={`badges/${badge.id}.png`} alt="" draggable="false" onError={() => setFailed(true)} />}
+        {!hasImg && (badge.earned ? badge.icon : <Lock size={20} />)}
+      </span>
+      {hasImg && !badge.earned && <i className="nb-medal-lock"><Lock size={12} /></i>}
+      {badge.earned && <i className="nb-medal-check"><CheckCircle2 size={14} /></i>}
+    </span>
+  );
 }
 
 function BadgeShelf({ badges, bestDay }) {
   const got = badges.filter((b) => b.earned).length;
+  /* huy hiệu gần đạt nhất được nhắc riêng để kích thích chinh phục */
+  const next = badges.filter((b) => !b.earned).sort((a, b) => b.pct - a.pct)[0];
   return (
     <OvPanel eyebrow="Thành tích" title={`Huy hiệu của em · ${got}/${badges.length}`}>
+      {next && <div className="nb-badge-next"><Target size={15} /> Gần nhất: <b>{next.name}</b> — còn {next.need - next.cur} {next.unit}</div>}
       <div className="nb-badges">
         {badges.map((b) => (
-          <div key={b.id} className={`nb-badge ${b.tone} ${b.earned ? "earned" : "locked"}`} title={b.hint}>
-            <span className="nb-badge-icon">{b.earned ? b.icon : <Lock size={18} />}</span>
+          <div key={b.id} className={`nb-badge t-${b.tone} ${b.earned ? "earned" : "locked"}`} title={b.sub}>
+            <BadgeMedal badge={b} />
             <strong>{b.name}</strong>
-            <small>{b.earned ? (b.id[0] === "s" && b.id !== "super" ? "Đang giữ chuỗi" : "Đã đạt hôm nay") : b.hint}</small>
+            <small>{b.sub}</small>
+            <span className="nb-badge-state">{b.earned ? (b.kind === "streak" ? "Đang giữ chuỗi" : "Đã đạt hôm nay") : `${Math.min(b.cur, b.need)}/${b.need} ${b.unit}`}</span>
           </div>))}
       </div>
       <p className="nb-badge-note">Huy hiệu bài AC làm mới mỗi ngày, huy hiệu chuỗi mất khi bỏ lỡ một ngày · Kỷ lục một ngày của em: <b>{bestDay} bài AC</b></p>
@@ -5891,15 +5918,40 @@ function App() {
         .nb-gs.ok b { background: #1f9d6b; color: #fff; } .nb-gs.part b { background: #fdeccb; color: #b9770e; }
         .nb-gs.today b { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #2f6fed; } .nb-gs.today em { color: #2f6fed; }
         .nb-goal-streak { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: #52606d; } .nb-goal-streak svg { color: #e5603c; } .nb-goal-streak b { font-size: 16px; color: #102a43; }
-        .nb-badges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-        .nb-badge-note { margin: 12px 0 0; font-size: 12.5px; color: #7b8aa0; } .nb-badge-note b { color: #102a43; }
-        .nb-badge { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 14px 10px; border-radius: 14px; border: 1px solid #e6ebf2; background: #fff; }
-        .nb-badge strong { font-size: 13px; color: #102a43; } .nb-badge small { font-size: 11.5px; color: #7b8aa0; line-height: 1.35; }
-        .nb-badge-icon { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: #e8f0ff; color: #2f6fed; margin-bottom: 2px; }
-        .nb-badge.green .nb-badge-icon { background: #d9f3e7; color: #1f9d6b; } .nb-badge.red .nb-badge-icon { background: #ffe5dc; color: #d2491f; } .nb-badge.gold .nb-badge-icon { background: #fdf1d6; color: #b9770e; }
-        .nb-badge.earned { box-shadow: 0 4px 14px rgba(16,42,67,.07); }
-        .nb-badge.earned small { color: #1f9d6b; font-weight: 700; }
-        .nb-badge.locked { background: #f7f9fc; } .nb-badge.locked strong { color: #8795a8; } .nb-badge.locked .nb-badge-icon { background: #eceff4; color: #a7b2c3; }
+        .nb-badge .nb-medal:not(.has-img) { margin: 4px 0 10px; }
+        .nb-medal.has-img .nb-medal-face { width: 100%; height: 100%; background: none !important; box-shadow: none !important; }
+        .nb-medal.has-img img { width: 100%; height: 100%; object-fit: contain; display: block; user-select: none; }
+        .nb-badge.earned .nb-medal.has-img { background: none; box-shadow: none; width: 80px; height: 80px; } .nb-badge.earned .nb-medal.has-img img { filter: drop-shadow(0 6px 10px var(--cs)); }
+        .nb-badge.locked .nb-medal.has-img { background: conic-gradient(var(--c2) var(--p), #e6ebf2 0); padding: 5px; width: 80px; height: 80px; border-radius: 50%; }
+        .nb-badge.locked .nb-medal.has-img .nb-medal-face { background: #fff !important; border-radius: 50%; padding: 7px; box-sizing: border-box; }
+        .nb-badge.locked .nb-medal.has-img img { filter: grayscale(1) opacity(.45); }
+        .nb-medal-lock { position: absolute; right: -2px; bottom: -2px; z-index: 2; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: #7b8aa0; box-shadow: 0 1px 4px rgba(16,42,67,.25); }
+        .nb-badge-next { display: flex; align-items: center; gap: 7px; margin: -2px 0 14px; padding: 9px 12px; border-radius: 10px; background: #f3f7ff; color: #3b4f6b; font-size: 13px; } .nb-badge-next svg { color: #2f6fed; flex: none; } .nb-badge-next b { color: #102a43; }
+        .nb-badges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+        .nb-badge { --c1: #5aa7ff; --c2: #2f6fed; --cs: rgba(47,111,237,.35); --ct: #eaf2ff; position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 3px; padding: 18px 12px 14px; border-radius: 16px; border: 1px solid #e6ebf2; background: #fff; transition: transform .18s ease, box-shadow .18s ease; }
+        .nb-badge.t-sky { --c1: #6cc4ff; --c2: #2f8fe8; --cs: rgba(47,143,232,.38); --ct: #eaf6ff; }
+        .nb-badge.t-emerald { --c1: #4fd6a0; --c2: #1f9d6b; --cs: rgba(31,157,107,.36); --ct: #e8f8f0; }
+        .nb-badge.t-amber { --c1: #ffb347; --c2: #e5762c; --cs: rgba(229,118,44,.36); --ct: #fff1e3; }
+        .nb-badge.t-violet { --c1: #a78bfa; --c2: #6d4bd8; --cs: rgba(109,75,216,.34); --ct: #f1ecff; }
+        .nb-badge.t-rose { --c1: #ff7f9a; --c2: #d9365b; --cs: rgba(217,54,91,.34); --ct: #ffeaf0; }
+        .nb-badge.t-gold { --c1: #ffd45e; --c2: #d9961a; --cs: rgba(217,150,26,.4); --ct: #fff6dc; }
+        .nb-badge.t-teal { --c1: #4fd1d9; --c2: #158a98; --cs: rgba(21,138,152,.34); --ct: #e4f7f9; }
+        .nb-medal { position: relative; width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 6px; }
+        .nb-medal-face { width: 58px; height: 58px; border-radius: 50%; display: grid; place-items: center; z-index: 1; }
+        .nb-badge.earned .nb-medal { background: linear-gradient(145deg, var(--c1), var(--c2)); box-shadow: 0 6px 16px var(--cs), inset 0 1px 0 rgba(255,255,255,.55); }
+        .nb-badge.earned .nb-medal-face { color: #fff; background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.28), rgba(255,255,255,0) 60%), linear-gradient(145deg, var(--c1), var(--c2)); box-shadow: inset 0 0 0 2px rgba(255,255,255,.5); }
+        .nb-badge.earned .nb-medal-face svg { filter: drop-shadow(0 1px 1px rgba(0,0,0,.25)); }
+        .nb-badge.earned { background: linear-gradient(180deg, var(--ct) 0%, #fff 62%); border-color: color-mix(in srgb, var(--c2) 28%, #fff); }
+        .nb-badge.earned:hover { transform: translateY(-2px); box-shadow: 0 10px 24px rgba(16,42,67,.1); }
+        .nb-medal-check { position: absolute; right: -2px; bottom: -2px; z-index: 2; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: var(--c2); box-shadow: 0 1px 4px rgba(16,42,67,.25); }
+        .nb-badge.locked .nb-medal { background: conic-gradient(var(--c2) var(--p), #e6ebf2 0); }
+        .nb-badge.locked .nb-medal-face { background: #f4f6fa; color: #a3afc0; width: 62px; height: 62px; box-shadow: inset 0 0 0 1px #e6ebf2; }
+        .nb-badge strong { font-size: 14px; color: #102a43; } .nb-badge.locked strong { color: #52606d; }
+        .nb-badge small { font-size: 11.5px; color: #7b8aa0; line-height: 1.35; min-height: 31px; }
+        .nb-badge-state { margin-top: 6px; padding: 3px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 800; letter-spacing: .01em; }
+        .nb-badge.earned .nb-badge-state { background: var(--c2); color: #fff; }
+        .nb-badge.locked .nb-badge-state { background: #eef1f6; color: #66748a; font-family: var(--code-font, monospace); }
+        .nb-badge-note { margin: 14px 0 0; font-size: 12.5px; color: #7b8aa0; } .nb-badge-note b { color: #102a43; }
         .nb-gt { display: flex; flex-direction: column; gap: 12px; }
         .nb-gt > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
         .nb-gt > header h2 { margin: 4px 0 0; font-size: 18px; }
@@ -5916,7 +5968,8 @@ function App() {
         .nb-gt-streak { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 800; color: #a0abbb; } .nb-gt-streak.on { color: #d2491f; }
         .nb-gt-empty { color: #7b8aa0; font-size: 13px; padding: 18px 0 !important; }
         .nb-gt-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #7b8aa0; } .nb-gt-foot > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; } .nb-gt-foot .nb-gt-cell { width: 24px; height: 22px; font-size: 11px; margin-left: 6px; }
-        @media (max-width: 900px) { .nb-badges { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 1100px) { .nb-badges { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (max-width: 420px) { .nb-badges { gap: 10px; } .nb-badge { padding: 14px 8px 12px; } .nb-badge small { display: none; } }
         .nb-ov-grid.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
         .nb-ov-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .nb-ov-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
@@ -7385,7 +7438,7 @@ function App() {
           .nb-daily-sub-title { flex-basis: calc(100% - 60px); order: 2; }
         }
         /* -------------------------------------------------------------- */
-        /*  ĐỀ THI THỬ                   */
+        /*  ĐỀ THI THỬ — builder, phòng thi, kết quả                      */
         /* -------------------------------------------------------------- */
         .nb-xm-toast { position: sticky; top: 8px; z-index: 6; padding: 11px 15px; border-radius: 10px; color: #0b5a3b; background: #e6f6ee; border: 1px solid #b7e3cb; font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(31,52,86,.08); }
         .nb-exam-card.draft .nb-exam-card-accent { background: #9aa8bd; }
