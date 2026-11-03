@@ -10,7 +10,7 @@ import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, SISTER_SITE_URL, SISTER_SITE_LABEL } from "./config.js";
 
 /* ---------------------------------------------------------------------- */
-/*  SUPABASE DATA LAYER                                                     */
+
 /* ---------------------------------------------------------------------- */
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -171,9 +171,6 @@ async function dbSetLessonProgress(studentId, topicId, progress) {
   if (error) throw error;
 }
 
-// Tải TOÀN BỘ dòng của một bảng bằng cách gọi nhiều trang (range) liên tiếp,
-// tránh bị cắt mất dữ liệu khi bảng vượt quá giới hạn "Max Rows" của Supabase
-// (mặc định 1000 dòng/lần gọi), bất kể sau này bảng phình to đến đâu.
 async function fetchAllRows(table, { order, pageSize = 1000, columns = "*", gte = null } = {}) {
   let allRows = [];
   let from = 0;
@@ -202,10 +199,7 @@ async function fetchSourceCode(submissionId) {
   if (error) throw error;
   return data?.source_code || "";
 }
-// light=true: bỏ qua topics + problems (nặng, ít thay đổi) để tiết kiệm băng thông; trả về null cho 2 mục đó.
-// scope: "full" = tất cả; "medium" = bài nộp mới + tài khoản/thảo luận/bài giao + danh sách đề;
-// "fast" = chỉ bài nộp mới + danh sách đề. Bài giảng/đề bài (nặng) chỉ tải ở "full".
-// since: chỉ lấy bài nộp từ mốc này trở đi (tải gia tăng) — dùng cho "fast"/"medium".
+
 async function fetchAll({ scope = "full", since = null } = {}) {
   const full = scope === "full";
   const medium = scope !== "fast";
@@ -252,7 +246,7 @@ async function fetchAll({ scope = "full", since = null } = {}) {
     assignments: assignmentsR.data ? assignmentsR.data.map(mapAssignment) : null,
   };
 }
-// Gộp bài nộp mới vào danh sách hiện có (theo id), giữ source code đã có và thứ tự thời gian.
+
 function mergeIncremental(prev, incoming) {
   if (!incoming.length) return prev;
   const byId = new Map((prev || []).map((x) => [x.id, x]));
@@ -1802,22 +1796,25 @@ function lastDaysCounts(m, n = 7) {
   return out;
 }
 
-function computeBadges(m, totalAc) {
-  const maxDay = Math.max(0, ...m.values());
-  const best = bestGoalStreak(m);
-  return [
-    { id: "first", icon: <CheckCircle2 size={20} />, name: "AC đầu tiên", hint: "Giải đúng bài đầu tiên", earned: totalAc >= 1, tone: "blue" },
-    { id: "goal", icon: <Target size={20} />, name: "Đạt mục tiêu", hint: `AC ${WEEKLY_GOAL_DEFAULT} bài trong một ngày`, earned: maxDay >= WEEKLY_GOAL_DEFAULT, tone: "green" },
-    { id: "chal", icon: <Flame size={20} />, name: "Vượt thử thách", hint: `AC ${WEEKLY_GOAL_DEFAULT + CHALLENGE_STEP} bài trong một ngày`, earned: maxDay >= WEEKLY_GOAL_DEFAULT + CHALLENGE_STEP, tone: "red" },
-    { id: "super", icon: <Trophy size={20} />, name: "Siêu năng suất", hint: `AC ${WEEKLY_GOAL_DEFAULT + 2 * CHALLENGE_STEP} bài trong một ngày`, earned: maxDay >= WEEKLY_GOAL_DEFAULT + 2 * CHALLENGE_STEP, tone: "gold" },
-    { id: "s3", icon: <Award size={20} />, name: "3 ngày liên tiếp", hint: "Đạt mục tiêu 3 ngày liền", earned: best >= 3, tone: "green" },
-    { id: "s7", icon: <Award size={20} />, name: "7 ngày liên tiếp", hint: "Đạt mục tiêu 7 ngày liền", earned: best >= 7, tone: "gold" },
-    { id: "a10", icon: <Code2 size={20} />, name: "10 bài AC", hint: "Tổng cộng 10 bài đã giải", earned: totalAc >= 10, tone: "blue" },
-    { id: "a30", icon: <Code2 size={20} />, name: "30 bài AC", hint: "Tổng cộng 30 bài đã giải", earned: totalAc >= 30, tone: "gold" },
-  ];
+/* Huy hiệu tính theo NGÀY: dựa trên số bài AC lần đầu trong hôm nay, sang ngày mới làm lại từ đầu */
+function computeBadges(todayCount, streak = 0) {
+  const G = WEEKLY_GOAL_DEFAULT;
+  const defs = [
+    { id: "first", icon: <CheckCircle2 size={20} />, name: "AC đầu tiên", need: 1, tone: "blue" },
+    { id: "goal", icon: <Target size={20} />, name: "Đạt mục tiêu", need: G, tone: "green" },
+    { id: "chal", icon: <Flame size={20} />, name: "Vượt thử thách", need: G + CHALLENGE_STEP, tone: "red" },
+    { id: "super", icon: <Trophy size={20} />, name: "Siêu năng suất", need: G + 2 * CHALLENGE_STEP, tone: "gold" },
+    { id: "a10", icon: <Code2 size={20} />, name: "10 bài AC", need: 10, tone: "blue" },
+    { id: "a30", icon: <Award size={20} />, name: "30 bài AC", need: 30, tone: "gold" },
+  ].map((d) => ({ ...d, earned: todayCount >= d.need, hint: d.need === 1 ? "Giải đúng bài đầu tiên trong ngày" : `AC ${d.need} bài trong ngày (còn ${Math.max(0, d.need - todayCount)})` }));
+  const streakDefs = [
+    { id: "s3", icon: <Flame size={20} />, name: "3 ngày liên tiếp", need: 3, tone: "green" },
+    { id: "s7", icon: <Flame size={20} />, name: "7 ngày liên tiếp", need: 7, tone: "gold" },
+  ].map((d) => ({ ...d, earned: streak >= d.need, hint: `Đạt mục tiêu ${d.need} ngày liền (còn ${Math.max(0, d.need - streak)} ngày)` }));
+  return [...defs, ...streakDefs];
 }
 
-function BadgeShelf({ badges }) {
+function BadgeShelf({ badges, bestDay }) {
   const got = badges.filter((b) => b.earned).length;
   return (
     <OvPanel eyebrow="Thành tích" title={`Huy hiệu của em · ${got}/${badges.length}`}>
@@ -1826,9 +1823,10 @@ function BadgeShelf({ badges }) {
           <div key={b.id} className={`nb-badge ${b.tone} ${b.earned ? "earned" : "locked"}`} title={b.hint}>
             <span className="nb-badge-icon">{b.earned ? b.icon : <Lock size={18} />}</span>
             <strong>{b.name}</strong>
-            <small>{b.earned ? "Đã đạt" : b.hint}</small>
+            <small>{b.earned ? (b.id[0] === "s" && b.id !== "super" ? "Đang giữ chuỗi" : "Đã đạt hôm nay") : b.hint}</small>
           </div>))}
       </div>
+      <p className="nb-badge-note">Huy hiệu bài AC làm mới mỗi ngày, huy hiệu chuỗi mất khi bỏ lỡ một ngày · Kỷ lục một ngày của em: <b>{bestDay} bài AC</b></p>
     </OvPanel>
   );
 }
@@ -2003,7 +2001,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     const dayMap = acPerDay(mine);
     const streak = goalStreak(dayMap);
     const weekDays = lastDaysCounts(dayMap, 7);
-    const badges = computeBadges(dayMap, solved);
+    const badges = computeBadges(solvedWeek, streak);
+    const bestDay = Math.max(0, ...dayMap.values());
 
     return (
       <div className="nb-ov">
@@ -2039,7 +2038,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
           <OvKpi label="Chuỗi ngày học" value={streak} sub="ngày liền đạt mục tiêu" tone="rose" />
         </div>
 
-        <BadgeShelf badges={badges} />
+        <BadgeShelf badges={badges} bestDay={bestDay} />
 
         <div className="nb-ov-grid two">
           <OvPanel eyebrow="Nhật ký học tập" title="Hoạt động gần đây" action="Xem bài tập" onAction={() => onNavigate?.("problems")}>
@@ -5893,6 +5892,7 @@ function App() {
         .nb-gs.today b { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #2f6fed; } .nb-gs.today em { color: #2f6fed; }
         .nb-goal-streak { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: #52606d; } .nb-goal-streak svg { color: #e5603c; } .nb-goal-streak b { font-size: 16px; color: #102a43; }
         .nb-badges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        .nb-badge-note { margin: 12px 0 0; font-size: 12.5px; color: #7b8aa0; } .nb-badge-note b { color: #102a43; }
         .nb-badge { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 14px 10px; border-radius: 14px; border: 1px solid #e6ebf2; background: #fff; }
         .nb-badge strong { font-size: 13px; color: #102a43; } .nb-badge small { font-size: 11.5px; color: #7b8aa0; line-height: 1.35; }
         .nb-badge-icon { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: #e8f0ff; color: #2f6fed; margin-bottom: 2px; }
@@ -7385,7 +7385,7 @@ function App() {
           .nb-daily-sub-title { flex-basis: calc(100% - 60px); order: 2; }
         }
         /* -------------------------------------------------------------- */
-        /*  ĐỀ THI THỬ — builder, phòng thi, kết quả                      */
+        /*  ĐỀ THI THỬ                   */
         /* -------------------------------------------------------------- */
         .nb-xm-toast { position: sticky; top: 8px; z-index: 6; padding: 11px 15px; border-radius: 10px; color: #0b5a3b; background: #e6f6ee; border: 1px solid #b7e3cb; font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(31,52,86,.08); }
         .nb-exam-card.draft .nb-exam-card-accent { background: #9aa8bd; }
