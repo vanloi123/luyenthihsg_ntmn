@@ -4,7 +4,7 @@ import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
-  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink, Keyboard,
+  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink, Keyboard, Target,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, SISTER_SITE_URL, SISTER_SITE_LABEL } from "./config.js";
@@ -1752,6 +1752,81 @@ function greetingByHour() {
   return h < 11 ? "Chào buổi sáng" : h < 14 ? "Chào buổi trưa" : h < 18 ? "Chào buổi chiều" : "Chào buổi tối";
 }
 
+const WEEKLY_GOAL_DEFAULT = 5; /* mục tiêu cố định: 5 bài AC / ngày */
+const CHALLENGE_STEP = 3; /* sau khi đạt, cứ mỗi 3 bài AC thêm là một thử thách */
+const AC_MILESTONES = [5, 10, 20, 30, 50, 100];
+
+/* Số bài LẦN ĐẦU được AC kể từ mốc `weekStart` (ở đây là 0h hôm nay) */
+function newAcThisWeek(subs, weekStart) {
+  const first = new Map();
+  subs.forEach((s) => {
+    if (s.verdict !== "AC") return;
+    const t = new Date(s.createdAt || 0).getTime();
+    const cur = first.get(s.problemId);
+    if (cur === undefined || t < cur) first.set(s.problemId, t);
+  });
+  let n = 0;
+  first.forEach((t) => { if (t >= weekStart) n += 1; });
+  return n;
+}
+
+function WeeklyGoalCard({ solvedWeek, solvedTotal, remainingProblems, onGo }) {
+  const goal = WEEKLY_GOAL_DEFAULT;
+  const hour = new Date().getHours();
+  const reached = solvedWeek >= goal;
+  const extra = Math.max(0, solvedWeek - goal);
+  const challengesDone = Math.floor(extra / CHALLENGE_STEP);
+  const inChallenge = extra % CHALLENGE_STEP;
+  const nextTarget = reached ? goal + (challengesDone + 1) * CHALLENGE_STEP : goal;
+  const need = Math.max(0, nextTarget - solvedWeek);
+  const allDone = remainingProblems <= 0;
+  const nextMilestone = AC_MILESTONES.find((m) => m > solvedTotal);
+
+  let tone = "go", title, text, icon = <Target size={22} />, label = `Mục tiêu hôm nay · AC ${goal} bài`;
+  let segTotal = goal, segDone = Math.min(solvedWeek, goal);
+  if (reached) {
+    tone = "done"; icon = <Trophy size={22} />;
+    label = `Đã đạt mục tiêu ${goal} bài · Thử thách mỗi ${CHALLENGE_STEP} bài`;
+    segTotal = CHALLENGE_STEP; segDone = inChallenge;
+    title = challengesDone === 0
+      ? `Chúc mừng! Em đã đạt mục tiêu hôm nay (${solvedWeek}/${goal} bài)`
+      : `Tuyệt vời! Em đã vượt ${challengesDone} thử thách (${solvedWeek} bài AC hôm nay)`;
+    text = allDone
+      ? "Em đã giải hết tất cả bài hiện có — chờ thầy cô thêm bài mới nhé!"
+      : `Thử thách tiếp theo: thêm ${CHALLENGE_STEP} bài nữa để đạt ${nextTarget} bài trong ngày (còn ${need}).`;
+  } else if (solvedWeek === 0) {
+    tone = hour >= 18 ? "warn" : "start";
+    title = `Hôm nay em chưa giải bài nào — mục tiêu là ${goal} bài AC`;
+    text = hour >= 18 ? "Trời đã tối rồi, hãy giải thật nhanh vài bài để giữ chuỗi học nhé!" : "Bắt đầu bằng một bài dễ để lấy đà nhé!";
+  } else if (hour >= 18 && need >= 2) {
+    tone = "warn";
+    title = `Em còn thiếu ${need} bài để đạt mục tiêu hôm nay`;
+    text = "Sắp hết ngày rồi, cố thêm chút nữa nhé!";
+  } else {
+    title = `Còn ${need} bài nữa là đạt mục tiêu hôm nay`;
+    text = `Em đã giải ${solvedWeek}/${goal} bài, tiếp tục phát huy nhé!`;
+  }
+
+  return (
+    <section className={`nb-goal ${tone}`} aria-label="Mục tiêu hôm nay">
+      <span className="nb-goal-icon">{icon}</span>
+      <div className="nb-goal-main">
+        <small>{label}</small>
+        <strong>{title}</strong>
+        <span>{text}</span>
+        <div className="nb-goal-steps" role="img" aria-label={`${segDone} trên ${segTotal} bài`}>
+          {Array.from({ length: segTotal }, (_, i) => <i key={i} className={i < segDone ? "on" : ""} />)}
+          <b>{segDone}/{segTotal}{reached ? ` · Thử thách ${challengesDone + 1}` : ""}</b>
+        </div>
+        {nextMilestone && <div className="nb-goal-foot"><span><Award size={13} /> Mốc tiếp theo: {nextMilestone} bài AC (còn {nextMilestone - solvedTotal})</span></div>}
+      </div>
+      <button className="nb-btn nb-btn-primary" onClick={() => onGo?.()}>
+        {reached ? <><Flame size={15} /> Nhận thử thách</> : <><Code2 size={15} /> Giải bài ngay</>}
+      </button>
+    </section>
+  );
+}
+
 function OverviewView({ currentUser, students, submissions, points, solvedCount, contests, discussions, problemsCount, problems, onNavigate }) {
   const isTeacher = currentUser.role === "teacher" || currentUser.role === "admin";
   const todayLabel = new Intl.DateTimeFormat("vi-VN", { weekday: "long", day: "numeric", month: "numeric" }).format(new Date());
@@ -1767,6 +1842,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     const remaining = Math.max(0, problemsCount - solved);
     const progress = problemsCount ? Math.round((solved / problemsCount) * 100) : 0;
     const bestRecent = mine.find((submission) => submission.verdict === "AC");
+    const todayStart = new Date().setHours(0, 0, 0, 0);
+    const solvedWeek = newAcThisWeek(mine, todayStart); /* số bài AC lần đầu trong hôm nay */
 
     return (
       <div className="nb-ov">
@@ -1792,6 +1869,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
             <button className="nb-btn nb-btn-primary" onClick={() => onNavigate?.("problems")}><Code2 size={15} /> Luyện tập ngay</button>
           </section>
         )}
+
+        <WeeklyGoalCard solvedWeek={solvedWeek} solvedTotal={solved} remainingProblems={remaining} onGo={() => onNavigate?.("problems")} />
 
         <div className="nb-ov-kpis">
           <OvKpi label="Tổng điểm" value={points(currentUser.id)} sub="điểm tích lũy" tone="teal" />
@@ -1845,9 +1924,12 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
 
   const lastByStudent = new Map();
   const byProblem = new Map();
+  const byStudentSubs = new Map();
   submissions.forEach((s) => {
     const t = new Date(s.createdAt || 0).getTime();
     if (t > (lastByStudent.get(s.studentId) || 0)) lastByStudent.set(s.studentId, t);
+    if (!byStudentSubs.has(s.studentId)) byStudentSubs.set(s.studentId, []);
+    byStudentSubs.get(s.studentId).push(s);
     if (!byProblem.has(s.problemId)) byProblem.set(s.problemId, []);
     byProblem.get(s.problemId).push(s);
   });
@@ -1861,6 +1943,9 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     return { problem, attempts: list.length, ac, rate: list.length ? Math.round((ac / list.length) * 100) : 0 };
   }).filter((x) => x.attempts >= 3).sort((a, b) => (a.rate - b.rate) || (b.attempts - a.attempts)).slice(0, 4);
   const nameById = new Map(students.map((st) => [st.id, st.name]));
+  const weekStartT = new Date().setHours(0, 0, 0, 0);
+  const goalRows = students.map((st) => ({ student: st, n: newAcThisWeek(byStudentSubs.get(st.id) || [], weekStartT) })).sort((x, y) => (x.n - y.n));
+  const goalReached = goalRows.filter((x) => x.n >= WEEKLY_GOAL_DEFAULT);
   const recent = submissions.slice().sort(byTimeDesc).slice(0, 7);
 
   const todo = [];
@@ -1910,6 +1995,22 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
                 </li>))}</ul>
             </OvPanel>
           )}
+          <OvPanel eyebrow="Mục tiêu hôm nay" title={`Đạt ${WEEKLY_GOAL_DEFAULT} bài AC: ${goalReached.length}/${students.length} em`}>
+            {students.length === 0 ? <OvEmpty icon={<Users size={22} />} title="Chưa có học sinh" text="Dữ liệu hiện khi lớp có học sinh." /> : (
+              <>
+                <i className="nb-ov-meter"><b style={{ width: `${Math.round((goalReached.length / students.length) * 100)}%` }} /></i>
+                <ul className="nb-ov-list" style={{ marginTop: 10 }}>
+                  {goalRows.slice(0, 5).map(({ student, n }) => (
+                    <li key={student.id}>
+                      <Avatar name={student.name} size={30} />
+                      <div><strong>{student.name}</strong><small>{n >= WEEKLY_GOAL_DEFAULT ? "Đã đạt mục tiêu" : n === 0 ? "Hôm nay chưa giải bài nào" : `Còn thiếu ${WEEKLY_GOAL_DEFAULT - n} bài`}</small></div>
+                      <span className={`nb-ov-tag ${n >= WEEKLY_GOAL_DEFAULT ? "ok" : n === 0 ? "risk" : ""}`}>{n}/{WEEKLY_GOAL_DEFAULT}</span>
+                    </li>))}
+                  {goalRows.length > 5 && <li className="more">và {goalRows.length - 5} học sinh khác</li>}
+                </ul>
+              </>
+            )}
+          </OvPanel>
           <OvPanel eyebrow="Theo dõi cá nhân" title="Học sinh cần hỗ trợ" action="Xem lớp" onAction={() => onNavigate?.("leaderboard")}>
             {inactive.length === 0 ? <OvEmpty icon={<CheckCircle2 size={22} />} title="Cả lớp đều hoạt động" text="Không ai quá 14 ngày chưa nộp bài." /> : (
               <ul className="nb-ov-list">{inactive.slice(0, 5).map(({ student, last }) => (
@@ -5615,6 +5716,29 @@ function App() {
 
         .nb-ov-grid { display: grid; gap: 18px; align-items: start; }
         .nb-ov-grid.main { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+        .nb-goal { display: flex; align-items: center; gap: 18px; padding: 20px 22px; border-radius: 18px; background: #fff; border: 1px solid var(--ov-line); box-shadow: var(--ov-shadow); position: relative; overflow: hidden; }
+        .nb-goal::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: #2f6fed; }
+        .nb-goal.start::before { background: #e0a020; } .nb-goal.warn::before { background: #e5603c; } .nb-goal.done::before { background: #1f9d6b; }
+        .nb-goal.done { background: linear-gradient(100deg, #f0faf5 0%, #fff 60%); }
+        .nb-goal.warn { background: linear-gradient(100deg, #fff6f2 0%, #fff 60%); }
+        .nb-goal.start { background: linear-gradient(100deg, #fffaf0 0%, #fff 60%); }
+        .nb-goal-icon { flex: none; width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: #e8f0ff; color: #2f6fed; }
+        .nb-goal.start .nb-goal-icon { background: #fdf1d6; color: #b9770e; } .nb-goal.warn .nb-goal-icon { background: #ffe5dc; color: #d2491f; } .nb-goal.done .nb-goal-icon { background: #d9f3e7; color: #1f9d6b; }
+        .nb-goal-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        .nb-goal-main small { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; color: #6b7a90; }
+        .nb-goal-main > strong { font-size: 17px; color: #102a43; line-height: 1.35; }
+        .nb-goal-main > span { font-size: 13.5px; color: #52606d; }
+        .nb-goal-steps { display: flex; align-items: center; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+        .nb-goal-steps i { width: 30px; height: 9px; border-radius: 999px; background: #e3e8ef; }
+        .nb-goal-steps i.on { background: #2f6fed; } .nb-goal.done .nb-goal-steps i.on { background: #1f9d6b; } .nb-goal.warn .nb-goal-steps i.on { background: #e5603c; }
+        .nb-goal-steps b { margin-left: 6px; font-size: 13px; color: #102a43; font-family: var(--code-font, monospace); }
+        .nb-goal-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; margin-top: 8px; font-size: 12.5px; color: #6b7a90; }
+        .nb-goal-foot > span { display: inline-flex; align-items: center; gap: 6px; }
+        .nb-goal-pick button { border: 1px solid #d5dce6; background: #fff; border-radius: 8px; padding: 1px 9px; font-weight: 700; color: #52606d; cursor: pointer; font-size: 12.5px; }
+        .nb-goal-pick button.active { background: #102a43; color: #fff; border-color: #102a43; }
+        .nb-goal > .nb-btn { flex: none; }
+        .nb-ov-tag.ok { background: #d9f3e7; color: #137a52; }
+        @media (max-width: 760px) { .nb-goal { flex-wrap: wrap; padding: 16px; } .nb-goal > .nb-btn { width: 100%; justify-content: center; } .nb-goal-steps i { width: 22px; } }
         .nb-ov-grid.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
         .nb-ov-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .nb-ov-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
