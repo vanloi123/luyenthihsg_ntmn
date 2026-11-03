@@ -1756,6 +1756,161 @@ const WEEKLY_GOAL_DEFAULT = 5; /* mục tiêu cố định: 5 bài AC / ngày */
 const CHALLENGE_STEP = 3; /* sau khi đạt, cứ mỗi 3 bài AC thêm là một thử thách */
 const AC_MILESTONES = [5, 10, 20, 30, 50, 100];
 
+const DAY_MS_G = 24 * 60 * 60 * 1000;
+const DOW_VI = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
+
+/* Map: 0h của ngày -> số bài được AC LẦN ĐẦU trong ngày đó */
+function acPerDay(subs) {
+  const first = new Map();
+  subs.forEach((x) => {
+    if (x.verdict !== "AC") return;
+    const t = new Date(x.createdAt || 0).getTime();
+    const cur = first.get(x.problemId);
+    if (cur === undefined || t < cur) first.set(x.problemId, t);
+  });
+  const m = new Map();
+  first.forEach((t) => { const k = new Date(t).setHours(0, 0, 0, 0); m.set(k, (m.get(k) || 0) + 1); });
+  return m;
+}
+
+/* Chuỗi ngày liên tiếp đạt mục tiêu; hôm nay chưa đạt thì chuỗi vẫn còn nếu hôm qua đạt */
+function goalStreak(m) {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  if ((m.get(d.getTime()) || 0) < WEEKLY_GOAL_DEFAULT) d.setDate(d.getDate() - 1);
+  let n = 0;
+  while ((m.get(d.getTime()) || 0) >= WEEKLY_GOAL_DEFAULT) { n += 1; d.setDate(d.getDate() - 1); }
+  return n;
+}
+
+function bestGoalStreak(m) {
+  const days = [...m.entries()].filter(([, c]) => c >= WEEKLY_GOAL_DEFAULT).map(([k]) => k).sort((a, b) => a - b);
+  let best = 0, run = 0, prev = null;
+  days.forEach((k) => {
+    if (prev !== null) { const nx = new Date(prev); nx.setDate(nx.getDate() + 1); run = nx.getTime() === k ? run + 1 : 1; } else run = 1;
+    best = Math.max(best, run); prev = k;
+  });
+  return best;
+}
+
+function lastDaysCounts(m, n = 7) {
+  const out = [];
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const x = new Date(d); x.setDate(x.getDate() - i);
+    out.push({ key: x.getTime(), dow: DOW_VI[x.getDay()], label: `${String(x.getDate()).padStart(2, "0")}/${String(x.getMonth() + 1).padStart(2, "0")}`, count: m.get(x.getTime()) || 0, today: i === 0 });
+  }
+  return out;
+}
+
+function computeBadges(m, totalAc) {
+  const maxDay = Math.max(0, ...m.values());
+  const best = bestGoalStreak(m);
+  return [
+    { id: "first", icon: <CheckCircle2 size={20} />, name: "AC đầu tiên", hint: "Giải đúng bài đầu tiên", earned: totalAc >= 1, tone: "blue" },
+    { id: "goal", icon: <Target size={20} />, name: "Đạt mục tiêu", hint: `AC ${WEEKLY_GOAL_DEFAULT} bài trong một ngày`, earned: maxDay >= WEEKLY_GOAL_DEFAULT, tone: "green" },
+    { id: "chal", icon: <Flame size={20} />, name: "Vượt thử thách", hint: `AC ${WEEKLY_GOAL_DEFAULT + CHALLENGE_STEP} bài trong một ngày`, earned: maxDay >= WEEKLY_GOAL_DEFAULT + CHALLENGE_STEP, tone: "red" },
+    { id: "super", icon: <Trophy size={20} />, name: "Siêu năng suất", hint: `AC ${WEEKLY_GOAL_DEFAULT + 2 * CHALLENGE_STEP} bài trong một ngày`, earned: maxDay >= WEEKLY_GOAL_DEFAULT + 2 * CHALLENGE_STEP, tone: "gold" },
+    { id: "s3", icon: <Award size={20} />, name: "3 ngày liên tiếp", hint: "Đạt mục tiêu 3 ngày liền", earned: best >= 3, tone: "green" },
+    { id: "s7", icon: <Award size={20} />, name: "7 ngày liên tiếp", hint: "Đạt mục tiêu 7 ngày liền", earned: best >= 7, tone: "gold" },
+    { id: "a10", icon: <Code2 size={20} />, name: "10 bài AC", hint: "Tổng cộng 10 bài đã giải", earned: totalAc >= 10, tone: "blue" },
+    { id: "a30", icon: <Code2 size={20} />, name: "30 bài AC", hint: "Tổng cộng 30 bài đã giải", earned: totalAc >= 30, tone: "gold" },
+  ];
+}
+
+function BadgeShelf({ badges }) {
+  const got = badges.filter((b) => b.earned).length;
+  return (
+    <OvPanel eyebrow="Thành tích" title={`Huy hiệu của em · ${got}/${badges.length}`}>
+      <div className="nb-badges">
+        {badges.map((b) => (
+          <div key={b.id} className={`nb-badge ${b.tone} ${b.earned ? "earned" : "locked"}`} title={b.hint}>
+            <span className="nb-badge-icon">{b.earned ? b.icon : <Lock size={18} />}</span>
+            <strong>{b.name}</strong>
+            <small>{b.earned ? "Đã đạt" : b.hint}</small>
+          </div>))}
+      </div>
+    </OvPanel>
+  );
+}
+
+function GoalStrip({ days }) {
+  return (
+    <div className="nb-goal-strip" aria-label="7 ngày gần nhất">
+      {days.map((d) => (
+        <span key={d.key} className={`nb-gs ${d.count >= WEEKLY_GOAL_DEFAULT ? "ok" : d.count > 0 ? "part" : d.today ? "wait" : "none"} ${d.today ? "today" : ""}`} title={`${d.dow} ${d.label}: ${d.count} bài`}>
+          <em>{d.dow}</em><b>{d.count >= WEEKLY_GOAL_DEFAULT ? <CheckCircle2 size={14} /> : d.count || "·"}</b>
+        </span>))}
+    </div>
+  );
+}
+
+function TeacherGoalTable({ students, subsByStudent, onNavigate }) {
+  const [filter, setFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("attention");
+  const [showAll, setShowAll] = useState(false);
+  const rows = useMemo(() => students.map((st) => {
+    const m = acPerDay(subsByStudent.get(st.id) || []);
+    const days = lastDaysCounts(m, 7);
+    return { student: st, days, today: days[days.length - 1].count, streak: goalStreak(m), reached: days.filter((d) => d.count >= WEEKLY_GOAL_DEFAULT).length };
+  }), [students, subsByStudent]);
+  const reachedToday = rows.filter((r) => r.today >= WEEKLY_GOAL_DEFAULT).length;
+  const filtered = rows.filter((r) => filter === "all" ? true : filter === "done" ? r.today >= WEEKLY_GOAL_DEFAULT : filter === "partial" ? r.today > 0 && r.today < WEEKLY_GOAL_DEFAULT : r.today === 0)
+    .sort((a, b) => sortBy === "streak" ? (b.streak - a.streak) || (b.reached - a.reached) : (a.today - b.today) || (a.reached - b.reached) || (a.student.name || "").localeCompare(b.student.name || "", "vi"));
+  const shown = showAll ? filtered : filtered.slice(0, 10);
+  const header = rows[0]?.days || [];
+
+  function exportCsv() {
+    const head = ["Học sinh", ...header.map((d) => `${d.dow} ${d.label}`), "Ngày đạt (7 ngày)", "Chuỗi hiện tại"];
+    const body = filtered.map((r) => [r.student.name, ...r.days.map((d) => d.count), r.reached, r.streak]);
+    const csv = [head, ...body].map((line) => line.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `muc-tieu-ngay-${new Date().toISOString().slice(0, 10)}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  return (
+    <section className="nb-ov-panel nb-gt">
+      <header>
+        <div><span className="nb-ov-eyebrow">Mục tiêu ngày · 7 ngày gần nhất</span><h2>Đạt {WEEKLY_GOAL_DEFAULT} bài AC hôm nay: {reachedToday}/{students.length} em</h2></div>
+        <button className="nb-link-button" onClick={exportCsv}><Save size={14} /> Xuất CSV</button>
+      </header>
+      {students.length === 0 ? <OvEmpty icon={<Users size={22} />} title="Chưa có học sinh" text="Dữ liệu hiện khi lớp có học sinh." /> : (
+        <>
+          <div className="nb-gt-tools">
+            <div className="nb-filter-row" style={{ margin: 0 }}>
+              {[["all", "Tất cả"], ["done", "Đã đạt hôm nay"], ["partial", "Đang làm"], ["none", "Chưa làm hôm nay"]].map(([k, l]) => <button key={k} className={`nb-chip ${filter === k ? "active" : ""}`} onClick={() => { setFilter(k); setShowAll(false); }}>{l}</button>)}
+            </div>
+            <select className="nb-input nb-gt-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp">
+              <option value="attention">Cần nhắc trước</option>
+              <option value="streak">Chuỗi cao nhất</option>
+            </select>
+          </div>
+          <div className="nb-gt-scroll">
+            <table className="nb-gt-table">
+              <thead><tr><th>Học sinh</th>{header.map((d) => <th key={d.key} className={d.today ? "today" : ""}>{d.dow}<small>{d.label}</small></th>)}<th>Chuỗi</th></tr></thead>
+              <tbody>
+                {shown.map((r) => (
+                  <tr key={r.student.id}>
+                    <td><div className="nb-gt-name"><Avatar name={r.student.name} size={26} /><span>{r.student.name}</span></div></td>
+                    {r.days.map((d) => <td key={d.key} className={d.today ? "today" : ""}><span className={`nb-gt-cell ${d.count >= WEEKLY_GOAL_DEFAULT ? "ok" : d.count > 0 ? "part" : "none"}`}>{d.count > 0 ? d.count : "–"}</span></td>)}
+                    <td><span className={`nb-gt-streak ${r.streak > 0 ? "on" : ""}`}><Flame size={12} /> {r.streak}</span></td>
+                  </tr>))}
+                {shown.length === 0 && <tr><td colSpan={9} className="nb-gt-empty">Không có học sinh nào trong mục này.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="nb-gt-foot">
+            <span><i className="nb-gt-cell ok">{WEEKLY_GOAL_DEFAULT}</i> đạt mục tiêu <i className="nb-gt-cell part">2</i> làm một phần <i className="nb-gt-cell none">–</i> chưa làm</span>
+            {filtered.length > 10 && <button className="nb-link-button" onClick={() => setShowAll((v) => !v)}>{showAll ? "Thu gọn" : `Xem tất cả ${filtered.length} em`}</button>}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 /* Số bài LẦN ĐẦU được AC kể từ mốc `weekStart` (ở đây là 0h hôm nay) */
 function newAcThisWeek(subs, weekStart) {
   const first = new Map();
@@ -1770,7 +1925,7 @@ function newAcThisWeek(subs, weekStart) {
   return n;
 }
 
-function WeeklyGoalCard({ solvedWeek, solvedTotal, remainingProblems, onGo }) {
+function WeeklyGoalCard({ solvedWeek, solvedTotal, remainingProblems, onGo, days, streak }) {
   const goal = WEEKLY_GOAL_DEFAULT;
   const hour = new Date().getHours();
   const reached = solvedWeek >= goal;
@@ -1818,6 +1973,7 @@ function WeeklyGoalCard({ solvedWeek, solvedTotal, remainingProblems, onGo }) {
           {Array.from({ length: segTotal }, (_, i) => <i key={i} className={i < segDone ? "on" : ""} />)}
           <b>{segDone}/{segTotal}{reached ? ` · Thử thách ${challengesDone + 1}` : ""}</b>
         </div>
+        {days && <div className="nb-goal-strip-wrap"><GoalStrip days={days} /><span className="nb-goal-streak"><Flame size={14} /> <b>{streak}</b> ngày liên tiếp đạt mục tiêu</span></div>}
         {nextMilestone && <div className="nb-goal-foot"><span><Award size={13} /> Mốc tiếp theo: {nextMilestone} bài AC (còn {nextMilestone - solvedTotal})</span></div>}
       </div>
       <button className="nb-btn nb-btn-primary" onClick={() => onGo?.()}>
@@ -1844,6 +2000,10 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     const bestRecent = mine.find((submission) => submission.verdict === "AC");
     const todayStart = new Date().setHours(0, 0, 0, 0);
     const solvedWeek = newAcThisWeek(mine, todayStart); /* số bài AC lần đầu trong hôm nay */
+    const dayMap = acPerDay(mine);
+    const streak = goalStreak(dayMap);
+    const weekDays = lastDaysCounts(dayMap, 7);
+    const badges = computeBadges(dayMap, solved);
 
     return (
       <div className="nb-ov">
@@ -1852,7 +2012,7 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
           <div className="nb-ov-head-text"><span className="nb-ov-date">{todayLabel}</span><h1>{greetingByHour()}, {currentUser.name}</h1><p>Mỗi ngày một bài, em sẽ tiến bộ thấy rõ.</p></div>
           <div className="nb-ov-head-chips">
             <span className="nb-ov-chip gold"><Award size={14} /> Hạng {rank > 0 ? `#${rank}` : "—"}</span>
-            <span className="nb-ov-chip red"><Flame size={14} /> {currentUser.streak || 0} ngày liên tục</span>
+            <span className="nb-ov-chip red"><Flame size={14} /> {streak} ngày đạt mục tiêu</span>
           </div>
         </header>
 
@@ -1870,14 +2030,16 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
           </section>
         )}
 
-        <WeeklyGoalCard solvedWeek={solvedWeek} solvedTotal={solved} remainingProblems={remaining} onGo={() => onNavigate?.("problems")} />
+        <WeeklyGoalCard solvedWeek={solvedWeek} solvedTotal={solved} remainingProblems={remaining} days={weekDays} streak={streak} onGo={() => onNavigate?.("problems")} />
 
         <div className="nb-ov-kpis">
           <OvKpi label="Tổng điểm" value={points(currentUser.id)} sub="điểm tích lũy" tone="teal" />
           <OvKpi label="Xếp hạng lớp" value={rank > 0 ? `#${rank}` : "—"} sub={`trên ${students.length} học sinh`} tone="gold" />
           <OvKpi label="Bài đã giải" value={`${solved}/${problemsCount}`} sub="trong ngân hàng bài" ring={progress} tone="green" />
-          <OvKpi label="Chuỗi ngày học" value={currentUser.streak || 0} sub="ngày liên tục" tone="rose" />
+          <OvKpi label="Chuỗi ngày học" value={streak} sub="ngày liền đạt mục tiêu" tone="rose" />
         </div>
+
+        <BadgeShelf badges={badges} />
 
         <div className="nb-ov-grid two">
           <OvPanel eyebrow="Nhật ký học tập" title="Hoạt động gần đây" action="Xem bài tập" onAction={() => onNavigate?.("problems")}>
@@ -1943,9 +2105,6 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
     return { problem, attempts: list.length, ac, rate: list.length ? Math.round((ac / list.length) * 100) : 0 };
   }).filter((x) => x.attempts >= 3).sort((a, b) => (a.rate - b.rate) || (b.attempts - a.attempts)).slice(0, 4);
   const nameById = new Map(students.map((st) => [st.id, st.name]));
-  const weekStartT = new Date().setHours(0, 0, 0, 0);
-  const goalRows = students.map((st) => ({ student: st, n: newAcThisWeek(byStudentSubs.get(st.id) || [], weekStartT) })).sort((x, y) => (x.n - y.n));
-  const goalReached = goalRows.filter((x) => x.n >= WEEKLY_GOAL_DEFAULT);
   const recent = submissions.slice().sort(byTimeDesc).slice(0, 7);
 
   const todo = [];
@@ -1995,22 +2154,6 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
                 </li>))}</ul>
             </OvPanel>
           )}
-          <OvPanel eyebrow="Mục tiêu hôm nay" title={`Đạt ${WEEKLY_GOAL_DEFAULT} bài AC: ${goalReached.length}/${students.length} em`}>
-            {students.length === 0 ? <OvEmpty icon={<Users size={22} />} title="Chưa có học sinh" text="Dữ liệu hiện khi lớp có học sinh." /> : (
-              <>
-                <i className="nb-ov-meter"><b style={{ width: `${Math.round((goalReached.length / students.length) * 100)}%` }} /></i>
-                <ul className="nb-ov-list" style={{ marginTop: 10 }}>
-                  {goalRows.slice(0, 5).map(({ student, n }) => (
-                    <li key={student.id}>
-                      <Avatar name={student.name} size={30} />
-                      <div><strong>{student.name}</strong><small>{n >= WEEKLY_GOAL_DEFAULT ? "Đã đạt mục tiêu" : n === 0 ? "Hôm nay chưa giải bài nào" : `Còn thiếu ${WEEKLY_GOAL_DEFAULT - n} bài`}</small></div>
-                      <span className={`nb-ov-tag ${n >= WEEKLY_GOAL_DEFAULT ? "ok" : n === 0 ? "risk" : ""}`}>{n}/{WEEKLY_GOAL_DEFAULT}</span>
-                    </li>))}
-                  {goalRows.length > 5 && <li className="more">và {goalRows.length - 5} học sinh khác</li>}
-                </ul>
-              </>
-            )}
-          </OvPanel>
           <OvPanel eyebrow="Theo dõi cá nhân" title="Học sinh cần hỗ trợ" action="Xem lớp" onAction={() => onNavigate?.("leaderboard")}>
             {inactive.length === 0 ? <OvEmpty icon={<CheckCircle2 size={22} />} title="Cả lớp đều hoạt động" text="Không ai quá 14 ngày chưa nộp bài." /> : (
               <ul className="nb-ov-list">{inactive.slice(0, 5).map(({ student, last }) => (
@@ -2024,6 +2167,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
           </OvPanel>
         </div>
       </div>
+
+      <TeacherGoalTable students={students} subsByStudent={byStudentSubs} onNavigate={onNavigate} />
 
       <div className="nb-ov-grid three">
         <OvPanel eyebrow="Phân tích bài tập" title="Bài có tỷ lệ đúng thấp" action="Mở kho bài" onAction={() => onNavigate?.("problems")}>
@@ -5739,6 +5884,39 @@ function App() {
         .nb-goal > .nb-btn { flex: none; }
         .nb-ov-tag.ok { background: #d9f3e7; color: #137a52; }
         @media (max-width: 760px) { .nb-goal { flex-wrap: wrap; padding: 16px; } .nb-goal > .nb-btn { width: 100%; justify-content: center; } .nb-goal-steps i { width: 22px; } }
+        .nb-goal-strip-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; }
+        .nb-goal-strip { display: flex; gap: 6px; }
+        .nb-gs { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+        .nb-gs em { font-style: normal; font-size: 10.5px; font-weight: 700; color: #8795a8; }
+        .nb-gs b { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-size: 12.5px; font-weight: 800; background: #eef1f6; color: #9aa6b8; }
+        .nb-gs.ok b { background: #1f9d6b; color: #fff; } .nb-gs.part b { background: #fdeccb; color: #b9770e; }
+        .nb-gs.today b { box-shadow: 0 0 0 2px #fff, 0 0 0 4px #2f6fed; } .nb-gs.today em { color: #2f6fed; }
+        .nb-goal-streak { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: #52606d; } .nb-goal-streak svg { color: #e5603c; } .nb-goal-streak b { font-size: 16px; color: #102a43; }
+        .nb-badges { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+        .nb-badge { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 14px 10px; border-radius: 14px; border: 1px solid #e6ebf2; background: #fff; }
+        .nb-badge strong { font-size: 13px; color: #102a43; } .nb-badge small { font-size: 11.5px; color: #7b8aa0; line-height: 1.35; }
+        .nb-badge-icon { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: #e8f0ff; color: #2f6fed; margin-bottom: 2px; }
+        .nb-badge.green .nb-badge-icon { background: #d9f3e7; color: #1f9d6b; } .nb-badge.red .nb-badge-icon { background: #ffe5dc; color: #d2491f; } .nb-badge.gold .nb-badge-icon { background: #fdf1d6; color: #b9770e; }
+        .nb-badge.earned { box-shadow: 0 4px 14px rgba(16,42,67,.07); }
+        .nb-badge.earned small { color: #1f9d6b; font-weight: 700; }
+        .nb-badge.locked { background: #f7f9fc; } .nb-badge.locked strong { color: #8795a8; } .nb-badge.locked .nb-badge-icon { background: #eceff4; color: #a7b2c3; }
+        .nb-gt { display: flex; flex-direction: column; gap: 12px; }
+        .nb-gt > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+        .nb-gt > header h2 { margin: 4px 0 0; font-size: 18px; }
+        .nb-gt-tools { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .nb-gt .nb-gt-sort { width: auto; flex: none; padding: 6px 10px; font-size: 13px; }
+        .nb-gt-scroll { overflow-x: auto; }
+        .nb-gt-table { width: 100%; border-collapse: collapse; min-width: 640px; }
+        .nb-gt-table th { font-size: 11.5px; color: #7b8aa0; font-weight: 700; text-align: center; padding: 6px 4px; border-bottom: 1px solid #e6ebf2; } .nb-gt-table th:first-child { text-align: left; }
+        .nb-gt-table th small { display: block; font-weight: 500; font-size: 10.5px; color: #a0abbb; } .nb-gt-table th.today { color: #2f6fed; }
+        .nb-gt-table td { padding: 6px 4px; text-align: center; border-bottom: 1px solid #f0f3f8; } .nb-gt-table td.today { background: #f3f7ff; }
+        .nb-gt-name { display: flex; align-items: center; gap: 9px; text-align: left; font-size: 13.5px; font-weight: 600; color: #102a43; } .nb-gt-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
+        .nb-gt-cell { display: inline-grid; place-items: center; width: 30px; height: 28px; border-radius: 8px; font-size: 12.5px; font-weight: 800; font-style: normal; background: #f0f3f8; color: #a0abbb; }
+        .nb-gt-cell.ok { background: #1f9d6b; color: #fff; } .nb-gt-cell.part { background: #fdeccb; color: #b9770e; }
+        .nb-gt-streak { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 800; color: #a0abbb; } .nb-gt-streak.on { color: #d2491f; }
+        .nb-gt-empty { color: #7b8aa0; font-size: 13px; padding: 18px 0 !important; }
+        .nb-gt-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #7b8aa0; } .nb-gt-foot > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; } .nb-gt-foot .nb-gt-cell { width: 24px; height: 22px; font-size: 11px; margin-left: 6px; }
+        @media (max-width: 900px) { .nb-badges { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         .nb-ov-grid.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
         .nb-ov-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .nb-ov-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
