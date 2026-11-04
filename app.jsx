@@ -2476,6 +2476,134 @@ function LessonsView({ isTeacher, currentUser, topics, progress, onProgressChang
   );
 }
 
+/* ======================= THỐNG KÊ AC THEO BÀI (cả lớp) ======================= */
+function downloadCsv(filename, rows) {
+  const csv = rows.map((line) => line.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* Map: problemId -> { ac: Set<studentId>, tried: Set<studentId>, attempts } — chỉ tính học sinh đang có trong lớp */
+function buildClassSolveStats(submissions, students) {
+  const ids = new Set(students.map((st) => st.id));
+  const map = new Map();
+  submissions.forEach((sub) => {
+    if (!ids.has(sub.studentId)) return;
+    let e = map.get(sub.problemId);
+    if (!e) { e = { ac: new Set(), tried: new Set(), attempts: 0 }; map.set(sub.problemId, e); }
+    e.tried.add(sub.studentId);
+    e.attempts += 1;
+    if (sub.verdict === "AC") e.ac.add(sub.studentId);
+  });
+  return map;
+}
+
+function ClassSolveBar({ st, total, clickable, unit = "em", onOpen }) {
+  if (!total) return null;
+  const ac = st?.ac.size || 0;
+  const tried = st?.tried.size || 0;
+  const pct = Math.round((ac / total) * 100);
+  const hard = tried >= 3 && ac / tried <= 0.34;
+  const tone = ac === 0 ? "none" : pct >= 60 ? "high" : pct >= 30 ? "mid" : "low";
+  const body = (
+    <>
+      <span className="nb-solve-track" aria-hidden="true"><b style={{ width: `${pct}%` }} /></span>
+      <span className="nb-solve-text"><CheckCircle2 size={13} /><b>{ac}/{total}</b> {unit} đã AC{ac === 0 && tried > 0 ? " · chưa ai giải được" : ""}</span>
+      {clickable && hard && <span className="nb-solve-flag">Cần xem lại</span>}
+      {clickable && <ChevronRight size={13} className="nb-solve-go" />}
+    </>
+  );
+  return clickable
+    ? <button type="button" className={`nb-solve ${tone}`} onClick={(e) => { e.stopPropagation(); onOpen(); }} title="Xem danh sách em đã AC / chưa AC / chưa làm">{body}</button>
+    : <div className={`nb-solve ${tone}`} title={`${pct}% lớp đã giải được bài này`}>{body}</div>;
+}
+
+/* Giáo viên: ai đã AC, ai đã thử nhưng chưa AC, ai chưa làm bài này */
+function ProblemClassModal({ problem, students, submissions, onClose }) {
+  const [tab, setTab] = useState("ac");
+  const data = useMemo(() => {
+    const byStudent = new Map();
+    submissions.filter((x) => x.problemId === problem.id).forEach((x) => {
+      if (!byStudent.has(x.studentId)) byStudent.set(x.studentId, []);
+      byStudent.get(x.studentId).push(x);
+    });
+    const rows = students.map((st) => {
+      const subs = (byStudent.get(st.id) || []).sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+      const firstAcIdx = subs.findIndex((x) => x.verdict === "AC");
+      const best = subs.reduce((m, x) => Math.max(m, Number(x.score ?? 0)), 0);
+      return {
+        student: st, attempts: subs.length, best,
+        status: subs.length === 0 ? "none" : firstAcIdx >= 0 ? "ac" : "tried",
+        acAt: firstAcIdx >= 0 ? subs[firstAcIdx].createdAt : null,
+        triesToAc: firstAcIdx >= 0 ? firstAcIdx + 1 : null,
+        lastAt: subs.length ? subs[subs.length - 1].createdAt : null,
+      };
+    });
+    const ac = rows.filter((r) => r.status === "ac").sort((a, b) => new Date(a.acAt || 0) - new Date(b.acAt || 0));
+    const tried = rows.filter((r) => r.status === "tried").sort((a, b) => b.attempts - a.attempts);
+    const none = rows.filter((r) => r.status === "none").sort((a, b) => (a.student.name || "").localeCompare(b.student.name || "", "vi"));
+    const fastest = ac.length ? [...ac].sort((a, b) => (a.triesToAc - b.triesToAc) || (new Date(a.acAt || 0) - new Date(b.acAt || 0)))[0] : null;
+    return { ac, tried, none, first: ac[0] || null, fastest, rows };
+  }, [problem.id, students, submissions]);
+
+  const total = students.length;
+  const pct = total ? Math.round((data.ac.length / total) * 100) : 0;
+  const list = tab === "ac" ? data.ac : tab === "tried" ? data.tried : data.none;
+
+  function exportCsv() {
+    const label = { ac: "Đã AC", tried: "Đã thử, chưa AC", none: "Chưa làm" };
+    const body = [...data.ac, ...data.tried, ...data.none].map((r) => [r.student.name, r.student.username || "", label[r.status], r.attempts, r.best, r.acAt ? formatSubmissionDate(r.acAt) : "", r.triesToAc || ""]);
+    downloadCsv(`ai-da-ac-${problem.id}.csv`, [["Học sinh", "Tài khoản", "Trạng thái", "Số lần nộp", "Điểm cao nhất", "AC lần đầu lúc", "AC ở lần nộp thứ"], ...body]);
+  }
+
+  return (
+    <div className="nb-modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={`Thống kê AC — ${problem.title}`}>
+      <div className="nb-modal nb-cls-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="nb-modal-head">
+          <div><div className="nb-eyebrow">Ai đã giải được bài này?</div><h3 className="nb-h3">{problem.title}</h3></div>
+          <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
+        </div>
+        <div className="nb-cls-summary">
+          <div className="nb-cls-ring" style={{ "--p": `${pct * 3.6}deg` }}><span><b>{pct}%</b>lớp đã AC</span></div>
+          <div className="nb-cls-stats">
+            <div className="ac"><b>{data.ac.length}</b><span>đã AC</span></div>
+            <div className="tried"><b>{data.tried.length}</b><span>đã thử, chưa AC</span></div>
+            <div className="none"><b>{data.none.length}</b><span>chưa làm</span></div>
+          </div>
+        </div>
+        {data.first && (
+          <div className="nb-cls-highlights">
+            <div><Trophy size={15} /> <span>AC đầu tiên</span><b>{data.first.student.name}</b><small>{formatSubmissionDate(data.first.acAt)}</small></div>
+            <div><Target size={15} /> <span>Ít lần nộp nhất</span><b>{data.fastest.student.name}</b><small>AC ở lần nộp thứ {data.fastest.triesToAc}</small></div>
+          </div>
+        )}
+        <div className="nb-cls-tabs">
+          {[["ac", "Đã AC", data.ac.length], ["tried", "Đã thử, chưa AC", data.tried.length], ["none", "Chưa làm", data.none.length]].map(([k, l, n]) => (
+            <button key={k} type="button" className={`${tab === k ? "on" : ""} ${k}`} onClick={() => setTab(k)}>{l} <i>{n}</i></button>))}
+        </div>
+        <div className="nb-cls-list">
+          {list.length === 0 && <p className="nb-sub" style={{ padding: 14 }}>Không có học sinh nào trong nhóm này.</p>}
+          {list.map((r, i) => (
+            <div className="nb-cls-row" key={r.student.id}>
+              <Avatar name={r.student.name} size={30} />
+              <div className="nb-cls-name"><strong>{r.student.name}</strong><small>{r.student.username ? `@${r.student.username}` : ""}</small></div>
+              {r.status === "ac" && <div className="nb-cls-detail">{tab === "ac" && i === 0 && <span className="nb-cls-first"><Trophy size={11} /> Đầu tiên</span>}<span>AC lần nộp thứ <b>{r.triesToAc}</b></span><small>{formatSubmissionDate(r.acAt)}</small></div>}
+              {r.status === "tried" && <div className="nb-cls-detail"><span><b>{r.attempts}</b> lần nộp · cao nhất {r.best}đ</span><small>Gần nhất {formatSubmissionDate(r.lastAt)}</small></div>}
+              {r.status === "none" && <div className="nb-cls-detail"><small>Chưa nộp lần nào</small></div>}
+            </div>))}
+        </div>
+        <div className="nb-modal-actions" style={{ justifyContent: "space-between" }}>
+          <button className="nb-btn nb-btn-ghost" onClick={exportCsv}><Save size={14} /> Xuất CSV</button>
+          <button className="nb-btn nb-btn-ghost" onClick={onClose}>Đóng</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics, students }) {
   const [languageFilter, setLanguageFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState("all");
@@ -2483,6 +2611,10 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [active, setActive] = useState(null);
   const fbList = useContext(FeedbackContext).list;
   const [reviewProblem, setReviewProblem] = useState(null);
+  const [classProblem, setClassProblem] = useState(null);
+  const [sortBy, setSortBy] = useState("default");
+  const [classFilter, setClassFilter] = useState("all");
+  const classStats = useMemo(() => buildClassSolveStats(submissions, students || []), [submissions, students]);
   useEffect(() => {
     // Học sinh bấm vào thông báo nhận xét ở Tổng quan -> mở sẵn bài đó
     if (!pendingProblemOpenId || problems.length === 0) return;
@@ -2540,8 +2672,19 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       || (progressFilter === "done" && solved);
     const topic = topicById.get(problem.topic);
     const searchText = `${problem.id} ${problem.title} ${topic?.title || ""} ${topic?.code || ""}`.toLocaleLowerCase("vi-VN");
-    return languageMatches && progressMatches && (!query.trim() || searchText.includes(query.trim().toLocaleLowerCase("vi-VN")));
-  }), [problems, languageFilter, progressFilter, query, topicById, currentSubmissions, solvedByCurrent]);
+    const cs = classStats.get(problem.id);
+    const acN = cs?.ac.size || 0;
+    const triedN = cs?.tried.size || 0;
+    const classMatches = classFilter === "all"
+      || (classFilter === "noac" && acN === 0)
+      || (classFilter === "review" && triedN >= 3 && acN / triedN <= 0.34);
+    return languageMatches && progressMatches && classMatches && (!query.trim() || searchText.includes(query.trim().toLocaleLowerCase("vi-VN")));
+  }).sort((a, b) => {
+    if (sortBy === "default") return 0;
+    const ca = classStats.get(a.id)?.ac.size || 0;
+    const cb = classStats.get(b.id)?.ac.size || 0;
+    return sortBy === "most" ? cb - ca : ca - cb;
+  }), [problems, languageFilter, progressFilter, query, topicById, currentSubmissions, solvedByCurrent, classStats, classFilter, sortBy]);
 
   const practiceGroups = useMemo(() => {
     const groups = topics.map((topic) => ({
@@ -2635,8 +2778,9 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
             <span>{language.label}</span><i />
             <span>{problem.points} điểm</span><i />
             <span>{getProblemTestCases(problem).length} test</span>
-            {isTeacher ? <><i /><span>{teacherStats.attempts} lượt nộp · {teacherStats.solvedStudents} học sinh đạt</span></> : <><i /><span>{studentStats.attempts ? `${studentStats.attempts} lượt nộp` : "Chưa có lượt nộp"}</span></>}
+            {isTeacher ? <><i /><span>{teacherStats.attempts} lượt nộp</span></> : <><i /><span>{studentStats.attempts ? `${studentStats.attempts} lượt nộp` : "Chưa có lượt nộp"}</span></>}
           </div>
+          <ClassSolveBar st={classStats.get(problem.id)} total={(students || []).length} clickable={isTeacher} unit={isTeacher ? "em" : "bạn"} onOpen={() => setClassProblem(problem)} />
         </div>
         <div className="nb-practice-problem-score">
           <DifficultyTag level={problem.difficulty} />
@@ -2798,6 +2942,8 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       <div className="nb-practice-toolbar">
         <label className="nb-practice-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm bài, mã bài hoặc chuyên đề…" /></label>
         <div className="nb-practice-filter-stack"><span>Ngôn ngữ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['python', 'Python'], ['c', 'C'], ['cpp', 'C++']].map(([key, label]) => <button key={key} className={`nb-chip ${languageFilter === key ? "active" : ""}`} onClick={() => setLanguageFilter(key)}>{label}</button>)}</div></div>
+        {isTeacher && <div className="nb-practice-filter-stack"><span>Thống kê lớp</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['noac', 'Chưa ai AC'], ['review', 'Cần xem lại']].map(([key, label]) => <button key={key} className={`nb-chip ${classFilter === key ? "active" : ""}`} onClick={() => setClassFilter(key)}>{label}</button>)}</div></div>}
+        <div className="nb-practice-filter-stack"><span>Sắp xếp</span><select className="nb-input nb-practice-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp bài"><option value="default">Mặc định</option><option value="most">Nhiều {isTeacher ? "em" : "bạn"} AC nhất</option><option value="least">Ít {isTeacher ? "em" : "bạn"} AC nhất</option></select></div>
         {!isTeacher && <div className="nb-practice-filter-stack"><span>Tiến độ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['todo', 'Chưa mở'], ['in-progress', 'Đang luyện'], ['done', 'Đã xong']].map(([key, label]) => <button key={key} className={`nb-chip ${progressFilter === key ? "active" : ""}`} onClick={() => setProgressFilter(key)}>{label}</button>)}</div></div>}
       </div>
 
@@ -2935,6 +3081,10 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           submissionHistory={currentSubmissions}
           onVerdict={(problemId, result, sourceCode) => onVerdict(problemId, result, sourceCode)}
         />
+      )}
+
+      {classProblem && isTeacher && (
+        <ProblemClassModal problem={classProblem} students={students || []} submissions={submissions} onClose={() => setClassProblem(null)} />
       )}
 
       {reviewProblem && (
@@ -6468,6 +6618,35 @@ function App() {
         .nb-nav-dot { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #e5603c; color: #fff; font-size: 11px; font-weight: 800; display: inline-grid; place-items: center; font-style: normal; }
         .nb-bottom-nav-item { position: relative; } .nb-nav-dot.small { position: absolute; top: 2px; right: 18%; min-width: 16px; height: 16px; font-size: 10px; padding: 0 4px; margin: 0; }
         @media (max-width: 760px) { .nb-fbi { padding: 14px; } .nb-fbi li button { grid-template-columns: minmax(0, 1fr) auto; } .nb-fbi-text { display: none; } .nb-fbi-time { grid-column: 1; } }
+        /* ===== Thống kê AC theo bài ===== */
+        .nb-solve { display: flex; align-items: center; gap: 9px; margin-top: 7px; padding: 0; border: 0; background: none; font-family: inherit; text-align: left; max-width: 100%; }
+        button.nb-solve { cursor: pointer; padding: 4px 8px 4px 6px; margin-left: -6px; border-radius: 8px; } button.nb-solve:hover { background: rgba(47,111,237,.07); }
+        .nb-solve-track { flex: none; width: 96px; height: 7px; border-radius: 999px; background: #e6ebf2; overflow: hidden; } .nb-solve-track b { display: block; height: 100%; border-radius: 999px; background: #2f6fed; }
+        .nb-solve.high .nb-solve-track b { background: #1f9d6b; } .nb-solve.mid .nb-solve-track b { background: #2f6fed; } .nb-solve.low .nb-solve-track b { background: #e5762c; } .nb-solve.none .nb-solve-track b { background: #c4cedd; }
+        .nb-solve-text { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #52606d; white-space: nowrap; } .nb-solve-text svg { color: #1f9d6b; } .nb-solve.none .nb-solve-text svg { color: #a3afc0; } .nb-solve-text b { color: #102a43; font-family: var(--code-font, monospace); }
+        .nb-solve-flag { padding: 1px 8px; border-radius: 999px; background: #fff0d6; color: #a05a08; font-size: 11px; font-weight: 800; white-space: nowrap; }
+        .nb-solve-go { color: #8795a8; }
+        .nb-practice-sort { width: auto; min-width: 150px; padding: 6px 10px; font-size: 13px; }
+        .nb-cls-modal { max-width: 640px; }
+        .nb-cls-summary { display: flex; align-items: center; gap: 22px; padding: 18px 22px 6px; }
+        .nb-cls-ring { flex: none; width: 92px; height: 92px; border-radius: 50%; background: conic-gradient(#1f9d6b var(--p), #e6ebf2 0); display: grid; place-items: center; }
+        .nb-cls-ring span { width: 74px; height: 74px; border-radius: 50%; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10.5px; color: #7b8aa0; line-height: 1.2; } .nb-cls-ring b { font-size: 21px; color: #102a43; }
+        .nb-cls-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; flex: 1; }
+        .nb-cls-stats > div { padding: 10px 12px; border-radius: 12px; background: #f4f6fa; display: flex; flex-direction: column; } .nb-cls-stats b { font-size: 24px; color: #102a43; } .nb-cls-stats span { font-size: 12px; color: #66748a; }
+        .nb-cls-stats .ac { background: #e6f7ef; } .nb-cls-stats .ac b { color: #14804f; } .nb-cls-stats .tried { background: #fff4de; } .nb-cls-stats .tried b { color: #a05a08; }
+        .nb-cls-highlights { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 22px 0; }
+        .nb-cls-highlights > div { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; align-items: center; padding: 10px 12px; border-radius: 12px; background: linear-gradient(100deg, #fff7e3, #fff); border: 1px solid #f0dcae; } .nb-cls-highlights svg { color: #c47f00; grid-row: span 3; }
+        .nb-cls-highlights span { font-size: 11.5px; color: #8a7a55; } .nb-cls-highlights b { font-size: 14px; color: #102a43; } .nb-cls-highlights small { font-size: 11.5px; color: #8a7a55; }
+        .nb-cls-tabs { display: flex; gap: 6px; padding: 14px 22px 0; flex-wrap: wrap; }
+        .nb-cls-tabs button { border: 1px solid #dde3ec; background: #fff; border-radius: 999px; padding: 5px 12px; font: 700 12.5px inherit; font-family: inherit; color: #66748a; cursor: pointer; } .nb-cls-tabs button i { font-style: normal; margin-left: 4px; padding: 0 6px; border-radius: 999px; background: #eef1f6; color: #52606d; font-size: 11.5px; }
+        .nb-cls-tabs button.on { color: #fff; border-color: transparent; } .nb-cls-tabs button.on.ac { background: #1f9d6b; } .nb-cls-tabs button.on.tried { background: #d98a1d; } .nb-cls-tabs button.on.none { background: #66748a; } .nb-cls-tabs button.on i { background: rgba(255,255,255,.25); color: #fff; }
+        .nb-cls-list { margin: 10px 22px 0; border: 1px solid #e6ebf2; border-radius: 12px; max-height: 320px; overflow-y: auto; }
+        .nb-cls-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid #f0f3f8; } .nb-cls-row:last-child { border-bottom: 0; }
+        .nb-cls-name { display: flex; flex-direction: column; min-width: 0; flex: 1; } .nb-cls-name strong { font-size: 13.5px; color: #102a43; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .nb-cls-name small { color: #8795a8; font-size: 11.5px; }
+        .nb-cls-detail { display: flex; flex-direction: column; align-items: flex-end; font-size: 12.5px; color: #52606d; text-align: right; } .nb-cls-detail small { color: #8795a8; font-size: 11.5px; }
+        .nb-cls-first { display: inline-flex; align-items: center; gap: 3px; padding: 1px 8px; border-radius: 999px; background: #fdecc0; color: #7a4b00; font-size: 11px; font-weight: 800; margin-bottom: 2px; }
+        .nb-cls-modal .nb-modal-actions { padding: 14px 22px 18px; }
+        @media (max-width: 760px) { .nb-cls-summary { flex-direction: column; align-items: stretch; padding: 14px 16px 4px; } .nb-cls-ring { align-self: center; } .nb-cls-highlights { grid-template-columns: 1fr; padding: 10px 16px 0; } .nb-cls-tabs, .nb-cls-modal .nb-modal-actions { padding-left: 16px; padding-right: 16px; } .nb-cls-list { margin: 10px 16px 0; } .nb-solve-track { width: 70px; } }
         .nb-ov-grid.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
         .nb-ov-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .nb-ov-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
