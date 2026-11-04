@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback, useReducer } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback, useReducer, useContext } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
@@ -560,6 +560,57 @@ async function dbAddSubmission(sub) {
     problem_title: sub.problemTitle, problem_points: sub.problemPoints,
     source_code: sub.sourceCode || null,
   });
+  if (error) throw error;
+}
+/* ---------- Nhận xét của giáo viên cho bài nộp (bảng submission_feedback, xem schema-feedback.sql) ---------- */
+const isMissingTableError = (error) => !!error && (error.code === "42P01" || error.code === "PGRST205" || error.status === 404 || /submission_feedback/i.test(String(error.message || "")) && /(does not exist|schema cache|could not find)/i.test(String(error.message || "")));
+function mapFeedback(row) {
+  return {
+    submissionId: row.submission_id, studentId: row.student_id, problemId: row.problem_id || "",
+    comment: row.comment || "", tags: Array.isArray(row.tags) ? row.tags : [],
+    lineNotes: Array.isArray(row.line_notes) ? row.line_notes.filter((n) => n && Number(n.line) > 0) : [],
+    fixedCode: row.fixed_code || "", author: row.author || "",
+    createdAt: row.created_at || null, updatedAt: row.updated_at || row.created_at || null, seenAt: row.seen_at || null,
+  };
+}
+// Trả về { missing: true } nếu chưa chạy SQL; ngược lại { row } (row = null nếu chưa có nhận xét)
+async function dbFetchFeedbackFor(submissionId) {
+  const { data, error } = await supabase.from("submission_feedback").select("*").eq("submission_id", submissionId).maybeSingle();
+  if (error) { if (isMissingTableError(error)) return { missing: true }; throw error; }
+  return { row: data ? mapFeedback(data) : null };
+}
+// Chỉ lấy id (rất nhẹ) để đánh dấu "đã nhận xét" trong danh sách của giáo viên
+async function dbFetchFeedbackIds({ problemId, studentId }) {
+  let q = supabase.from("submission_feedback").select("submission_id").limit(2000);
+  if (problemId) q = q.eq("problem_id", problemId);
+  if (studentId) q = q.eq("student_id", studentId);
+  const { data, error } = await q;
+  if (error) { if (isMissingTableError(error)) return null; throw error; }
+  return new Set((data || []).map((r) => r.submission_id));
+}
+async function dbFetchFeedbackForStudent(studentId) {
+  const { data, error } = await supabase.from("submission_feedback").select("*").eq("student_id", studentId).order("updated_at", { ascending: false }).limit(300);
+  if (error) { if (isMissingTableError(error)) return null; throw error; }
+  return (data || []).map(mapFeedback);
+}
+async function dbSaveFeedback(fb) {
+  const now = new Date().toISOString();
+  const row = {
+    submission_id: fb.submissionId, student_id: fb.studentId, problem_id: fb.problemId || null,
+    comment: fb.comment || "", tags: fb.tags || [], line_notes: fb.lineNotes || [],
+    fixed_code: fb.fixedCode || null, author: fb.author || null, updated_at: now, seen_at: null,
+  };
+  const { data, error } = await supabase.from("submission_feedback").upsert(row, { onConflict: "submission_id" }).select("*").maybeSingle();
+  if (error) throw error;
+  return data ? mapFeedback(data) : mapFeedback({ ...row, created_at: now });
+}
+async function dbDeleteFeedback(submissionId) {
+  const { error } = await supabase.from("submission_feedback").delete().eq("submission_id", submissionId);
+  if (error) throw error;
+}
+async function dbMarkFeedbackSeen(ids) {
+  if (!ids.length) return;
+  const { error } = await supabase.from("submission_feedback").update({ seen_at: new Date().toISOString() }).in("submission_id", ids);
   if (error) throw error;
 }
 async function dbAddThread(t) {
@@ -1390,6 +1441,15 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
   const [selectedHistoryId, setSelectedHistoryId] = useState(null);
   const orderedHistory = submissionHistory.filter((submission) => submission.problemId === problem.id).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
   const selectedHistory = orderedHistory.find((submission) => submission.id === selectedHistoryId) || orderedHistory[0] || null;
+  const fbCtx = useContext(FeedbackContext);
+  const selectedFb = selectedHistory ? fbCtx.byId.get(selectedHistory.id) : null;
+  const fbAutoOpened = useRef(false);
+  useEffect(() => {
+    // Có nhận xét mới của thầy cô -> tự mở sẵn lịch sử và chọn đúng lần nộp đó
+    if (fbAutoOpened.current || readOnly) return;
+    const hit = orderedHistory.find((sub) => { const f = fbCtx.byId.get(sub.id); return f && !f.seenAt; });
+    if (hit) { fbAutoOpened.current = true; setHistoryOpen(true); setSelectedHistoryId(hit.id); }
+  }, [fbCtx.byId, orderedHistory.length, readOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function pickLanguage(lang) {
     if (lang === chosenLanguage) return;
@@ -1449,8 +1509,8 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
             {!readOnly && orderedHistory.length > 0 && <div className="nb-history-panel">
               <button type="button" className="nb-history-toggle" onClick={() => setHistoryOpen((open) => !open)}><RefreshCw size={14} /> Lịch sử code đã nộp ({orderedHistory.length})<ChevronRight size={14} className={historyOpen ? "nb-history-chevron open" : "nb-history-chevron"} /></button>
               {historyOpen && <div className="nb-history-body">
-                <div className="nb-history-list">{orderedHistory.map((submission) => <button type="button" key={submission.id} className={"nb-history-item " + (selectedHistory?.id === submission.id ? "active" : "")} onClick={() => setSelectedHistoryId(submission.id)}><div><VerdictPill verdict={submission.verdict} /><span className="nb-history-date">{formatSubmissionDate(submission.createdAt)}</span></div><strong>{submission.score ?? 0}/{submission.problemPoints ?? problem.points}đ</strong><small>{submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test đạt` : "Bản nộp cũ"}</small></button>)}</div>
-                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" onClick={async () => { try { const c = selectedHistory.sourceCode || await fetchSourceCode(selectedHistory.id); if (c) { if (chooseLanguage && LANGUAGE_META[selectedHistory.language]) setChosenLanguage(selectedHistory.language); setCode(c); setResult(null); setHistoryOpen(false); } } catch (e) { /* ignore */ } }}><Code2 size={14} /> Khôi phục vào editor</button></div><LazySourceCode submission={selectedHistory} language={chooseLanguage ? selectedHistory.language : editorLanguage} emptyMessage="Lượt nộp này được tạo trước khi hệ thống lưu source code." /></div>}
+                <div className="nb-history-list">{orderedHistory.map((submission) => <button type="button" key={submission.id} className={"nb-history-item " + (selectedHistory?.id === submission.id ? "active" : "")} onClick={() => setSelectedHistoryId(submission.id)}><div><VerdictPill verdict={submission.verdict} /><span className="nb-history-date">{formatSubmissionDate(submission.createdAt)}</span></div><strong>{submission.score ?? 0}/{submission.problemPoints ?? problem.points}đ</strong><small>{submission.passedTests != null && submission.totalTests != null ? `${submission.passedTests}/${submission.totalTests} test đạt` : "Bản nộp cũ"}</small>{fbCtx.byId.get(submission.id) && <span className={"nb-fb-chip wide " + (fbCtx.byId.get(submission.id).seenAt ? "" : "fresh")}><MessageSquare size={11} /> {fbCtx.byId.get(submission.id).seenAt ? "Có nhận xét của thầy cô" : "Nhận xét mới của thầy cô"}</span>}</button>)}</div>
+                {selectedHistory && <div className="nb-history-viewer"><div className="nb-history-viewer-head"><strong>Code của lần nộp</strong><button type="button" className="nb-btn nb-btn-ghost" onClick={async () => { try { const c = selectedHistory.sourceCode || await fetchSourceCode(selectedHistory.id); if (c) { if (chooseLanguage && LANGUAGE_META[selectedHistory.language]) setChosenLanguage(selectedHistory.language); setCode(c); setResult(null); setHistoryOpen(false); } } catch (e) { /* ignore */ } }}><Code2 size={14} /> Khôi phục vào editor</button></div><LazySourceCode submission={selectedHistory} language={chooseLanguage ? selectedHistory.language : editorLanguage} notes={selectedFb?.lineNotes} emptyMessage="Lượt nộp này được tạo trước khi hệ thống lưu source code." />{selectedFb && <HistoryFeedback fb={selectedFb} submission={selectedHistory} language={chooseLanguage ? selectedHistory.language : editorLanguage} onRestore={(fixedCode) => { setCode(fixedCode); setResult(null); setHistoryOpen(false); }} />}</div>}
               </div>}
             </div>}
           </div>
@@ -1552,6 +1612,14 @@ function DailyActivityPanel({ submissions, students }) {
   const [selectedDay, setSelectedDay] = useState(todayKey);
   const [openStudent, setOpenStudent] = useState(null);
   const [openSubId, setOpenSubId] = useState(null);
+  const [fbIds, setFbIds] = useState(() => new Set());
+  useEffect(() => {
+    if (!openStudent) return undefined;
+    let cancelled = false;
+    dbFetchFeedbackIds({ studentId: openStudent }).then((ids) => { if (!cancelled && ids) setFbIds((cur) => new Set([...cur, ...ids])); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [openStudent]);
+  const markFeedback = useCallback((id, has) => setFbIds((cur) => { const n = new Set(cur); if (has) n.add(id); else n.delete(id); return n; }), []);
   const chartRef = useRef(null);
   useEffect(() => { const el = chartRef.current; if (el) el.scrollLeft = el.scrollWidth; }, [range]);
 
@@ -1662,11 +1730,12 @@ function DailyActivityPanel({ submissions, students }) {
                           <button type="button" className="nb-daily-sub-head" aria-expanded={subOpen} onClick={() => setOpenSubId(subOpen ? null : sub.id)}>
                             <span className="nb-daily-sub-time nb-mono">{formatTimeOnly(sub.createdAt)}</span>
                             <span className="nb-daily-sub-title">{sub.problemTitle || sub.problemId}</span>
+                            {fbIds.has(sub.id) && <span className="nb-fb-chip" title="Đã có nhận xét"><MessageSquare size={11} /> Đã nhận xét</span>}
                             <VerdictPill verdict={sub.verdict} />
                             <span className="nb-daily-sub-score nb-mono">{sub.score ?? 0}đ</span>
                             <Code2 size={14} className="nb-daily-sub-code-icon" />
                           </button>
-                          {subOpen && <div className="nb-history-code-wrap"><LazySourceCode submission={sub} emptyMessage="Lượt nộp này không có lưu source code." /></div>}
+                          {subOpen && <div className="nb-history-code-wrap"><FeedbackEditor submission={sub} emptyMessage="Lượt nộp này không có lưu source code." onChanged={markFeedback} /></div>}
                         </div>
                       );
                     })}
@@ -2056,6 +2125,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
           </section>
         )}
 
+        <FeedbackInbox submissions={submissions} onOpen={(fb) => { pendingProblemOpenId = fb.problemId; onNavigate?.("problems"); }} />
+
         <WeeklyGoalCard solvedWeek={solvedWeek} solvedTotal={solved} remainingProblems={remaining} days={weekDays} streak={streak} onGo={() => onNavigate?.("problems")} />
 
         <div className="nb-ov-kpis">
@@ -2410,7 +2481,15 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [progressFilter, setProgressFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(null);
+  const fbList = useContext(FeedbackContext).list;
   const [reviewProblem, setReviewProblem] = useState(null);
+  useEffect(() => {
+    // Học sinh bấm vào thông báo nhận xét ở Tổng quan -> mở sẵn bài đó
+    if (!pendingProblemOpenId || problems.length === 0) return;
+    const target = problems.find((x) => x.id === pendingProblemOpenId);
+    pendingProblemOpenId = null;
+    if (target) setActive(target);
+  }, [problems]);
   const [collapsedMonths, setCollapsedMonths] = useState({});
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [showForm, setShowForm] = useState(false);
@@ -2550,6 +2629,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
           <div className="nb-practice-problem-titleline">
             <h4>{problem.title}</h4>
             {!isTeacher && <span className={`nb-practice-status ${state.className}`}>{state.label}</span>}
+            {!isTeacher && fbList.some((f) => f.problemId === problem.id && !f.seenAt) && <span className="nb-fb-chip fresh"><MessageSquare size={11} /> Nhận xét mới</span>}
           </div>
           <div className="nb-practice-problem-meta">
             <span>{language.label}</span><i />
@@ -2869,7 +2949,113 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   );
 }
 
-function LazySourceCode({ submission, emptyMessage, language }) {
+/* ======================= NHẬN XÉT BÀI NỘP ======================= */
+const FeedbackContext = React.createContext({ role: "none", teacherName: "", byId: new Map(), list: [], unseenCount: 0, markSeen: () => {}, refresh: () => {} });
+let pendingProblemOpenId = null; // mở sẵn bài khi học sinh bấm vào thông báo nhận xét ở Tổng quan
+
+const FEEDBACK_TAGS = [
+  { id: "algo", label: "Sai thuật toán", tone: "red" },
+  { id: "edge", label: "Thiếu trường hợp biên", tone: "red" },
+  { id: "syntax", label: "Lỗi cú pháp", tone: "red" },
+  { id: "tle", label: "Chạy quá chậm (TLE)", tone: "amber" },
+  { id: "fmt", label: "Sai định dạng output", tone: "amber" },
+  { id: "input", label: "Đọc dữ liệu sai", tone: "amber" },
+  { id: "style", label: "Chưa gọn, khó đọc", tone: "blue" },
+  { id: "good", label: "Làm tốt", tone: "green" },
+];
+const FEEDBACK_PHRASES = [
+  "Em kiểm tra lại điều kiện dừng của vòng lặp.",
+  "Hãy thử với n nhỏ nhất và n lớn nhất trong đề.",
+  "Cần in đúng định dạng đề bài yêu cầu.",
+  "Em chạy thử từng bước với ví dụ mẫu để tìm chỗ sai.",
+  "Bài làm tốt, em thêm chú thích để code dễ đọc hơn.",
+];
+const feedbackTagMeta = (id) => FEEDBACK_TAGS.find((t) => t.id === id) || { id, label: String(id), tone: "blue" };
+
+/* So sánh hai đoạn code theo từng dòng (LCS) để tô màu chỗ giáo viên đã sửa */
+function diffLines(aText, bText) {
+  const a = String(aText || "").replace(/\s+$/, "").split("\n");
+  const b = String(bText || "").replace(/\s+$/, "").split("\n");
+  if (a.length * b.length > 400000) return [...a.map((text) => ({ t: "del", text })), ...b.map((text) => ({ t: "add", text }))];
+  const n = a.length, m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i -= 1) for (let j = m - 1; j >= 0; j -= 1) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push({ t: "same", text: a[i] }); i += 1; j += 1; }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { out.push({ t: "del", text: a[i] }); i += 1; }
+    else { out.push({ t: "add", text: b[j] }); j += 1; }
+  }
+  while (i < n) { out.push({ t: "del", text: a[i] }); i += 1; }
+  while (j < m) { out.push({ t: "add", text: b[j] }); j += 1; }
+  return out;
+}
+
+function FixedCodeDiff({ original, fixed, language }) {
+  const [mode, setMode] = useState("diff");
+  const lang = LANGUAGE_META[language] ? language : guessCodeLanguage(fixed || original);
+  const ops = useMemo(() => diffLines(original, fixed), [original, fixed]);
+  const changed = ops.filter((o) => o.t !== "same").length;
+  let newNo = 0;
+  return (
+    <div className="nb-diff">
+      <div className="nb-diff-bar">
+        <span>{changed === 0 ? "Bản sửa giống bài nộp" : `${ops.filter((o) => o.t === "add").length} dòng thêm/sửa · ${ops.filter((o) => o.t === "del").length} dòng bỏ`}</span>
+        <div className="nb-diff-toggle">
+          <button type="button" className={mode === "diff" ? "on" : ""} onClick={() => setMode("diff")}>Chỗ khác nhau</button>
+          <button type="button" className={mode === "fixed" ? "on" : ""} onClick={() => setMode("fixed")}>Bản sửa hoàn chỉnh</button>
+        </div>
+      </div>
+      {mode === "fixed" ? <CodeView code={fixed} language={lang} /> : (
+        <div className="nb-diff-body">
+          {ops.map((o, i) => {
+            if (o.t !== "del") newNo += 1;
+            return (
+              <div key={i} className={`nb-diff-row ${o.t}`}>
+                <span className="nb-diff-no">{o.t === "del" ? "" : newNo}</span>
+                <span className="nb-diff-mark">{o.t === "add" ? "+" : o.t === "del" ? "−" : ""}</span>
+                <pre><code>{highlightCodeLine(o.text, lang)}{"\n"}</code></pre>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Code có số dòng; dòng bị giáo viên chú thích hiện ghi chú ngay bên dưới. Giáo viên bấm vào số dòng để thêm chú thích. */
+function AnnotatedCode({ code, language, notes = [], onLineClick, activeLine }) {
+  const lang = LANGUAGE_META[language] ? language : guessCodeLanguage(code);
+  const lines = String(code || "").replace(/\s+$/, "").split("\n");
+  const byLine = new Map();
+  notes.forEach((n) => { const k = Number(n.line); if (!byLine.has(k)) byLine.set(k, []); byLine.get(k).push(n); });
+  return (
+    <div className={`nb-ann ${onLineClick ? "clickable" : ""}`}>
+      {lines.map((line, i) => {
+        const no = i + 1;
+        const ns = (byLine.get(no) || []).filter((n) => String(n.text || "").trim());
+        return (
+          <React.Fragment key={i}>
+            <div className={`nb-ann-row ${byLine.has(no) ? "flagged" : ""} ${activeLine === no ? "active" : ""}`}>
+              <button type="button" className="nb-ann-no" disabled={!onLineClick} tabIndex={onLineClick ? 0 : -1} onClick={() => onLineClick && onLineClick(no)} title={onLineClick ? "Bấm để chú thích dòng này" : undefined}>{no}</button>
+              <pre className="nb-ann-code"><code>{highlightCodeLine(line, lang)}{"\n"}</code></pre>
+            </div>
+            {ns.map((n, k) => <div className="nb-ann-note" key={k}><AlertCircle size={14} /><span>{n.text}</span></div>)}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+function FeedbackTagList({ tags }) {
+  if (!tags || tags.length === 0) return null;
+  return <div className="nb-fb-tags">{tags.map((id) => { const t = feedbackTagMeta(id); return <span key={id} className={`nb-fb-tag ${t.tone}`}>{t.label}</span>; })}</div>;
+}
+
+function useSubmissionCode(submission) {
   const [code, setCode] = useState(submission.sourceCode || "");
   const [state, setState] = useState(submission.sourceCode ? "ready" : "loading");
   useEffect(() => {
@@ -2881,15 +3067,222 @@ function LazySourceCode({ submission, emptyMessage, language }) {
       .catch(() => { if (!cancelled) setState("error"); });
     return () => { cancelled = true; };
   }, [submission.id, submission.sourceCode]);
+  return { code, state };
+}
+
+/* Học sinh xem nhận xét của giáo viên cho một bài nộp */
+function StudentFeedback({ fb, original, language, onRestore }) {
+  const ctx = useContext(FeedbackContext);
+  const [wasNew] = useState(!fb.seenAt);
+  useEffect(() => { if (!fb.seenAt) ctx.markSeen([fb.submissionId]); }, [fb.submissionId, fb.seenAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="nb-fbs">
+      <div className="nb-fbs-head">
+        <MessageSquare size={16} /><strong>Nhận xét của thầy cô</strong>
+        {wasNew && <span className="nb-fb-new">Mới</span>}
+        <small>{fb.author ? `${fb.author} · ` : ""}{timeAgoVi(fb.updatedAt)}</small>
+      </div>
+      <FeedbackTagList tags={fb.tags} />
+      {fb.comment && <p className="nb-fbs-comment">{fb.comment}</p>}
+      {fb.lineNotes.length > 0 && <p className="nb-fbs-hint"><AlertCircle size={13} /> Các dòng có ghi chú được đánh dấu ngay trong code phía trên.</p>}
+      {fb.fixedCode && (
+        <div className="nb-fbs-fix">
+          <div className="nb-fbs-fix-head"><strong>Bản sửa gợi ý của thầy cô</strong>{onRestore && <button type="button" className="nb-btn nb-btn-ghost" onClick={() => onRestore(fb.fixedCode)}><Code2 size={14} /> Đưa bản sửa vào editor</button>}</div>
+          <FixedCodeDiff original={original} fixed={fb.fixedCode} language={language} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistoryFeedback({ fb, submission, language, onRestore }) {
+  const { code } = useSubmissionCode(submission);
+  return <StudentFeedback fb={fb} original={code} language={language} onRestore={onRestore} />;
+}
+
+/* Giáo viên: xem code + viết nhận xét / chú thích dòng / bản sửa cho một bài nộp */
+function FeedbackEditor({ submission, language, emptyMessage, onChanged }) {
+  const ctx = useContext(FeedbackContext);
+  const { code, state: codeState } = useSubmissionCode(submission);
+  const [state, setState] = useState("loading"); // loading | ready | missing | error
+  const [saved, setSaved] = useState(null);
+  const [tags, setTags] = useState([]);
+  const [comment, setComment] = useState("");
+  const [notes, setNotes] = useState([]);
+  const [useFix, setUseFix] = useState(false);
+  const [fixed, setFixed] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [activeLine, setActiveLine] = useState(null);
+  const lang = LANGUAGE_META[language] ? language : guessCodeLanguage(code);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState("loading"); setMsg(null);
+    dbFetchFeedbackFor(submission.id).then((r) => {
+      if (cancelled) return;
+      if (r.missing) { setState("missing"); return; }
+      const fb = r.row;
+      setSaved(fb);
+      setTags(fb?.tags || []); setComment(fb?.comment || ""); setNotes(fb?.lineNotes || []);
+      setUseFix(!!fb?.fixedCode); setFixed(fb?.fixedCode || "");
+      setState("ready");
+    }).catch(() => { if (!cancelled) setState("error"); });
+    return () => { cancelled = true; };
+  }, [submission.id]);
+
+  function toggleTag(id) { setTags((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id])); }
+  function addNoteAt(line) {
+    setActiveLine(line);
+    setNotes((cur) => (cur.some((n) => Number(n.line) === line) ? cur : [...cur, { line, text: "" }].sort((a, b) => a.line - b.line)));
+  }
+  function setNoteText(line, text) { setNotes((cur) => cur.map((n) => (Number(n.line) === line ? { ...n, text } : n))); }
+  function removeNote(line) { setNotes((cur) => cur.filter((n) => Number(n.line) !== line)); }
+  function toggleFix(on) { setUseFix(on); if (on && !fixed.trim()) setFixed(code); }
+
+  const cleanNotes = notes.filter((n) => String(n.text || "").trim()).map((n) => ({ line: Number(n.line), text: String(n.text).trim() }));
+  const fixedClean = useFix && fixed.trim() && fixed.trim() !== code.trim() ? fixed : "";
+  const hasContent = !!(comment.trim() || tags.length || cleanNotes.length || fixedClean);
+
+  async function save() {
+    if (!hasContent) { setMsg({ kind: "warn", text: "Chưa có nội dung để lưu. Hãy viết nhận xét, chọn nhãn hoặc chú thích dòng." }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const fb = await dbSaveFeedback({ submissionId: submission.id, studentId: submission.studentId, problemId: submission.problemId, comment: comment.trim(), tags, lineNotes: cleanNotes, fixedCode: fixedClean, author: ctx.teacherName });
+      setSaved(fb); setNotes(fb.lineNotes.length ? fb.lineNotes : notes);
+      setMsg({ kind: "ok", text: "Đã lưu. Học sinh sẽ thấy nhận xét này khi mở bài." });
+      onChanged && onChanged(submission.id, true);
+    } catch (e) { setMsg({ kind: "err", text: "Không lưu được, em thử lại sau." }); }
+    setBusy(false);
+  }
+  async function remove() {
+    if (!saved || !examConfirm("Xóa nhận xét của bài nộp này? Học sinh sẽ không còn thấy nữa.")) return;
+    setBusy(true); setMsg(null);
+    try {
+      await dbDeleteFeedback(submission.id);
+      setSaved(null); setTags([]); setComment(""); setNotes([]); setUseFix(false); setFixed("");
+      setMsg({ kind: "ok", text: "Đã xóa nhận xét." });
+      onChanged && onChanged(submission.id, false);
+    } catch (e) { setMsg({ kind: "err", text: "Không xóa được, thử lại sau." }); }
+    setBusy(false);
+  }
+
+  const codeBlock = codeState === "loading" ? <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Đang tải code…</p>
+    : codeState === "error" ? <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Không tải được code, thử lại sau.</p>
+    : code ? <AnnotatedCode code={code} language={language} notes={notes} activeLine={activeLine} onLineClick={state === "ready" ? addNoteAt : undefined} />
+    : <p className="nb-sub" style={{ padding: "0 14px 14px" }}>{emptyMessage}</p>;
+
+  if (state === "missing") {
+    return (
+      <div className="nb-fbe">
+        {codeBlock}
+        <div className="nb-fbe-note warn"><AlertCircle size={15} /> Chưa bật tính năng nhận xét: cần chạy file <b>schema-feedback.sql</b> trong Supabase (chạy trên site test trước).</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="nb-fbe">
+      <div className="nb-fbe-code">
+        {codeBlock}
+        {state === "ready" && code && <p className="nb-fbe-tip"><MessageSquare size={13} /> Bấm vào <b>số dòng</b> để chú thích lỗi ngay tại dòng đó.</p>}
+      </div>
+      <div className="nb-fbe-panel">
+        <div className="nb-fbe-head">
+          <strong><MessageSquare size={15} /> Nhận xét của giáo viên</strong>
+          {saved && <span className="nb-fbe-saved"><CheckCircle2 size={13} /> Đã lưu · {timeAgoVi(saved.updatedAt)}</span>}
+        </div>
+        {state === "loading" && <p className="nb-sub">Đang tải nhận xét…</p>}
+        {state === "error" && <p className="nb-sub">Không tải được nhận xét, thử lại sau.</p>}
+        {state === "ready" && (
+          <>
+            <div className="nb-fbe-label">Loại lỗi / đánh giá</div>
+            <div className="nb-fb-tags pick">{FEEDBACK_TAGS.map((t) => <button type="button" key={t.id} className={`nb-fb-tag ${t.tone} ${tags.includes(t.id) ? "on" : ""}`} onClick={() => toggleTag(t.id)}>{tags.includes(t.id) && <CheckCircle2 size={12} />}{t.label}</button>)}</div>
+
+            <div className="nb-fbe-label">Nhận xét</div>
+            <textarea className="nb-input nb-fbe-text" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Chỉ ra lỗi sai và gợi ý hướng sửa cho em…" />
+            <div className="nb-fbe-phrases">{FEEDBACK_PHRASES.map((ph) => <button type="button" key={ph} onClick={() => setComment((c) => (c.trim() ? `${c.trim()} ${ph}` : ph))}>+ {ph}</button>)}</div>
+
+            <div className="nb-fbe-label">Chú thích theo dòng {notes.length > 0 && <span>({notes.length})</span>}</div>
+            {notes.length === 0 ? <p className="nb-fbe-empty">Chưa có chú thích. Bấm vào số dòng trong code để thêm.</p> : (
+              <div className="nb-fbe-notes">
+                {notes.map((n) => (
+                  <div key={n.line} className={`nb-fbe-note-row ${activeLine === Number(n.line) ? "active" : ""}`}>
+                    <span className="nb-fbe-line">Dòng {n.line}</span>
+                    <input className="nb-input" autoFocus={activeLine === Number(n.line) && !n.text} value={n.text} onChange={(e) => setNoteText(Number(n.line), e.target.value)} onFocus={() => setActiveLine(Number(n.line))} placeholder="Dòng này sai ở đâu?" />
+                    <button type="button" className="nb-icon-btn" onClick={() => removeNote(Number(n.line))} aria-label="Xóa chú thích"><X size={14} /></button>
+                  </div>))}
+              </div>
+            )}
+
+            <label className="nb-fbe-check"><input type="checkbox" checked={useFix} onChange={(e) => toggleFix(e.target.checked)} /> Đưa kèm <b>bản sửa gợi ý</b> (sửa trực tiếp code của em)</label>
+            {useFix && (
+              <div className="nb-fbe-fix">
+                <CodeEditor code={fixed} onChange={setFixed} language={lang} onSubmit={() => {}} />
+                {fixedClean ? <FixedCodeDiff original={code} fixed={fixed} language={lang} /> : <p className="nb-fbe-empty">Sửa code ở khung trên, chỗ khác biệt sẽ hiện ở đây.</p>}
+              </div>
+            )}
+
+            {msg && <div className={`nb-fbe-note ${msg.kind}`}>{msg.kind === "ok" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />} {msg.text}</div>}
+            <div className="nb-fbe-actions">
+              {saved && <button type="button" className="nb-btn nb-btn-ghost" disabled={busy} onClick={remove}><Trash2 size={14} /> Xóa nhận xét</button>}
+              <button type="button" className="nb-btn nb-btn-primary" disabled={busy} onClick={save}>{busy ? <Loader2 size={14} className="nb-spin" /> : <Save size={14} />} {saved ? "Cập nhật nhận xét" : "Lưu nhận xét"}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* Tổng quan học sinh: thông báo thầy cô vừa nhận xét bài nộp */
+function FeedbackInbox({ submissions, onOpen }) {
+  const ctx = useContext(FeedbackContext);
+  if (!ctx.list.length) return null;
+  const titleOf = (fb) => submissions.find((s) => s.id === fb.submissionId)?.problemTitle || fb.problemId;
+  const items = [...ctx.list].sort((a, b) => (Number(!a.seenAt) === Number(!b.seenAt) ? new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0) : (a.seenAt ? 1 : -1))).slice(0, 3);
+  const unseen = ctx.unseenCount;
+  return (
+    <section className={`nb-fbi ${unseen > 0 ? "fresh" : ""}`} aria-label="Nhận xét từ thầy cô">
+      <span className="nb-fbi-icon"><MessageSquare size={22} /></span>
+      <div className="nb-fbi-main">
+        <small>Nhận xét từ thầy cô</small>
+        <strong>{unseen > 0 ? `Thầy cô vừa nhận xét ${unseen} bài nộp của em` : "Nhận xét gần đây từ thầy cô"}</strong>
+        <ul>
+          {items.map((fb) => (
+            <li key={fb.submissionId}>
+              <button type="button" onClick={() => onOpen(fb)}>
+                <span className="nb-fbi-title">{titleOf(fb)}</span>
+                <span className="nb-fbi-text">{fb.comment ? fb.comment.slice(0, 70) + (fb.comment.length > 70 ? "…" : "") : fb.fixedCode ? "Có bản sửa gợi ý" : fb.tags.length ? fb.tags.map((t) => feedbackTagMeta(t).label).join(" · ") : "Có ghi chú theo dòng"}</span>
+                <span className="nb-fbi-time">{!fb.seenAt && <i className="nb-fb-new">Mới</i>}{timeAgoVi(fb.updatedAt)}</span>
+                <ChevronRight size={15} />
+              </button>
+            </li>))}
+        </ul>
+      </div>
+    </section>
+  );
+}
+
+function LazySourceCode({ submission, emptyMessage, language, notes }) {
+  const { code, state } = useSubmissionCode(submission);
   if (state === "loading") return <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Đang tải code…</p>;
   if (state === "error") return <p className="nb-sub" style={{ padding: "0 14px 14px" }}>Không tải được code, thử lại sau.</p>;
-  return code ? <CodeView code={code} language={language} /> : <p className="nb-sub" style={{ padding: "0 14px 14px" }}>{emptyMessage}</p>;
+  if (!code) return <p className="nb-sub" style={{ padding: "0 14px 14px" }}>{emptyMessage}</p>;
+  return notes && notes.length ? <AnnotatedCode code={code} language={language} notes={notes} /> : <CodeView code={code} language={language} />;
 }
 
 function SubmissionReviewModal({ problem, submissions, students, onClose }) {
   const [query, setQuery] = useState("");
   const [verdictFilter, setVerdictFilter] = useState("all");
   const [openId, setOpenId] = useState(null);
+  const [fbIds, setFbIds] = useState(() => new Set());
+  useEffect(() => {
+    let cancelled = false;
+    dbFetchFeedbackIds({ problemId: problem.id }).then((ids) => { if (!cancelled && ids) setFbIds(ids); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [problem.id]);
+  const markFeedback = useCallback((id, has) => setFbIds((cur) => { const n = new Set(cur); if (has) n.add(id); else n.delete(id); return n; }), []);
 
   const studentById = useMemo(() => new Map(students.map((s) => [s.id, s])), [students]);
 
@@ -2942,13 +3335,14 @@ function SubmissionReviewModal({ problem, submissions, students, onClose }) {
                     <strong>{student?.name || submission.studentId}</strong>
                     <small>{student?.username ? `@${student.username} · ` : ""}{formatSubmissionDate(submission.createdAt)}</small>
                   </div>
+                  {fbIds.has(submission.id) && <span className="nb-fb-chip" title="Đã có nhận xét"><MessageSquare size={11} /> Đã nhận xét</span>}
                   <VerdictPill verdict={submission.verdict} />
                   <span className="nb-review-item-score">{submission.score ?? 0}đ</span>
                   <ChevronRight size={16} className={`nb-review-item-chevron ${isOpen ? "open" : ""}`} />
                 </button>
                 {isOpen && (
                   <div className="nb-history-code-wrap">
-                    <LazySourceCode submission={submission} emptyMessage="Lượt nộp này không có lưu source code (nộp trước khi tính năng lưu code được bật)." />
+                    <FeedbackEditor submission={submission} emptyMessage="Lượt nộp này không có lưu source code (nộp trước khi tính năng lưu code được bật)." onChanged={markFeedback} />
                   </div>
                 )}
               </div>
@@ -5447,6 +5841,38 @@ function App() {
     return () => { cancelled = true; };
   }, [currentUser?.id, isTeacher]);
 
+  // Nhận xét của giáo viên dành cho học sinh đang đăng nhập (bảng nhỏ, chỉ đọc các dòng của chính em)
+  const [myFeedback, setMyFeedback] = useState([]);
+  const myFeedbackRef = useRef([]);
+  useEffect(() => { myFeedbackRef.current = myFeedback; }, [myFeedback]);
+  const loadMyFeedback = useCallback(async () => {
+    if (!currentUser || isTeacher) return;
+    try {
+      const rows = await dbFetchFeedbackForStudent(currentUser.id);
+      if (rows) setMyFeedback(rows);
+    } catch (e) { /* mạng chập chờn: lượt sau thử lại */ }
+  }, [currentUser?.id, isTeacher]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!currentUser || isTeacher) { setMyFeedback([]); return undefined; }
+    loadMyFeedback();
+    const timer = setInterval(() => { if (!document.hidden) loadMyFeedback(); }, 120000);
+    const onVisible = () => { if (document.visibilityState === "visible") loadMyFeedback(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [currentUser?.id, isTeacher, loadMyFeedback]); // eslint-disable-line react-hooks/exhaustive-deps
+  const markFeedbackSeen = useCallback((ids) => {
+    const fresh = ids.filter((id) => myFeedbackRef.current.some((f) => f.submissionId === id && !f.seenAt));
+    if (!fresh.length) return;
+    const stamp = new Date().toISOString();
+    setMyFeedback((prev) => prev.map((f) => (fresh.includes(f.submissionId) ? { ...f, seenAt: stamp } : f)));
+    dbMarkFeedbackSeen(fresh).catch(() => {});
+  }, []);
+  const feedbackCtx = useMemo(() => ({
+    role: isTeacher ? "teacher" : "student", teacherName: currentUser?.name || "",
+    byId: new Map(myFeedback.map((f) => [f.submissionId, f])), list: myFeedback,
+    unseenCount: myFeedback.filter((f) => !f.seenAt).length, markSeen: markFeedbackSeen, refresh: loadMyFeedback,
+  }), [isTeacher, currentUser?.name, myFeedback, markFeedbackSeen, loadMyFeedback]);
+
   // Làm mới nền: chỉ chạy khi đã đăng nhập, tab đang hiện và người dùng còn thao tác.
   // Mỗi lượt tải nhẹ (bài nộp mới); 2 lượt có thêm thảo luận/bài giao; 5 lượt tải đầy đủ để đối chiếu.
   useEffect(() => {
@@ -5735,6 +6161,7 @@ function App() {
   const activeTabLabel = navItems.find((n) => n.key === tab)?.label;
 
   return (
+    <FeedbackContext.Provider value={feedbackCtx}>
     <div className="nb-root">
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Inconsolata:wght@400;500;700&display=swap');
@@ -5970,6 +6397,77 @@ function App() {
         .nb-gt-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #7b8aa0; } .nb-gt-foot > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; } .nb-gt-foot .nb-gt-cell { width: 24px; height: 22px; font-size: 11px; margin-left: 6px; }
         @media (max-width: 1100px) { .nb-badges { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (max-width: 420px) { .nb-badges { gap: 10px; } .nb-badge { padding: 14px 8px 12px; } .nb-badge small { display: none; } }
+        /* ===== Nhận xét bài nộp ===== */
+        .nb-fb-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #e8f0ff; color: #2f5fc9; white-space: nowrap; }
+        .nb-fb-chip.fresh { background: #fff0d6; color: #b4590b; }
+        .nb-fb-chip.wide { grid-column: 1 / -1; width: fit-content; }
+        .nb-fb-new { font-style: normal; display: inline-block; padding: 1px 7px; border-radius: 999px; background: #e5603c; color: #fff; font-size: 10.5px; font-weight: 800; margin-right: 6px; }
+        .nb-fb-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+        .nb-fb-tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid transparent; font-family: inherit; }
+        .nb-fb-tag.red { background: #ffe9e5; color: #b8321c; } .nb-fb-tag.amber { background: #fff0d6; color: #a05a08; } .nb-fb-tag.blue { background: #e8f0ff; color: #2f5fc9; } .nb-fb-tag.green { background: #dcf5e8; color: #14804f; }
+        .nb-fb-tags.pick .nb-fb-tag { cursor: pointer; background: #f4f6fa; color: #66748a; border-color: #e2e7ef; }
+        .nb-fb-tags.pick .nb-fb-tag.on.red { background: #ffe9e5; color: #b8321c; border-color: #f2b5aa; } .nb-fb-tags.pick .nb-fb-tag.on.amber { background: #fff0d6; color: #a05a08; border-color: #f0cd8c; } .nb-fb-tags.pick .nb-fb-tag.on.blue { background: #e8f0ff; color: #2f5fc9; border-color: #b6ccf5; } .nb-fb-tags.pick .nb-fb-tag.on.green { background: #dcf5e8; color: #14804f; border-color: #9fdcbc; }
+
+        .nb-ann { background: #fff; border: 1px solid #d8dde6; border-radius: 8px; overflow: auto; font-family: var(--code-font, Consolas, monospace); font-size: 14px; max-height: 420px; }
+        .nb-ann-row { display: grid; grid-template-columns: 46px minmax(0, 1fr); line-height: 22px; }
+        .nb-ann-no { border: 0; background: #ececec; color: #8a8a8a; text-align: right; padding: 0 10px 0 0; font: inherit; font-size: 13px; cursor: default; }
+        .nb-ann.clickable .nb-ann-no { cursor: pointer; } .nb-ann.clickable .nb-ann-no:hover { background: #cfe0ff; color: #1f4fb8; font-weight: 700; }
+        .nb-ann-code { margin: 0; padding: 0 12px; white-space: pre; overflow-x: auto; font: inherit; }
+        .nb-ann-row.flagged { background: #fff6e0; } .nb-ann-row.flagged .nb-ann-no { background: #f5c76b; color: #7a4b00; font-weight: 800; }
+        .nb-ann-row.active { background: #eaf2ff; } .nb-ann-row.active .nb-ann-no { background: #8db4f5; color: #fff; }
+        .nb-ann-note { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 0 46px; padding: 6px 12px; background: #fff3d1; border-left: 3px solid #e0a020; color: #6b4300; font: 600 13px/1.45 var(--font-body, inherit); font-family: "Be Vietnam Pro", system-ui, sans-serif; }
+        .nb-ann-note svg { flex: none; margin-top: 2px; color: #c47f00; }
+
+        .nb-diff { border: 1px solid #d8dde6; border-radius: 8px; overflow: hidden; background: #fff; margin-top: 8px; }
+        .nb-diff-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 7px 10px; background: #f4f6fa; font-size: 12px; color: #52606d; }
+        .nb-diff-toggle { display: inline-flex; border: 1px solid #d5dce6; border-radius: 8px; overflow: hidden; }
+        .nb-diff-toggle button { border: 0; background: #fff; padding: 4px 10px; font-size: 12px; font-weight: 700; color: #66748a; cursor: pointer; font-family: inherit; } .nb-diff-toggle button.on { background: #102a43; color: #fff; }
+        .nb-diff-body { max-height: 360px; overflow: auto; font-family: var(--code-font, Consolas, monospace); font-size: 14px; }
+        .nb-diff-row { display: grid; grid-template-columns: 40px 22px minmax(0, 1fr); line-height: 22px; }
+        .nb-diff-row pre { margin: 0; font: inherit; white-space: pre; padding-right: 10px; }
+        .nb-diff-no { text-align: right; padding-right: 8px; color: #9aa6b8; background: #f1f3f7; font-size: 12.5px; }
+        .nb-diff-mark { text-align: center; font-weight: 800; color: #8a8a8a; }
+        .nb-diff-row.add { background: #e5f7ec; } .nb-diff-row.add .nb-diff-mark { color: #14804f; background: #c9efd9; }
+        .nb-diff-row.del { background: #ffeceb; } .nb-diff-row.del .nb-diff-mark { color: #c0392b; background: #ffd6d2; } .nb-diff-row.del pre { text-decoration: line-through; text-decoration-color: rgba(192,57,43,.45); opacity: .85; }
+
+        .nb-fbs { margin-top: 12px; padding: 14px 16px; border-radius: 12px; background: linear-gradient(180deg, #fffaf0, #fff 70%); border: 1px solid #f0dcae; }
+        .nb-fbs-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: #7a4b00; } .nb-fbs-head small { margin-left: auto; color: #8a7a55; font-size: 12px; }
+        .nb-fbs-comment { margin: 6px 0 4px; white-space: pre-wrap; line-height: 1.6; color: #102a43; font-size: 14.5px; }
+        .nb-fbs-hint { display: flex; align-items: center; gap: 6px; margin: 6px 0 0; font-size: 12.5px; color: #8a6a1c; }
+        .nb-fbs-fix { margin-top: 10px; } .nb-fbs-fix-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; color: #102a43; }
+        .nb-fbs-fix-head .nb-btn { padding: 5px 10px; font-size: 12px; }
+
+        .nb-fbe { display: flex; flex-direction: column; gap: 12px; }
+        .nb-fbe-tip { margin: 8px 2px 0; font-size: 12.5px; color: #66748a; display: flex; align-items: center; gap: 6px; }
+        .nb-fbe-panel { padding: 14px 16px; border-radius: 12px; background: #fff; border: 1px solid #e2e7ef; display: flex; flex-direction: column; gap: 6px; }
+        .nb-fbe-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; } .nb-fbe-head strong { display: inline-flex; align-items: center; gap: 7px; color: #102a43; }
+        .nb-fbe-saved { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #14804f; font-weight: 700; }
+        .nb-fbe-label { margin-top: 8px; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #7b8aa0; } .nb-fbe-label span { color: #b4590b; }
+        .nb-fbe-text { width: 100%; resize: vertical; min-height: 76px; font-family: inherit; }
+        .nb-fbe-phrases { display: flex; flex-wrap: wrap; gap: 6px; } .nb-fbe-phrases button { border: 1px dashed #c4cedd; background: #f8fafc; color: #52606d; border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; font-family: inherit; } .nb-fbe-phrases button:hover { background: #eaf2ff; border-color: #8db4f5; color: #1f4fb8; }
+        .nb-fbe-empty { margin: 2px 0; font-size: 12.5px; color: #8795a8; }
+        .nb-fbe-notes { display: flex; flex-direction: column; gap: 6px; }
+        .nb-fbe-note-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px; border-radius: 8px; } .nb-fbe-note-row.active { background: #fff6e0; }
+        .nb-fbe-line { font: 800 12px var(--code-font, monospace); color: #7a4b00; background: #f5c76b; border-radius: 6px; padding: 3px 8px; white-space: nowrap; }
+        .nb-fbe-check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13.5px; color: #102a43; cursor: pointer; }
+        .nb-fbe-fix { display: flex; flex-direction: column; gap: 8px; }
+        .nb-fbe-note { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 8px; font-size: 13px; }
+        .nb-fbe-note.ok { background: #dcf5e8; color: #14804f; } .nb-fbe-note.err, .nb-fbe-note.warn { background: #fff0d6; color: #a05a08; }
+        .nb-fbe-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+        .nb-fbi { display: flex; gap: 16px; padding: 18px 20px; border-radius: 18px; background: #fff; border: 1px solid var(--ov-line); box-shadow: var(--ov-shadow); position: relative; overflow: hidden; }
+        .nb-fbi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: #8db4f5; }
+        .nb-fbi.fresh { background: linear-gradient(100deg, #fff6e6 0%, #fff 62%); } .nb-fbi.fresh::before { background: #e0a020; }
+        .nb-fbi-icon { flex: none; width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; background: #e8f0ff; color: #2f6fed; } .nb-fbi.fresh .nb-fbi-icon { background: #fdf1d6; color: #b9770e; }
+        .nb-fbi-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+        .nb-fbi-main small { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; font-weight: 700; color: #6b7a90; } .nb-fbi-main > strong { font-size: 16.5px; color: #102a43; }
+        .nb-fbi ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+        .nb-fbi li button { width: 100%; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.6fr) auto auto; gap: 12px; align-items: center; text-align: left; padding: 9px 10px; border: 1px solid #edf0f5; border-radius: 10px; background: #fff; cursor: pointer; font-family: inherit; color: #52606d; font-size: 13px; }
+        .nb-fbi li button:hover { background: #f5f8ff; border-color: #c9d8f5; }
+        .nb-fbi-title { font-weight: 700; color: #102a43; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .nb-fbi-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .nb-fbi-time { font-size: 12px; color: #8795a8; white-space: nowrap; }
+        .nb-nav-dot { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #e5603c; color: #fff; font-size: 11px; font-weight: 800; display: inline-grid; place-items: center; font-style: normal; }
+        .nb-bottom-nav-item { position: relative; } .nb-nav-dot.small { position: absolute; top: 2px; right: 18%; min-width: 16px; height: 16px; font-size: 10px; padding: 0 4px; margin: 0; }
+        @media (max-width: 760px) { .nb-fbi { padding: 14px; } .nb-fbi li button { grid-template-columns: minmax(0, 1fr) auto; } .nb-fbi-text { display: none; } .nb-fbi-time { grid-column: 1; } }
         .nb-ov-grid.two { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); }
         .nb-ov-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .nb-ov-col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
@@ -7860,6 +8358,7 @@ function App() {
               {navItems.map((n) => (
                 <button key={n.key} className={"nb-nav-item " + (tab === n.key ? "active" : "")} onClick={() => setTab(n.key)}>
                   <n.icon size={16} /> {n.label}
+                  {n.key === "problems" && !isTeacher && feedbackCtx.unseenCount > 0 && <span className="nb-nav-dot" title="Có nhận xét mới của thầy cô">{feedbackCtx.unseenCount}</span>}
                 </button>
               ))}
             </nav>
@@ -7959,6 +8458,7 @@ function App() {
                 <button key={n.key} className={"nb-bottom-nav-item " + (tab === n.key ? "active" : "")} onClick={() => setTab(n.key)}>
                   <n.icon size={17} />
                   <span>{n.shortLabel}</span>
+                  {n.key === "problems" && !isTeacher && feedbackCtx.unseenCount > 0 && <i className="nb-nav-dot small">{feedbackCtx.unseenCount}</i>}
                 </button>
               ))}
             </nav>
@@ -7970,6 +8470,7 @@ function App() {
         <ChangePasswordModal currentUser={currentUser} onClose={() => setShowChangePw(false)} onChange={selfChangePassword} />
       )}
     </div>
+    </FeedbackContext.Provider>
   );
 }
 
