@@ -4,7 +4,7 @@ import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
-  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink, Keyboard, Target,
+  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink, Keyboard, Target, Copy,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, SISTER_SITE_URL, SISTER_SITE_LABEL } from "./config.js";
@@ -1276,13 +1276,48 @@ function guessCodeLanguage(code) {
 }
 
 // Hiển thị code chỉ-đọc với số dòng và màu giống trình soạn thảo
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; }
+  } catch { /* chuyển sang cách dự phòng */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:-1000px;opacity:0";
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+}
+
+function CodeCopyButton({ code }) {
+  const [state, setState] = useState("idle"); // idle | ok | fail
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  async function copy(event) {
+    event.stopPropagation();
+    const ok = await copyTextToClipboard(String(code || "").replace(/\s+$/, "") + "\n");
+    setState(ok ? "ok" : "fail");
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setState("idle"), 1800);
+  }
+  return (
+    <button type="button" className={`nb-copy-btn ${state}`} onClick={copy} title="Sao chép toàn bộ code" aria-label="Sao chép code">
+      {state === "ok" ? <><CheckCircle2 size={13} /> Đã sao chép</> : state === "fail" ? <><AlertCircle size={13} /> Không sao chép được</> : <><Copy size={13} /> Sao chép code</>}
+    </button>
+  );
+}
+
 function CodeView({ code, language, className = "" }) {
   const lang = LANGUAGE_META[language] ? language : guessCodeLanguage(code);
   const lines = String(code || "").replace(/\s+$/, "").split("\n");
   return (
-    <div className={`nb-codeview ${className}`}>
-      <div className="nb-codeview-gutter" aria-hidden="true">{lines.map((_, i) => <span key={i}>{i + 1}</span>)}</div>
-      <pre className="nb-codeview-code"><code>{lines.map((line, i) => <React.Fragment key={i}>{highlightCodeLine(line, lang)}{i < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</code></pre>
+    <div className="nb-copywrap">
+      <div className={`nb-codeview ${className}`}>
+        <div className="nb-codeview-gutter" aria-hidden="true">{lines.map((_, i) => <span key={i}>{i + 1}</span>)}</div>
+        <pre className="nb-codeview-code"><code>{lines.map((line, i) => <React.Fragment key={i}>{highlightCodeLine(line, lang)}{i < lines.length - 1 ? "\n" : ""}</React.Fragment>)}</code></pre>
+      </div>
+      {String(code || "").trim() && <CodeCopyButton code={code} />}
     </div>
   );
 }
@@ -3182,6 +3217,7 @@ function AnnotatedCode({ code, language, notes = [], onLineClick, activeLine }) 
   const byLine = new Map();
   notes.forEach((n) => { const k = Number(n.line); if (!byLine.has(k)) byLine.set(k, []); byLine.get(k).push(n); });
   return (
+    <div className="nb-copywrap">
     <div className={`nb-ann ${onLineClick ? "clickable" : ""}`}>
       {lines.map((line, i) => {
         const no = i + 1;
@@ -3196,6 +3232,8 @@ function AnnotatedCode({ code, language, notes = [], onLineClick, activeLine }) 
           </React.Fragment>
         );
       })}
+    </div>
+    {String(code || "").trim() && <CodeCopyButton code={code} />}
     </div>
   );
 }
@@ -6547,6 +6585,13 @@ function App() {
         .nb-gt-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #7b8aa0; } .nb-gt-foot > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; } .nb-gt-foot .nb-gt-cell { width: 24px; height: 22px; font-size: 11px; margin-left: 6px; }
         @media (max-width: 1100px) { .nb-badges { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (max-width: 420px) { .nb-badges { gap: 10px; } .nb-badge { padding: 14px 8px 12px; } .nb-badge small { display: none; } }
+        /* ===== Nút sao chép code ===== */
+        .nb-copywrap { position: relative; }
+        .nb-copy-btn { position: absolute; top: 8px; right: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 8px; border: 1px solid #cdd6e3; background: rgba(255,255,255,.94); color: #3b4f6b; font: 700 12px "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; box-shadow: 0 1px 4px rgba(16,42,67,.12); opacity: .85; transition: opacity .15s, background .15s; backdrop-filter: blur(2px); }
+        .nb-copywrap:hover .nb-copy-btn, .nb-copy-btn:focus-visible, .nb-copy-btn.ok, .nb-copy-btn.fail { opacity: 1; }
+        .nb-copy-btn:hover { background: #eef4ff; border-color: #9fbbef; color: #1f4fb8; }
+        .nb-copy-btn.ok { background: #e3f7ec; border-color: #9fdcbc; color: #14804f; } .nb-copy-btn.fail { background: #fff0d6; border-color: #f0cd8c; color: #a05a08; }
+        @media (hover: none) { .nb-copy-btn { opacity: 1; } }
         /* ===== Nhận xét bài nộp ===== */
         .nb-fb-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: #e8f0ff; color: #2f5fc9; white-space: nowrap; }
         .nb-fb-chip.fresh { background: #fff0d6; color: #b4590b; }
