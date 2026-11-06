@@ -2642,6 +2642,9 @@ function ProblemClassModal({ problem, students, submissions, onClose }) {
 function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics, students }) {
   const [languageFilter, setLanguageFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState("all");
+  const [levelFilter, setLevelFilter] = useState("all");
+  const [pointMin, setPointMin] = useState("");
+  const [pointMax, setPointMax] = useState("");
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(null);
   const fbList = useContext(FeedbackContext).list;
@@ -2650,6 +2653,12 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [sortBy, setSortBy] = useState("default");
   const [classFilter, setClassFilter] = useState("all");
   const classStats = useMemo(() => buildClassSolveStats(submissions, students || []), [submissions, students]);
+  const pointBounds = useMemo(() => {
+    const vals = problems.map((x) => Number(x.points) || 0);
+    return { min: vals.length ? Math.min(...vals) : 0, max: vals.length ? Math.max(...vals) : 0 };
+  }, [problems]);
+  const filtersActive = languageFilter !== "all" || progressFilter !== "all" || levelFilter !== "all" || pointMin !== "" || pointMax !== "" || classFilter !== "all" || query.trim() !== "";
+  function clearAllFilters() { setLanguageFilter("all"); setProgressFilter("all"); setLevelFilter("all"); setPointMin(""); setPointMax(""); setClassFilter("all"); setQuery(""); setSortBy("default"); }
   useEffect(() => {
     // Học sinh bấm vào thông báo nhận xét ở Tổng quan -> mở sẵn bài đó
     if (!pendingProblemOpenId || problems.length === 0) return;
@@ -2706,20 +2715,30 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       || (progressFilter === "in-progress" && attempts > 0 && !solved)
       || (progressFilter === "done" && solved);
     const topic = topicById.get(problem.topic);
-    const searchText = `${problem.id} ${problem.title} ${topic?.title || ""} ${topic?.code || ""}`.toLocaleLowerCase("vi-VN");
+    const levelMatches = levelFilter === "all" || problem.difficulty === levelFilter;
+    const pts = Number(problem.points) || 0;
+    const minOk = pointMin === "" || Number.isNaN(Number(pointMin)) || pts >= Number(pointMin);
+    const maxOk = pointMax === "" || Number.isNaN(Number(pointMax)) || pts <= Number(pointMax);
+    const searchText = `${problem.id} ${problem.title} ${topic?.title || ""} ${topic?.code || ""} ${problem.difficulty || ""} ${pts} điểm`.toLocaleLowerCase("vi-VN");
     const cs = classStats.get(problem.id);
     const acN = cs?.ac.size || 0;
     const triedN = cs?.tried.size || 0;
     const classMatches = classFilter === "all"
       || (classFilter === "noac" && acN === 0)
       || (classFilter === "review" && triedN >= 3 && acN / triedN <= 0.34);
-    return languageMatches && progressMatches && classMatches && (!query.trim() || searchText.includes(query.trim().toLocaleLowerCase("vi-VN")));
+    return languageMatches && progressMatches && classMatches && levelMatches && minOk && maxOk && (!query.trim() || searchText.includes(query.trim().toLocaleLowerCase("vi-VN")));
   }).sort((a, b) => {
     if (sortBy === "default") return 0;
+    if (sortBy === "pts-desc") return (Number(b.points) || 0) - (Number(a.points) || 0);
+    if (sortBy === "pts-asc") return (Number(a.points) || 0) - (Number(b.points) || 0);
+    if (sortBy === "diff-asc" || sortBy === "diff-desc") {
+      const da = DIFFICULTIES.indexOf(a.difficulty), db = DIFFICULTIES.indexOf(b.difficulty);
+      return sortBy === "diff-asc" ? da - db : db - da;
+    }
     const ca = classStats.get(a.id)?.ac.size || 0;
     const cb = classStats.get(b.id)?.ac.size || 0;
     return sortBy === "most" ? cb - ca : ca - cb;
-  }), [problems, languageFilter, progressFilter, query, topicById, currentSubmissions, solvedByCurrent, classStats, classFilter, sortBy]);
+  }), [problems, languageFilter, progressFilter, query, topicById, currentSubmissions, solvedByCurrent, classStats, classFilter, sortBy, levelFilter, pointMin, pointMax]);
 
   const practiceGroups = useMemo(() => {
     const groups = topics.map((topic) => ({
@@ -2978,8 +2997,11 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
         <label className="nb-practice-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Tìm bài, mã bài hoặc chuyên đề…" /></label>
         <div className="nb-practice-filter-stack"><span>Ngôn ngữ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['python', 'Python'], ['c', 'C'], ['cpp', 'C++']].map(([key, label]) => <button key={key} className={`nb-chip ${languageFilter === key ? "active" : ""}`} onClick={() => setLanguageFilter(key)}>{label}</button>)}</div></div>
         {isTeacher && <div className="nb-practice-filter-stack"><span>Thống kê lớp</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['noac', 'Chưa ai AC'], ['review', 'Cần xem lại']].map(([key, label]) => <button key={key} className={`nb-chip ${classFilter === key ? "active" : ""}`} onClick={() => setClassFilter(key)}>{label}</button>)}</div></div>}
-        <div className="nb-practice-filter-stack"><span>Sắp xếp</span><select className="nb-input nb-practice-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp bài"><option value="default">Mặc định</option><option value="most">Nhiều {isTeacher ? "em" : "bạn"} AC nhất</option><option value="least">Ít {isTeacher ? "em" : "bạn"} AC nhất</option></select></div>
+        <div className="nb-practice-filter-stack"><span>Mức độ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[["all", "Tất cả", problems.length], ...DIFFICULTIES.map((d) => [d, d, problems.filter((x) => x.difficulty === d).length])].map(([key, label, n]) => <button key={key} className={`nb-chip ${levelFilter === key ? "active" : ""}`} onClick={() => setLevelFilter(key)}>{label} <small className="nb-chip-n">{n}</small></button>)}</div></div>
+        <div className="nb-practice-filter-stack"><span>Điểm</span><div className="nb-practice-points"><input className="nb-input" type="number" inputMode="numeric" min="0" value={pointMin} onChange={(e) => setPointMin(e.target.value)} placeholder={`Từ ${pointBounds.min}`} aria-label="Điểm thấp nhất" /><i>–</i><input className="nb-input" type="number" inputMode="numeric" min="0" value={pointMax} onChange={(e) => setPointMax(e.target.value)} placeholder={`Đến ${pointBounds.max}`} aria-label="Điểm cao nhất" /></div></div>
+        <div className="nb-practice-filter-stack"><span>Sắp xếp</span><select className="nb-input nb-practice-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp bài"><option value="default">Mặc định</option><option value="diff-asc">Dễ → khó</option><option value="diff-desc">Khó → dễ</option><option value="pts-desc">Điểm cao → thấp</option><option value="pts-asc">Điểm thấp → cao</option><option value="most">Nhiều {isTeacher ? "em" : "bạn"} AC nhất</option><option value="least">Ít {isTeacher ? "em" : "bạn"} AC nhất</option></select></div>
         {!isTeacher && <div className="nb-practice-filter-stack"><span>Tiến độ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['todo', 'Chưa mở'], ['in-progress', 'Đang luyện'], ['done', 'Đã xong']].map(([key, label]) => <button key={key} className={`nb-chip ${progressFilter === key ? "active" : ""}`} onClick={() => setProgressFilter(key)}>{label}</button>)}</div></div>}
+        {filtersActive && <button type="button" className="nb-btn nb-btn-ghost nb-practice-clear" onClick={clearAllFilters}><X size={13} /> Xóa lọc</button>}
       </div>
 
       {isTeacher && (
@@ -6585,6 +6607,10 @@ function App() {
         .nb-gt-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #7b8aa0; } .nb-gt-foot > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; } .nb-gt-foot .nb-gt-cell { width: 24px; height: 22px; font-size: 11px; margin-left: 6px; }
         @media (max-width: 1100px) { .nb-badges { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (max-width: 420px) { .nb-badges { gap: 10px; } .nb-badge { padding: 14px 8px 12px; } .nb-badge small { display: none; } }
+        .nb-chip-n { margin-left: 3px; padding: 0 6px; border-radius: 999px; background: rgba(16,42,67,.08); font-size: 10px; font-weight: 800; } .nb-chip.active .nb-chip-n { background: rgba(255,255,255,.28); }
+        .nb-practice-points { display: flex; align-items: center; gap: 6px; } .nb-practice-points i { font-style: normal; color: #8795a8; }
+        .nb-practice-points .nb-input { width: 84px; padding: 6px 8px; font-size: 13px; }
+        .nb-practice-clear { align-self: flex-end; padding: 6px 12px; font-size: 12px; }
         /* ===== Nút sao chép code ===== */
         .nb-copywrap { position: relative; }
         .nb-copy-btn { position: absolute; top: 8px; right: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 8px; border: 1px solid #cdd6e3; background: rgba(255,255,255,.94); color: #3b4f6b; font: 700 12px "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; box-shadow: 0 1px 4px rgba(16,42,67,.12); opacity: .85; transition: opacity .15s, background .15s; backdrop-filter: blur(2px); }
