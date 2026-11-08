@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, useReducer, useContext } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
@@ -590,11 +591,17 @@ async function dbFetchFeedbackIds({ problemId, studentId }) {
 }
 // Chỉ 4 cột nhẹ, lấy tăng dần theo updated_at để giáo viên biết em nào đã nộp lại sau nhận xét
 async function dbFetchFeedbackIndex(since) {
-  let q = supabase.from("submission_feedback").select("submission_id,student_id,problem_id,updated_at").order("updated_at", { ascending: true }).limit(3000);
+  let q = supabase.from("submission_feedback").select("submission_id,student_id,problem_id,created_at,updated_at").order("updated_at", { ascending: true }).limit(3000);
   if (since) q = q.gt("updated_at", since);
   const { data, error } = await q;
   if (error) { if (isMissingTableError(error)) return null; throw error; }
-  return (data || []).map((r) => ({ submissionId: r.submission_id, studentId: r.student_id, problemId: r.problem_id || "", updatedAt: r.updated_at }));
+  return (data || []).map((r) => ({ submissionId: r.submission_id, studentId: r.student_id, problemId: r.problem_id || "", createdAt: r.created_at || r.updated_at, updatedAt: r.updated_at }));
+}
+// Toàn bộ nhận xét của một học sinh cho một bài (để xem quá trình sửa bài)
+async function dbFetchFeedbackGroup(studentId, problemId) {
+  const { data, error } = await supabase.from("submission_feedback").select("*").eq("student_id", studentId).eq("problem_id", problemId).order("updated_at", { ascending: true }).limit(100);
+  if (error) { if (isMissingTableError(error)) return []; throw error; }
+  return (data || []).map(mapFeedback);
 }
 function readFbAck() { try { return JSON.parse(localStorage.getItem("nb_fb_ack") || "{}") || {}; } catch { return {}; } }
 function writeFbAck(map) { try { localStorage.setItem("nb_fb_ack", JSON.stringify(map)); } catch { /* bỏ qua */ } }
@@ -2314,6 +2321,8 @@ function OverviewView({ currentUser, students, submissions, points, solvedCount,
         </div>
       </div>
 
+      <FeedbackTracker students={students} submissions={submissions} onNavigate={onNavigate} />
+
       <TeacherGoalTable students={students} subsByStudent={byStudentSubs} onNavigate={onNavigate} />
 
       <div className="nb-ov-grid three">
@@ -3179,7 +3188,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
 }
 
 /* ======================= NHẬN XÉT BÀI NỘP ======================= */
-const FeedbackContext = React.createContext({ role: "none", teacherName: "", byId: new Map(), list: [], unseenCount: 0, markSeen: () => {}, refresh: () => {}, followList: [], followSubIds: new Set(), followBySub: new Map(), followCount: 0, badgeCount: 0, ackFollowUp: () => {}, noteFeedbackSaved: () => {}, noteFeedbackDeleted: () => {} });
+const FeedbackContext = React.createContext({ role: "none", teacherName: "", byId: new Map(), list: [], unseenCount: 0, markSeen: () => {}, refresh: () => {}, followList: [], followSubIds: new Set(), followBySub: new Map(), followCount: 0, badgeCount: 0, ackFollowUp: () => {}, noteFeedbackSaved: () => {}, noteFeedbackDeleted: () => {}, fbIndex: [] });
 let pendingReviewTarget = null; // giáo viên bấm vào thông báo "nộp lại": { problemId, submissionId }
 let pendingProblemOpenId = null; // mở sẵn bài khi học sinh bấm vào thông báo nhận xét ở Tổng quan
 
@@ -3513,6 +3522,275 @@ function FollowUpInbox({ students, onOpen }) {
           {ctx.followList.length > rows.length && <li className="more">và {ctx.followList.length - rows.length} học sinh khác</li>}
         </ul>
       </div>
+    </section>
+  );
+}
+
+/* ---------- Theo dõi sửa bài sau nhận xét (giáo viên) ---------- */
+const FT_STALE_DAYS = 3;
+const FT_STATUS = {
+  pending: { label: "Chưa sửa", cls: "pending" },
+  retrying: { label: "Đang sửa", cls: "retrying" },
+  fixed: { label: "Đã sửa đúng", cls: "fixed" },
+  ok: { label: "Bài đã đúng", cls: "ok" },
+};
+function fmtDurationVi(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "< 1 phút";
+  if (m < 60) return `${m} phút`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} giờ`;
+  return `${Math.round(h / 24)} ngày`;
+}
+/* Gom nhận xét theo (học sinh, bài) rồi đối chiếu với các lần nộp sau đó */
+function computeFeedbackTracking(fbIndex, submissions, nowMs = Date.now()) {
+  const groups = new Map();
+  (fbIndex || []).forEach((f) => {
+    const k = `${f.studentId}:${f.problemId}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(f);
+  });
+  if (groups.size === 0) return [];
+  const subsByKey = new Map();
+  submissions.forEach((x) => {
+    const k = `${x.studentId}:${x.problemId}`;
+    if (!groups.has(k)) return;
+    if (!subsByKey.has(k)) subsByKey.set(k, []);
+    subsByKey.get(k).push(x);
+  });
+  const ts = (v) => new Date(v || 0).getTime();
+  const out = [];
+  groups.forEach((fbs, k) => {
+    const subs = (subsByKey.get(k) || []).sort((a, b) => ts(a.createdAt) - ts(b.createdAt));
+    const t0 = Math.min(...fbs.map((f) => ts(f.createdAt || f.updatedAt)));
+    const tn = Math.max(...fbs.map((f) => ts(f.updatedAt)));
+    const first = fbs[0];
+    const baseSub = subs.find((x) => fbs.some((f) => f.submissionId === x.id));
+    const after = subs.filter((x) => ts(x.createdAt) > t0);
+    const fixIdx = after.findIndex((x) => x.verdict === "AC");
+    const last = subs[subs.length - 1] || null;
+    let status; let fixMs = null; let tries = after.length;
+    if (baseSub && baseSub.verdict === "AC" && after.length === 0) status = "ok";
+    else if (fixIdx >= 0) { status = "fixed"; tries = fixIdx + 1; fixMs = ts(after[fixIdx].createdAt) - t0; }
+    else if (after.length > 0) status = "retrying";
+    else status = "pending";
+    const ageMs = nowMs - t0;
+    out.push({
+      key: k, studentId: first.studentId, problemId: first.problemId,
+      problemTitle: baseSub?.problemTitle || subs.find((x) => x.problemTitle)?.problemTitle || first.problemId,
+      status, t0, tn, count: fbs.length, tries, fixMs, ageMs,
+      stale: status === "pending" && ageMs >= FT_STALE_DAYS * 86400000,
+      waitingTeacher: status === "retrying" && last && ts(last.createdAt) > tn,
+      baseVerdict: baseSub?.verdict || null, lastSub: last, lastAt: last ? ts(last.createdAt) : 0,
+      fixedAt: fixIdx >= 0 ? ts(after[fixIdx].createdAt) : null,
+    });
+  });
+  return out;
+}
+const FT_PRIORITY = (r) => (r.stale ? 0 : r.waitingTeacher ? 1 : r.status === "pending" ? 2 : r.status === "retrying" ? 3 : r.status === "fixed" ? 4 : 5);
+
+function FeedbackTimelineModal({ row, studentName, submissions, onClose, onOpenReview }) {
+  const [fbs, setFbs] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    dbFetchFeedbackGroup(row.studentId, row.problemId).then((r) => { if (alive) setFbs(r); }).catch(() => { if (alive) setFbs([]); });
+    return () => { alive = false; };
+  }, [row.studentId, row.problemId]);
+  const events = useMemo(() => {
+    const ev = [];
+    submissions.filter((x) => x.studentId === row.studentId && x.problemId === row.problemId)
+      .forEach((x) => ev.push({ t: new Date(x.createdAt || 0).getTime(), type: "sub", sub: x }));
+    (fbs || []).forEach((f) => ev.push({ t: new Date(f.updatedAt || f.createdAt || 0).getTime(), type: "fb", fb: f }));
+    return ev.sort((a, b) => a.t - b.t || (a.type === "sub" ? -1 : 1));
+  }, [fbs, submissions, row.studentId, row.problemId]);
+  const lastSubId = [...events].reverse().find((e) => e.type === "sub")?.sub.id;
+  return createPortal(
+    <div className="nb-modal-overlay" onClick={onClose}>
+      <div className="nb-modal nb-ft-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="nb-modal-head">
+          <div>
+            <h3 className="nb-h3">Quá trình sửa bài</h3>
+            <p className="nb-sub" style={{ margin: "4px 0 0" }}>{studentName} · {row.problemTitle}</p>
+          </div>
+          <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
+        </div>
+        <div className="nb-ft-modal-body">
+          <div className="nb-ft-modal-sum">
+            <span className={`nb-ft-chip ${FT_STATUS[row.status].cls}`}>{FT_STATUS[row.status].label}</span>
+            {row.status === "fixed" && <span>Sửa đúng sau <b>{row.tries}</b> lần nộp lại · mất <b>{fmtDurationVi(row.fixMs)}</b></span>}
+            {row.status === "retrying" && <span>Đã nộp lại <b>{row.tries}</b> lần, chưa đạt AC{row.waitingTeacher ? " · đang chờ thầy xem" : ""}</span>}
+            {row.status === "pending" && <span>Nhận xét {timeAgoVi(row.t0)} · chưa nộp lại</span>}
+          </div>
+          {fbs === null ? <p className="nb-sub">Đang tải…</p> : (
+            <ol className="nb-ft-timeline">
+              {events.map((e, i) => e.type === "sub" ? (
+                <li key={`s${e.sub.id}`} className="sub">
+                  <span className="nb-ft-dot" />
+                  <div>
+                    <div className="nb-ft-line"><strong>Nộp bài</strong><VerdictPill verdict={e.sub.verdict} /><em>{e.sub.score ?? 0}đ</em>{e.sub.id === lastSubId && <i className="nb-ft-last">Mới nhất</i>}</div>
+                    <small>{formatSubmissionDate(e.sub.createdAt)} · {timeAgoVi(e.sub.createdAt)}</small>
+                  </div>
+                </li>
+              ) : (
+                <li key={`f${e.fb.submissionId}${i}`} className="fb">
+                  <span className="nb-ft-dot" />
+                  <div>
+                    <div className="nb-ft-line"><strong>Thầy nhận xét</strong>{e.fb.seenAt ? <i className="nb-ft-seen">Em đã xem</i> : <i className="nb-ft-unseen">Em chưa xem</i>}</div>
+                    {e.fb.comment && <p className="nb-ft-quote">{e.fb.comment}</p>}
+                    {e.fb.tags.length > 0 && <FeedbackTagList tags={e.fb.tags} />}
+                    {(e.fb.lineNotes.length > 0 || e.fb.fixedCode) && <small>{e.fb.lineNotes.length > 0 ? `${e.fb.lineNotes.length} ghi chú theo dòng` : ""}{e.fb.lineNotes.length > 0 && e.fb.fixedCode ? " · " : ""}{e.fb.fixedCode ? "có bản sửa gợi ý" : ""}</small>}
+                    <small>{formatSubmissionDate(e.fb.updatedAt)}</small>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+        <div className="nb-ft-modal-foot">
+          <button type="button" className="nb-btn" onClick={onClose}>Đóng</button>
+          <button type="button" className="nb-btn nb-btn-primary" onClick={onOpenReview}>Mở bài nộp mới nhất</button>
+        </div>
+      </div>
+    </div>,
+    document.querySelector(".nb-root") || document.body,
+  );
+}
+
+function FeedbackTracker({ students, submissions, onNavigate }) {
+  const ctx = useContext(FeedbackContext);
+  const [tab, setTab] = useState("items");
+  const [statusF, setStatusF] = useState("all");
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(null);
+  const [studentF, setStudentF] = useState("");
+  const isTeacher = ctx.role === "teacher";
+  const fbIndex = ctx.fbIndex || [];
+  const nameOf = useCallback((id) => students.find((st) => st.id === id)?.name || id, [students]);
+  const rows = useMemo(() => (isTeacher ? computeFeedbackTracking(fbIndex, submissions) : []), [isTeacher, fbIndex, submissions]);
+  const kpi = useMemo(() => {
+    const c = { total: rows.length, pending: 0, retrying: 0, fixed: 0, ok: 0, stale: 0, waiting: 0, fixSum: 0, fixN: 0, triesSum: 0 };
+    rows.forEach((r) => {
+      c[r.status] += 1;
+      if (r.stale) c.stale += 1;
+      if (r.waitingTeacher) c.waiting += 1;
+      if (r.status === "fixed") { c.fixSum += r.fixMs; c.fixN += 1; c.triesSum += r.tries; }
+    });
+    const needFix = c.total - c.ok;
+    c.rate = needFix > 0 ? Math.round((c.fixed / needFix) * 100) : 0;
+    c.avgFix = c.fixN ? c.fixSum / c.fixN : null;
+    c.avgTries = c.fixN ? c.triesSum / c.fixN : null;
+    return c;
+  }, [rows]);
+  const perStudent = useMemo(() => {
+    const m = new Map();
+    rows.forEach((r) => {
+      if (!m.has(r.studentId)) m.set(r.studentId, { id: r.studentId, total: 0, pending: 0, retrying: 0, fixed: 0, ok: 0, stale: 0, fixSum: 0, fixN: 0, triesSum: 0, last: 0 });
+      const a = m.get(r.studentId);
+      a.total += 1; a[r.status] += 1; if (r.stale) a.stale += 1;
+      if (r.status === "fixed") { a.fixSum += r.fixMs; a.fixN += 1; a.triesSum += r.tries; }
+      a.last = Math.max(a.last, r.t0);
+    });
+    return [...m.values()].map((a) => {
+      const need = a.total - a.ok;
+      return { ...a, rate: need > 0 ? Math.round((a.fixed / need) * 100) : null, avgFix: a.fixN ? a.fixSum / a.fixN : null, avgTries: a.fixN ? a.triesSum / a.fixN : null };
+    }).sort((x, y) => (y.stale - x.stale) || (y.pending - x.pending) || (y.retrying - x.retrying) || (x.rate ?? 101) - (y.rate ?? 101));
+  }, [rows]);
+  const shown = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return rows
+      .filter((r) => statusF === "all" || (statusF === "stale" ? r.stale : r.status === statusF))
+      .filter((r) => !studentF || r.studentId === studentF)
+      .filter((r) => !q || nameOf(r.studentId).toLowerCase().includes(q) || String(r.problemTitle).toLowerCase().includes(q))
+      .sort((a, b) => FT_PRIORITY(a) - FT_PRIORITY(b) || b.t0 - a.t0);
+  }, [rows, statusF, studentF, query, nameOf]);
+  if (!isTeacher || fbIndex.length === 0) return null;
+
+  const exportCsv = () => {
+    const stLabel = (r) => (r.stale ? "Chưa sửa (quá hạn)" : r.waitingTeacher ? "Đã nộp lại (chờ thầy)" : FT_STATUS[r.status].label);
+    const data = [["Học sinh", "Bài", "Trạng thái", "Số nhận xét", "Nhận xét lúc", "Số lần nộp lại", "Thời gian sửa (phút)", "Nộp gần nhất"]];
+    [...rows].sort((a, b) => FT_PRIORITY(a) - FT_PRIORITY(b)).forEach((r) => data.push([
+      nameOf(r.studentId), r.problemTitle, stLabel(r), r.count, new Date(r.t0).toLocaleString("vi-VN"), r.tries,
+      r.fixMs != null ? Math.round(r.fixMs / 60000) : "", r.lastAt ? new Date(r.lastAt).toLocaleString("vi-VN") : "",
+    ]));
+    downloadCsv(`theo-doi-sua-bai-${new Date().toISOString().slice(0, 10)}.csv`, data);
+  };
+  const pct = (n) => (kpi.total ? (n / kpi.total) * 100 : 0);
+  const chips = [["all", `Tất cả ${kpi.total}`], ["stale", `Quá ${FT_STALE_DAYS} ngày ${kpi.stale}`], ["pending", `Chưa sửa ${kpi.pending}`], ["retrying", `Đang sửa ${kpi.retrying}`], ["fixed", `Đã sửa đúng ${kpi.fixed}`], ["ok", `Bài đã đúng ${kpi.ok}`]];
+  const openReview = (r) => { pendingReviewTarget = { problemId: r.problemId, submissionId: r.lastSub?.id }; setOpen(null); onNavigate?.("problems"); };
+
+  return (
+    <section className="nb-ft" aria-label="Theo dõi sửa bài sau nhận xét">
+      <header className="nb-ft-head">
+        <div><span className="nb-ov-eyebrow">Giám sát nhận xét</span><h2>Theo dõi sửa bài sau nhận xét</h2></div>
+        <button type="button" className="nb-btn" onClick={exportCsv}><UploadCloud size={15} style={{ transform: "rotate(180deg)" }} /> Xuất CSV</button>
+      </header>
+      <div className="nb-ft-kpis">
+        <div className="nb-ft-kpi"><small>Bài đã nhận xét</small><strong>{kpi.total}</strong><span>{perStudent.length} học sinh</span></div>
+        <div className="nb-ft-kpi good"><small>Tỷ lệ sửa đúng</small><strong>{kpi.rate}%</strong><span>{kpi.fixed} bài đã AC sau nhận xét</span></div>
+        <div className={`nb-ft-kpi ${kpi.stale ? "bad" : ""}`}><small>Chưa sửa quá {FT_STALE_DAYS} ngày</small><strong>{kpi.stale}</strong><span>{kpi.pending} bài chưa nộp lại</span></div>
+        <div className={`nb-ft-kpi ${kpi.waiting ? "warn" : ""}`}><small>Chờ thầy xem lại</small><strong>{kpi.waiting}</strong><span>{kpi.retrying} bài đang sửa</span></div>
+        <div className="nb-ft-kpi"><small>Thời gian sửa trung bình</small><strong>{kpi.avgFix != null ? fmtDurationVi(kpi.avgFix) : "—"}</strong><span>{kpi.avgTries != null ? `~${kpi.avgTries.toFixed(1)} lần nộp lại` : "chưa có dữ liệu"}</span></div>
+      </div>
+      <div className="nb-ft-bar" role="img" aria-label="Tỷ lệ trạng thái sửa bài">
+        <i className="fixed" style={{ width: `${pct(kpi.fixed)}%` }} /><i className="ok" style={{ width: `${pct(kpi.ok)}%` }} /><i className="retrying" style={{ width: `${pct(kpi.retrying)}%` }} /><i className="pending" style={{ width: `${pct(kpi.pending)}%` }} />
+      </div>
+      <div className="nb-ft-legend"><span className="fixed">Đã sửa đúng</span><span className="ok">Bài đã đúng</span><span className="retrying">Đang sửa</span><span className="pending">Chưa sửa</span></div>
+
+      <div className="nb-ft-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === "items"} className={tab === "items" ? "on" : ""} onClick={() => setTab("items")}>Theo bài đã nhận xét</button>
+        <button type="button" role="tab" aria-selected={tab === "students"} className={tab === "students" ? "on" : ""} onClick={() => setTab("students")}>Theo học sinh</button>
+      </div>
+
+      {tab === "items" ? (
+        <>
+          <div className="nb-ft-tools">
+            <div className="nb-ft-chips">{chips.map(([k, l]) => <button key={k} type="button" className={`nb-chip ${statusF === k ? "active" : ""}`} onClick={() => setStatusF(k)}>{l}</button>)}</div>
+            <label className="nb-ft-search"><Search size={14} /><input placeholder="Tìm học sinh hoặc bài…" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+          </div>
+          {studentF && <div className="nb-ft-filtered">Đang lọc theo <b>{nameOf(studentF)}</b> <button type="button" className="nb-link-button" onClick={() => setStudentF("")}>Bỏ lọc</button></div>}
+          {shown.length === 0 ? <p className="nb-sub" style={{ padding: "10px 4px" }}>Không có bài nào khớp bộ lọc.</p> : (
+            <ul className="nb-ft-list">
+              {shown.slice(0, 40).map((r) => (
+                <li key={r.key} className={r.stale ? "stale" : ""}>
+                  <Avatar name={nameOf(r.studentId)} size={30} />
+                  <div className="nb-ft-who"><b>{nameOf(r.studentId)}</b><span>{r.problemTitle}</span></div>
+                  <div className="nb-ft-state">
+                    <span className={`nb-ft-chip ${r.stale ? "stale" : FT_STATUS[r.status].cls}`}>{r.stale ? "Quá hạn" : FT_STATUS[r.status].label}</span>
+                    <small>
+                      {r.status === "fixed" && `${r.tries} lần nộp lại · ${fmtDurationVi(r.fixMs)}`}
+                      {r.status === "retrying" && `${r.tries} lần nộp lại${r.waitingTeacher ? " · chờ thầy" : ""}`}
+                      {r.status === "pending" && `nhận xét ${timeAgoVi(r.t0)}`}
+                      {r.status === "ok" && "đã đúng từ lần nhận xét"}
+                    </small>
+                  </div>
+                  <button type="button" className="nb-btn" onClick={() => setOpen(r)}>Xem quá trình</button>
+                </li>))}
+              {shown.length > 40 && <li className="more">và {shown.length - 40} bài khác, hãy lọc hoặc xuất CSV</li>}
+            </ul>
+          )}
+        </>
+      ) : (
+        <div className="nb-ft-table-wrap">
+          <table className="nb-ft-table">
+            <thead><tr><th>Học sinh</th><th>Nhận xét</th><th>Chưa sửa</th><th>Đang sửa</th><th>Đã sửa</th><th>Tỷ lệ sửa</th><th>TB lần nộp lại</th><th>TB thời gian sửa</th></tr></thead>
+            <tbody>
+              {perStudent.map((a) => (
+                <tr key={a.id} onClick={() => { setStudentF(a.id); setStatusF("all"); setTab("items"); }} title="Bấm để xem các bài của em">
+                  <td><span className="nb-ft-cell-who"><Avatar name={nameOf(a.id)} size={26} /><b>{nameOf(a.id)}</b></span></td>
+                  <td>{a.total}</td>
+                  <td className={a.stale ? "bad" : ""}>{a.pending}{a.stale > 0 && <i title="Quá hạn">!</i>}</td>
+                  <td>{a.retrying}</td>
+                  <td>{a.fixed}</td>
+                  <td>{a.rate != null ? <span className="nb-ft-rate"><i style={{ width: `${a.rate}%` }} />{a.rate}%</span> : "—"}</td>
+                  <td>{a.avgTries != null ? a.avgTries.toFixed(1) : "—"}</td>
+                  <td>{a.avgFix != null ? fmtDurationVi(a.avgFix) : "—"}</td>
+                </tr>))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {open && <FeedbackTimelineModal row={open} studentName={nameOf(open.studentId)} submissions={submissions} onClose={() => setOpen(null)} onOpenReview={() => openReview(open)} />}
     </section>
   );
 }
@@ -6182,7 +6460,7 @@ function App() {
     setFbAck((prev) => { const k = `${studentId}:${problemId}`; if (prev[k] === latestSubId) return prev; const next = { ...prev, [k]: latestSubId }; writeFbAck(next); return next; });
   }, []);
   const noteFeedbackSaved = useCallback((fb) => {
-    setFbIndex((prev) => { const m = new Map(prev.map((r) => [r.submissionId, r])); m.set(fb.submissionId, { submissionId: fb.submissionId, studentId: fb.studentId, problemId: fb.problemId, updatedAt: fb.updatedAt }); return [...m.values()]; });
+    setFbIndex((prev) => { const m = new Map(prev.map((r) => [r.submissionId, r])); m.set(fb.submissionId, { submissionId: fb.submissionId, studentId: fb.studentId, problemId: fb.problemId, createdAt: fb.createdAt || m.get(fb.submissionId)?.createdAt || fb.updatedAt, updatedAt: fb.updatedAt }); return [...m.values()]; });
     if (fb.updatedAt && (!fbIndexSince.current || fb.updatedAt > fbIndexSince.current)) fbIndexSince.current = fb.updatedAt;
   }, []);
   const noteFeedbackDeleted = useCallback((submissionId) => setFbIndex((prev) => prev.filter((r) => r.submissionId !== submissionId)), []);
@@ -6211,8 +6489,8 @@ function App() {
     unseenCount: myFeedback.filter((f) => !f.seenAt).length, markSeen: markFeedbackSeen, refresh: loadMyFeedback,
     followList, followSubIds: followData.subIds, followBySub: followData.bySub, followCount: followList.length, ackFollowUp,
     badgeCount: isTeacher ? followList.length : myFeedback.filter((f) => !f.seenAt).length,
-    noteFeedbackSaved, noteFeedbackDeleted,
-  }), [isTeacher, currentUser?.name, myFeedback, markFeedbackSeen, loadMyFeedback, followList, followData, ackFollowUp, noteFeedbackSaved, noteFeedbackDeleted]);
+    noteFeedbackSaved, noteFeedbackDeleted, fbIndex,
+  }), [isTeacher, currentUser?.name, myFeedback, markFeedbackSeen, loadMyFeedback, followList, followData, ackFollowUp, noteFeedbackSaved, noteFeedbackDeleted, fbIndex]);
 
   // Làm mới nền: chỉ chạy khi đã đăng nhập, tab đang hiện và người dùng còn thao tác.
   // Mỗi lượt tải nhẹ (bài nộp mới); 2 lượt có thêm thảo luận/bài giao; 5 lượt tải đầy đủ để đối chiếu.
@@ -6758,6 +7036,67 @@ function App() {
         .nb-fbe-follow-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; color: #7a4310; } .nb-fbe-follow-head svg { flex: none; color: #d2491f; } .nb-fbe-follow-head span { flex: 1 1 220px; } .nb-fbe-follow-head .nb-btn { padding: 5px 10px; font-size: 12px; }
         .nb-fbe-prev { padding: 10px 12px; border-radius: 10px; background: #fff; border: 1px dashed #e6c9a3; font-size: 13.5px; color: #102a43; } .nb-fbe-prev p { margin: 6px 0; white-space: pre-wrap; } .nb-fbe-prev ul { margin: 4px 0 0; padding-left: 18px; font-size: 13px; } .nb-fbe-prev small { color: #8a7a55; }
         @media (max-width: 760px) { .nb-fui { padding: 14px; } .nb-fui-icon { display: none; } }
+        /* ===== Theo dõi sửa bài sau nhận xét ===== */
+        .nb-ft { background: #fff; border: 1px solid var(--ov-line, #e4e9f1); border-radius: 18px; box-shadow: var(--ov-shadow, 0 1px 3px rgba(16,42,67,.06)); padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; }
+        .nb-ft-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+        .nb-ft-head h2 { margin: 2px 0 0; font-size: 18px; color: #102a43; }
+        .nb-ft-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+        .nb-ft-kpi { background: #f6f8fb; border: 1px solid #e9edf4; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .nb-ft-kpi small { font-size: 11.5px; color: #627d98; font-weight: 600; }
+        .nb-ft-kpi strong { font-size: 24px; line-height: 1.15; color: #102a43; }
+        .nb-ft-kpi span { font-size: 12px; color: #829ab1; }
+        .nb-ft-kpi.good strong { color: #17803d; } .nb-ft-kpi.bad { background: #fff1ee; border-color: #f7cfc4; } .nb-ft-kpi.bad strong { color: #c8391a; }
+        .nb-ft-kpi.warn { background: #fff8e6; border-color: #f3dfa5; } .nb-ft-kpi.warn strong { color: #a56a00; }
+        .nb-ft-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #eef1f6; }
+        .nb-ft-bar i { display: block; height: 100%; }
+        .nb-ft-bar .fixed, .nb-ft-legend .fixed::before { background: #2f9e5b; } .nb-ft-bar .ok, .nb-ft-legend .ok::before { background: #9ad3b0; }
+        .nb-ft-bar .retrying, .nb-ft-legend .retrying::before { background: #e8a527; } .nb-ft-bar .pending, .nb-ft-legend .pending::before { background: #e5603c; }
+        .nb-ft-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: #52667a; margin-top: -4px; }
+        .nb-ft-legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+        .nb-ft-tabs { display: flex; gap: 4px; border-bottom: 1px solid #e9edf4; }
+        .nb-ft-tabs button { background: none; border: 0; padding: 8px 14px; font: inherit; font-weight: 600; font-size: 14px; color: #627d98; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+        .nb-ft-tabs button.on { color: #0b6e6e; border-bottom-color: #0b6e6e; }
+        .nb-ft-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+        .nb-ft-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+        .nb-ft-search { display: flex; align-items: center; gap: 6px; border: 1px solid #d9e1ec; border-radius: 10px; padding: 6px 10px; background: #fff; color: #829ab1; }
+        .nb-ft-search input { border: 0; outline: 0; font: inherit; font-size: 13.5px; width: 190px; color: #102a43; background: transparent; }
+        .nb-ft-filtered { font-size: 13px; color: #52667a; display: flex; gap: 8px; align-items: center; }
+        .nb-ft-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+        .nb-ft-list li { display: flex; align-items: center; gap: 12px; padding: 9px 4px; border-bottom: 1px solid #eef1f6; }
+        .nb-ft-list li.stale { background: linear-gradient(90deg, #fff4f0, transparent 60%); }
+        .nb-ft-list li.more { justify-content: center; color: #829ab1; font-size: 13px; border-bottom: 0; }
+        .nb-ft-who { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .nb-ft-who b { font-size: 14px; color: #102a43; } .nb-ft-who span { font-size: 12.5px; color: #627d98; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .nb-ft-state { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 150px; }
+        .nb-ft-state small { font-size: 12px; color: #829ab1; }
+        .nb-ft-chip { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; }
+        .nb-ft-chip.fixed { background: #dff5e7; color: #17803d; } .nb-ft-chip.ok { background: #eaf6ef; color: #3c7b57; }
+        .nb-ft-chip.retrying { background: #fff1cc; color: #8a5a00; } .nb-ft-chip.pending { background: #ffe5dc; color: #c8391a; }
+        .nb-ft-chip.stale { background: #e5603c; color: #fff; }
+        .nb-ft-table-wrap { overflow-x: auto; }
+        .nb-ft-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+        .nb-ft-table th { text-align: left; font-size: 12px; color: #627d98; font-weight: 700; padding: 6px 10px; border-bottom: 1px solid #e9edf4; white-space: nowrap; }
+        .nb-ft-table td { padding: 8px 10px; border-bottom: 1px solid #eef1f6; color: #243b53; }
+        .nb-ft-table tbody tr { cursor: pointer; } .nb-ft-table tbody tr:hover { background: #f6f8fb; }
+        .nb-ft-table td.bad { color: #c8391a; font-weight: 700; } .nb-ft-table td.bad i { font-style: normal; margin-left: 4px; background: #e5603c; color: #fff; border-radius: 999px; padding: 0 6px; font-size: 11px; }
+        .nb-ft-cell-who { display: inline-flex; align-items: center; gap: 8px; }
+        .nb-ft-rate { position: relative; display: inline-block; min-width: 74px; padding: 1px 8px; border-radius: 6px; background: #eef1f6; overflow: hidden; font-weight: 700; z-index: 0; }
+        .nb-ft-rate i { position: absolute; left: 0; top: 0; bottom: 0; background: #bfe7cd; z-index: -1; }
+        .nb-ft-modal { max-width: 640px; }
+        .nb-ft-modal-body { padding: 14px 22px; display: flex; flex-direction: column; gap: 12px; }
+        .nb-ft-modal-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13.5px; color: #334e68; }
+        .nb-ft-timeline { list-style: none; margin: 0; padding: 0 0 0 6px; display: flex; flex-direction: column; border-left: 2px solid #e1e7f0; margin-left: 6px; }
+        .nb-ft-timeline li { position: relative; padding: 0 0 16px 20px; }
+        .nb-ft-dot { position: absolute; left: -8px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 3px solid #627d98; }
+        .nb-ft-timeline li.fb .nb-ft-dot { border-color: #0b6e6e; background: #0b6e6e; } .nb-ft-timeline li.sub .nb-ft-dot { border-color: #3b82c4; }
+        .nb-ft-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; } .nb-ft-line em { font-style: normal; font-size: 12.5px; color: #627d98; }
+        .nb-ft-timeline small { display: block; color: #829ab1; font-size: 12px; margin-top: 2px; }
+        .nb-ft-quote { margin: 6px 0 4px; padding: 8px 12px; border-left: 3px solid #0b6e6e; background: #f0f8f8; border-radius: 0 8px 8px 0; font-size: 13.5px; color: #243b53; white-space: pre-wrap; }
+        .nb-ft-last { font-style: normal; font-size: 11px; font-weight: 700; background: #e7f0fb; color: #2b6cb0; padding: 1px 8px; border-radius: 999px; }
+        .nb-ft-seen, .nb-ft-unseen { font-style: normal; font-size: 11.5px; padding: 1px 8px; border-radius: 999px; } .nb-ft-seen { background: #eaf6ef; color: #3c7b57; } .nb-ft-unseen { background: #fff1cc; color: #8a5a00; }
+        .nb-ft-modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 22px 18px; border-top: 1px solid var(--paper-line, #e9edf4); }
+        @media (max-width: 860px) { .nb-ft-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .nb-ft-list li { flex-wrap: wrap; } .nb-ft-state { align-items: flex-start; min-width: 0; } .nb-ft-search input { width: 130px; } }
+
         /* ===== Nút sao chép code ===== */
         .nb-copywrap { position: relative; }
         .nb-copy-btn { position: absolute; top: 8px; right: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 8px; border: 1px solid #cdd6e3; background: rgba(255,255,255,.94); color: #3b4f6b; font: 700 12px "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; box-shadow: 0 1px 4px rgba(16,42,67,.12); opacity: .85; transition: opacity .15s, background .15s; backdrop-filter: blur(2px); }
