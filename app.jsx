@@ -1049,7 +1049,10 @@ function SetupErrorScreen({ onRetry }) {
         </div>
         <h2 className="nb-h2">Chưa kết nối được cơ sở dữ liệu</h2>
         <p className="nb-para" style={{ marginTop: 10 }}>
-          Kiểm tra lại: đã dán đúng <strong>SUPABASE_URL</strong> và <strong>SUPABASE_ANON_KEY</strong> vào file <code>config.js</code> chưa,
+          Máy chủ dữ liệu không phản hồi hoặc từ chối truy cập. Có thể do mạng yếu, dự án Supabase đang tạm dừng hoặc đã hết hạn mức băng thông (egress) của gói miễn phí. Thầy cô mở <strong>Supabase → Settings → Usage</strong> để kiểm tra.
+        </p>
+        <p className="nb-para" style={{ marginTop: 10 }}>
+          Nếu mới triển khai, kiểm tra lại: đã dán đúng <strong>SUPABASE_URL</strong> và <strong>SUPABASE_ANON_KEY</strong> vào file <code>config.js</code> chưa,
           và đã chạy file <code>schema.sql</code> trong Supabase SQL Editor chưa (xem <code>huong-dan-trien-khai.md</code>).
         </p>
         <button className="nb-btn nb-btn-primary" style={{ width: "100%", justifyContent: "center", marginTop: 16 }} onClick={onRetry}>Thử lại</button>
@@ -1992,10 +1995,12 @@ function GoalStrip({ days }) {
   );
 }
 
+function gtLevel(n) { return n >= WEEKLY_GOAL_DEFAULT + 2 * CHALLENGE_STEP ? "super" : n >= WEEKLY_GOAL_DEFAULT + CHALLENGE_STEP ? "chal" : n >= WEEKLY_GOAL_DEFAULT ? "ok" : n > 0 ? "part" : "none"; }
 function TeacherGoalTable({ students, subsByStudent, onNavigate }) {
   const [filter, setFilter] = useState("all");
   const [sortBy, setSortBy] = useState("attention");
   const [showAll, setShowAll] = useState(false);
+  const [q, setQ] = useState("");
   const rows = useMemo(() => students.map((st) => {
     const m = acPerDay(subsByStudent.get(st.id) || []);
     const days = lastDaysCounts(m, 7);
@@ -2003,8 +2008,10 @@ function TeacherGoalTable({ students, subsByStudent, onNavigate }) {
   }), [students, subsByStudent]);
   const reachedToday = rows.filter((r) => r.today >= WEEKLY_GOAL_DEFAULT).length;
   const filtered = rows.filter((r) => filter === "all" ? true : filter === "done" ? r.today >= WEEKLY_GOAL_DEFAULT : filter === "partial" ? r.today > 0 && r.today < WEEKLY_GOAL_DEFAULT : r.today === 0)
+    .filter((r) => !q.trim() || (r.student.name || "").toLowerCase().includes(q.trim().toLowerCase()))
     .sort((a, b) => sortBy === "streak" ? (b.streak - a.streak) || (b.reached - a.reached) : (a.today - b.today) || (a.reached - b.reached) || (a.student.name || "").localeCompare(b.student.name || "", "vi"));
-  const shown = showAll ? filtered : filtered.slice(0, 10);
+  const LIMIT = 8;
+  const shown = showAll ? filtered : filtered.slice(0, LIMIT);
   const header = rows[0]?.days || [];
 
   function exportCsv() {
@@ -2018,40 +2025,55 @@ function TeacherGoalTable({ students, subsByStudent, onNavigate }) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
+  const cnt = { all: rows.length, done: reachedToday, partial: rows.filter((r) => r.today > 0 && r.today < WEEKLY_GOAL_DEFAULT).length, none: rows.filter((r) => r.today === 0).length };
+  const pct = rows.length ? Math.round((reachedToday / rows.length) * 100) : 0;
+  const tiles = [["all", "Cả lớp", "all"], ["done", "Đã đạt", "ok"], ["partial", "Đang làm", "part"], ["none", "Chưa làm", "none"]];
+
   return (
     <section className="nb-ov-panel nb-gt">
       <header>
-        <div><span className="nb-ov-eyebrow">Mục tiêu ngày · 7 ngày gần nhất</span><h2>Đạt {WEEKLY_GOAL_DEFAULT} bài AC hôm nay: {reachedToday}/{students.length} em</h2></div>
+        <div>
+          <span className="nb-ov-eyebrow">Mục tiêu ngày · 7 ngày gần nhất</span>
+          <h2>Hôm nay <b>{reachedToday}/{students.length}</b> em đạt {WEEKLY_GOAL_DEFAULT} bài AC</h2>
+        </div>
         <button className="nb-link-button" onClick={exportCsv}><Save size={14} /> Xuất CSV</button>
       </header>
       {students.length === 0 ? <OvEmpty icon={<Users size={22} />} title="Chưa có học sinh" text="Dữ liệu hiện khi lớp có học sinh." /> : (
         <>
+          <div className="nb-gt-progress" role="img" aria-label={`${pct}% học sinh đã đạt mục tiêu hôm nay`}><i style={{ width: `${pct}%` }} /><i className="part" style={{ width: `${rows.length ? (cnt.partial / rows.length) * 100 : 0}%` }} /></div>
           <div className="nb-gt-tools">
-            <div className="nb-filter-row" style={{ margin: 0 }}>
-              {[["all", "Tất cả"], ["done", "Đã đạt hôm nay"], ["partial", "Đang làm"], ["none", "Chưa làm hôm nay"]].map(([k, l]) => <button key={k} className={`nb-chip ${filter === k ? "active" : ""}`} onClick={() => { setFilter(k); setShowAll(false); }}>{l}</button>)}
+            <div className="nb-gt-tiles" role="tablist">
+              {tiles.map(([k, l, tone]) => (
+                <button key={k} type="button" role="tab" aria-selected={filter === k} className={`nb-gt-tile ${tone} ${filter === k ? "on" : ""}`} onClick={() => { setFilter(k); setShowAll(false); }}>
+                  <b>{cnt[k]}</b><span>{l}</span>
+                </button>))}
             </div>
-            <select className="nb-input nb-gt-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp">
-              <option value="attention">Cần nhắc trước</option>
-              <option value="streak">Chuỗi cao nhất</option>
-            </select>
+            <div className="nb-gt-right">
+              <label className="nb-gt-search"><Search size={13} /><input placeholder="Tìm em…" value={q} onChange={(e) => { setQ(e.target.value); setShowAll(false); }} /></label>
+              <select className="nb-input nb-gt-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp">
+                <option value="attention">Cần nhắc trước</option>
+                <option value="streak">Chuỗi cao nhất</option>
+              </select>
+            </div>
           </div>
           <div className="nb-gt-scroll">
             <table className="nb-gt-table">
-              <thead><tr><th>Học sinh</th>{header.map((d) => <th key={d.key} className={d.today ? "today" : ""}>{d.dow}<small>{d.label}</small></th>)}<th>Chuỗi</th></tr></thead>
+              <thead><tr><th>Học sinh</th>{header.map((d) => <th key={d.key} className={d.today ? "today" : ""}>{d.today ? "Nay" : d.dow}<small>{d.label.slice(0, 5)}</small></th>)}<th>Đạt</th><th>Chuỗi</th></tr></thead>
               <tbody>
                 {shown.map((r) => (
-                  <tr key={r.student.id}>
-                    <td><div className="nb-gt-name"><Avatar name={r.student.name} size={26} /><span>{r.student.name}</span></div></td>
-                    {r.days.map((d) => <td key={d.key} className={d.today ? "today" : ""}><span className={`nb-gt-cell ${d.count >= WEEKLY_GOAL_DEFAULT ? "ok" : d.count > 0 ? "part" : "none"}`}>{d.count > 0 ? d.count : "–"}</span></td>)}
+                  <tr key={r.student.id} className={r.today >= WEEKLY_GOAL_DEFAULT ? "done" : ""}>
+                    <td><div className="nb-gt-name"><span className={`nb-gt-dot ${gtLevel(r.today)}`} title={r.today >= WEEKLY_GOAL_DEFAULT ? "Đã đạt hôm nay" : r.today > 0 ? "Đang làm" : "Chưa làm hôm nay"} /><Avatar name={r.student.name} size={22} /><span>{r.student.name}</span></div></td>
+                    {r.days.map((d) => <td key={d.key} className={d.today ? "today" : ""}><span className={`nb-gt-cell ${gtLevel(d.count)}`} style={d.count > 0 && d.count < WEEKLY_GOAL_DEFAULT ? { "--fill": `${(d.count / WEEKLY_GOAL_DEFAULT) * 100}%` } : undefined} title={`${d.dow} ${d.label}: ${d.count} bài AC`}>{d.count > 0 ? d.count : ""}</span></td>)}
+                    <td><span className="nb-gt-reach" title={`${r.reached}/7 ngày đạt mục tiêu`}>{r.reached}<small>/7</small></span></td>
                     <td><span className={`nb-gt-streak ${r.streak > 0 ? "on" : ""}`}><Flame size={12} /> {r.streak}</span></td>
                   </tr>))}
-                {shown.length === 0 && <tr><td colSpan={9} className="nb-gt-empty">Không có học sinh nào trong mục này.</td></tr>}
+                {shown.length === 0 && <tr><td colSpan={10} className="nb-gt-empty">Không có học sinh nào khớp.</td></tr>}
               </tbody>
             </table>
           </div>
           <div className="nb-gt-foot">
-            <span><i className="nb-gt-cell ok">{WEEKLY_GOAL_DEFAULT}</i> đạt mục tiêu <i className="nb-gt-cell part">2</i> làm một phần <i className="nb-gt-cell none">–</i> chưa làm</span>
-            {filtered.length > 10 && <button className="nb-link-button" onClick={() => setShowAll((v) => !v)}>{showAll ? "Thu gọn" : `Xem tất cả ${filtered.length} em`}</button>}
+            <span className="nb-gt-legend"><i className="nb-gt-cell none" /> chưa làm <i className="nb-gt-cell part" style={{ "--fill": "50%" }} /> 1–{WEEKLY_GOAL_DEFAULT - 1} bài <i className="nb-gt-cell ok" /> {WEEKLY_GOAL_DEFAULT}+ đạt <i className="nb-gt-cell chal" /> {WEEKLY_GOAL_DEFAULT + CHALLENGE_STEP}+ thử thách <i className="nb-gt-cell super" /> {WEEKLY_GOAL_DEFAULT + 2 * CHALLENGE_STEP}+ siêu</span>
+            {filtered.length > LIMIT && <button className="nb-link-button" onClick={() => setShowAll((v) => !v)}>{showAll ? "Thu gọn" : `Xem tất cả ${filtered.length} em`}</button>}
           </div>
         </>
       )}
@@ -6384,7 +6406,8 @@ function App() {
     setLoading(true);
     setSetupError(false);
     try {
-      const data = await fetchAll();
+      // Nếu máy chủ không phản hồi (quá tải băng thông, dự án tạm dừng, mạng chậm) thì báo lỗi thay vì treo mãi ở "Đang tải"
+      const data = await Promise.race([fetchAll(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 40000))]);
       applyData(data);
       const sessionUserId = lsGet("session-user");
       if (sessionUserId && data.accounts.some((a) => a.id === sessionUserId)) setAuthUserId(sessionUserId);
@@ -6998,22 +7021,44 @@ function App() {
         .nb-badge.earned .nb-badge-state { background: var(--c2); color: #fff; }
         .nb-badge.locked .nb-badge-state { background: #eef1f6; color: #66748a; font-family: var(--code-font, monospace); }
         .nb-badge-note { margin: 14px 0 0; font-size: 12.5px; color: #7b8aa0; } .nb-badge-note b { color: #102a43; }
-        .nb-gt { display: flex; flex-direction: column; gap: 12px; }
+        .nb-gt { display: flex; flex-direction: column; gap: 10px; }
         .nb-gt > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-        .nb-gt > header h2 { margin: 4px 0 0; font-size: 18px; }
+        .nb-gt > header h2 { margin: 3px 0 0; font-size: 17px; } .nb-gt > header h2 b { color: #1f9d6b; font-size: 19px; }
+        .nb-gt-progress { display: flex; height: 6px; border-radius: 999px; background: #eef1f6; overflow: hidden; }
+        .nb-gt-progress i { display: block; background: #1f9d6b; transition: width .4s; } .nb-gt-progress i.part { background: #f3c15f; }
         .nb-gt-tools { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
-        .nb-gt .nb-gt-sort { width: auto; flex: none; padding: 6px 10px; font-size: 13px; }
-        .nb-gt-scroll { overflow-x: auto; }
-        .nb-gt-table { width: 100%; border-collapse: collapse; min-width: 640px; }
-        .nb-gt-table th { font-size: 11.5px; color: #7b8aa0; font-weight: 700; text-align: center; padding: 6px 4px; border-bottom: 1px solid #e6ebf2; } .nb-gt-table th:first-child { text-align: left; }
-        .nb-gt-table th small { display: block; font-weight: 500; font-size: 10.5px; color: #a0abbb; } .nb-gt-table th.today { color: #2f6fed; }
-        .nb-gt-table td { padding: 6px 4px; text-align: center; border-bottom: 1px solid #f0f3f8; } .nb-gt-table td.today { background: #f3f7ff; }
-        .nb-gt-name { display: flex; align-items: center; gap: 9px; text-align: left; font-size: 13.5px; font-weight: 600; color: #102a43; } .nb-gt-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 190px; }
-        .nb-gt-cell { display: inline-grid; place-items: center; width: 30px; height: 28px; border-radius: 8px; font-size: 12.5px; font-weight: 800; font-style: normal; background: #f0f3f8; color: #a0abbb; }
-        .nb-gt-cell.ok { background: #1f9d6b; color: #fff; } .nb-gt-cell.part { background: #fdeccb; color: #b9770e; }
-        .nb-gt-streak { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 800; color: #a0abbb; } .nb-gt-streak.on { color: #d2491f; }
+        .nb-gt-tiles { display: flex; gap: 6px; flex-wrap: wrap; }
+        .nb-gt-tile { display: inline-flex; align-items: baseline; gap: 6px; padding: 5px 12px; border-radius: 10px; border: 1px solid #e1e7f0; background: #fff; cursor: pointer; font: inherit; color: #52667a; transition: all .15s; }
+        .nb-gt-tile b { font-size: 15px; color: #102a43; } .nb-gt-tile span { font-size: 12.5px; font-weight: 600; }
+        .nb-gt-tile:hover { border-color: #b8c4d6; }
+        .nb-gt-tile.on { background: #102a43; border-color: #102a43; color: #d9e2ec; } .nb-gt-tile.on b { color: #fff; }
+        .nb-gt-tile.ok:not(.on) b { color: #1f9d6b; } .nb-gt-tile.part:not(.on) b { color: #b9770e; } .nb-gt-tile.none:not(.on) b { color: #c8391a; }
+        .nb-gt-right { display: flex; gap: 8px; align-items: center; }
+        .nb-gt-search { display: flex; align-items: center; gap: 6px; border: 1px solid #d9e1ec; border-radius: 10px; padding: 5px 9px; background: #fff; color: #829ab1; }
+        .nb-gt-search input { border: 0; outline: 0; font: inherit; font-size: 13px; width: 110px; color: #102a43; background: transparent; }
+        .nb-gt .nb-gt-sort { width: auto; flex: none; padding: 5px 10px; font-size: 13px; border-radius: 10px; }
+        .nb-gt-scroll { overflow-x: auto; border: 1px solid #edf0f6; border-radius: 12px; }
+        .nb-gt-table { width: 100%; border-collapse: collapse; min-width: 600px; }
+        .nb-gt-table th { font-size: 11.5px; color: #7b8aa0; font-weight: 700; text-align: center; padding: 6px 3px; background: #f8fafc; border-bottom: 1px solid #e6ebf2; line-height: 1.2; } .nb-gt-table th:first-child { text-align: left; padding-left: 12px; }
+        .nb-gt-table th small { display: block; font-weight: 500; font-size: 10px; color: #a0abbb; } .nb-gt-table th.today { color: #2f6fed; background: #eaf1ff; }
+        .nb-gt-table td { padding: 2px 2px; text-align: center; border-bottom: 1px solid #f3f5f9; height: 30px; }
+        .nb-gt-table td.today { background: #f3f7ff; } .nb-gt-table td:first-child { padding-left: 12px; }
+        .nb-gt-table tbody tr:hover td { background: #f7f9fc; } .nb-gt-table tbody tr:hover td.today { background: #ebf2ff; }
+        .nb-gt-table tr.done .nb-gt-name span { color: #137a52; }
+        .nb-gt-name { display: flex; align-items: center; gap: 8px; text-align: left; font-size: 13px; font-weight: 600; color: #102a43; } .nb-gt-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+        .nb-gt-cell { display: inline-grid; place-items: center; width: 30px; height: 18px; border-radius: 6px; font-size: 11.5px; font-weight: 700; font-style: normal; line-height: 1; background: #f1f4f8; color: #8a6a1f; vertical-align: middle; }
+        .nb-gt-cell.part { background: linear-gradient(90deg, #f7d58b var(--fill, 50%), #fdf3dc var(--fill, 50%)); } .nb-gt-cell.ok { background: #35b27f; color: #fff; } .nb-gt-cell.chal { background: #1f9d6b; color: #fff; } .nb-gt-cell.super { background: linear-gradient(135deg, #0f7a52, #17a673); color: #fff; box-shadow: 0 0 0 1.5px #bfe9d5; }
+        .nb-gt-reach { font-size: 13px; font-weight: 800; color: #102a43; } .nb-gt-reach small { font-size: 10.5px; font-weight: 600; color: #a0abbb; }
+        .nb-gt-streak { display: inline-flex; align-items: center; gap: 3px; font-size: 12.5px; font-weight: 800; color: #b3bdcb; } .nb-gt-streak.on { color: #d2491f; }
         .nb-gt-empty { color: #7b8aa0; font-size: 13px; padding: 18px 0 !important; }
-        .nb-gt-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #7b8aa0; } .nb-gt-foot > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; } .nb-gt-foot .nb-gt-cell { width: 24px; height: 22px; font-size: 11px; margin-left: 6px; }
+        .nb-gt-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: #d3dbe6; } .nb-gt-dot.part { background: #f0b73e; } .nb-gt-dot.ok, .nb-gt-dot.chal, .nb-gt-dot.super { background: #1f9d6b; }
+        .nb-gt-table tr.done .nb-gt-name span { color: #102a43; }
+        .nb-gt-table td:first-child, .nb-gt-table th:first-child { position: sticky; left: 0; background: #fff; z-index: 1; } .nb-gt-table th:first-child { background: #f8fafc; }
+        .nb-gt-table tbody tr:hover td:first-child { background: #f7f9fc; }
+        .nb-gt-name { font-weight: 600; } .nb-gt-name span:last-child { font-size: 13px; }
+        .nb-gt-reach { color: #52667a; font-weight: 700; } .nb-gt-streak { font-size: 12px; }
+        .nb-gt-scroll { border-color: #eaeef5; box-shadow: 0 1px 0 rgba(16,42,67,.03); }
+        .nb-gt-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #7b8aa0; } .nb-gt-foot > span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; } .nb-gt-foot .nb-gt-cell { width: 20px; height: 12px; margin-left: 4px; } .nb-gt-legend { gap: 5px !important; }
         @media (max-width: 1100px) { .nb-badges { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (max-width: 420px) { .nb-badges { gap: 10px; } .nb-badge { padding: 14px 8px 12px; } .nb-badge small { display: none; } }
         .nb-chip-n { margin-left: 3px; padding: 0 6px; border-radius: 999px; background: rgba(16,42,67,.08); font-size: 10px; font-weight: 800; } .nb-chip.active .nb-chip-n { background: rgba(255,255,255,.28); }
