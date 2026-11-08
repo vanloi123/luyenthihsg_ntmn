@@ -1,6 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, useReducer, useContext } from "react";
 import { createRoot } from "react-dom/client";
-import { createPortal } from "react-dom";
 import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
@@ -3627,7 +3626,7 @@ function FeedbackTimelineModal({ row, studentName, submissions, onClose, onOpenR
     return ev.sort((a, b) => a.t - b.t || (a.type === "sub" ? -1 : 1));
   }, [fbs, submissions, row.studentId, row.problemId]);
   const lastSubId = [...events].reverse().find((e) => e.type === "sub")?.sub.id;
-  return createPortal(
+  return (
     <div className="nb-modal-overlay" onClick={onClose}>
       <div className="nb-modal nb-ft-modal" onClick={(e) => e.stopPropagation()}>
         <div className="nb-modal-head">
@@ -3674,8 +3673,7 @@ function FeedbackTimelineModal({ row, studentName, submissions, onClose, onOpenR
           <button type="button" className="nb-btn nb-btn-primary" onClick={onOpenReview}>Mở bài nộp mới nhất</button>
         </div>
       </div>
-    </div>,
-    document.querySelector(".nb-root") || document.body,
+    </div>
   );
 }
 
@@ -3742,7 +3740,7 @@ function FeedbackTracker({ students, submissions, onNavigate }) {
   const openReview = (r) => { pendingReviewTarget = { problemId: r.problemId, submissionId: r.lastSub?.id }; setOpen(null); onNavigate?.("problems"); };
 
   return (
-    <section className="nb-ft" aria-label="Theo dõi sửa bài sau nhận xét">
+    <section className={`nb-ft ${open ? "has-modal" : ""}`} aria-label="Theo dõi sửa bài sau nhận xét">
       <header className="nb-ft-head">
         <div><span className="nb-ov-eyebrow">Giám sát nhận xét</span><h2>Theo dõi sửa bài sau nhận xét</h2></div>
         <button type="button" className="nb-btn" onClick={exportCsv}><UploadCloud size={15} style={{ transform: "rotate(180deg)" }} /> Xuất CSV</button>
@@ -7083,6 +7081,7 @@ function App() {
         @media (max-width: 760px) { .nb-fui { padding: 14px; } .nb-fui-icon { display: none; } }
         /* ===== Theo dõi sửa bài sau nhận xét ===== */
         .nb-ft { background: #fff; border: 1px solid var(--ov-line, #e4e9f1); border-radius: 18px; box-shadow: var(--ov-shadow, 0 1px 3px rgba(16,42,67,.06)); padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 12px; }
+        .nb-ft.has-modal { position: relative; z-index: 60; }
         .nb-ft-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
         .nb-ft-head h2 { margin: 2px 0 0; font-size: 18px; color: #102a43; }
         .nb-ft-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
