@@ -7362,16 +7362,349 @@ function AlgoVisualizerView() {
   );
 }
 
+/* ---------- Thử code của em: tự gõ code, tự thêm test, chạy và mô phỏng ---------- */
+const TC_MAX_CODE = 6000;
+const TC_MAX_TESTS = 8;
+const TC_MAX_IO = 2000;
+const TC_TEMPLATES = [
+  { key: "sum", name: "Tổng hai số", code: "a, b = map(int, input().split())\nprint(a + b)\n", tests: [{ input: "3 5", expected: "8" }, { input: "-4 10", expected: "6" }] },
+  { key: "max", name: "Số lớn nhất của dãy", code: "n = int(input())\nday = list(map(int, input().split()))\nlon = day[0]\nfor x in day:\n    if x > lon:\n        lon = x\nprint(lon)\n", tests: [{ input: "5\n3 9 2 7 4", expected: "9" }, { input: "3\n-5 -2 -8", expected: "-2" }] },
+  { key: "prime", name: "Kiểm tra số nguyên tố", code: "def la_nguyen_to(n):\n    if n < 2:\n        return False\n    d = 2\n    while d * d <= n:\n        if n % d == 0:\n            return False\n        d += 1\n    return True\n\nn = int(input())\nif la_nguyen_to(n):\n    print(\"YES\")\nelse:\n    print(\"NO\")\n", tests: [{ input: "17", expected: "YES" }, { input: "20", expected: "NO" }, { input: "1", expected: "NO" }] },
+];
+
+const TC_TRACE_HARNESS = String.raw`import sys, json, base64, io, types, traceback
+SRC = base64.b64decode("__B64__").decode("utf-8")
+MAXSTEP = 400
+steps = []
+out = io.StringIO()
+real = sys.stdout
+class _Stop(BaseException):
+    pass
+def snap(f):
+    d = {}
+    for k, v in f.f_locals.items():
+        if k.startswith("__") or isinstance(v, (types.FunctionType, types.ModuleType, type)):
+            continue
+        if len(d) >= 14:
+            break
+        r = repr(v)
+        d[k] = r if len(r) <= 40 else r[:37] + "..."
+    return d
+def tr(frame, ev, arg):
+    if frame.f_code.co_filename != "<hs>":
+        return None
+    if ev == "line":
+        if len(steps) >= MAXSTEP:
+            raise _Stop()
+        steps.append([frame.f_lineno, snap(frame), len(out.getvalue()), frame.f_code.co_name])
+    return tr
+err = None
+trunc = False
+sys.stdout = out
+try:
+    code = compile(SRC, "<hs>", "exec")
+    g = {"__name__": "__main__"}
+    sys.settrace(tr)
+    try:
+        exec(code, g)
+    finally:
+        sys.settrace(None)
+except _Stop:
+    trunc = True
+except SystemExit:
+    pass
+except BaseException as e:
+    ln = getattr(e, "lineno", None) if isinstance(e, SyntaxError) else None
+    tb = sys.exc_info()[2]
+    while tb is not None:
+        if tb.tb_frame.f_code.co_filename == "<hs>":
+            ln = tb.tb_lineno
+        tb = tb.tb_next
+    err = {"msg": type(e).__name__ + ": " + str(e), "line": ln}
+sys.stdout = real
+print("@@TRACE@@" + json.dumps({"s": steps, "out": out.getvalue()[:3000], "err": err, "trunc": trunc}))
+`;
+
+function tcNormalize(text) {
+  return String(text ?? "").replace(/\r/g, "").split("\n").map((l) => l.replace(/\s+$/, "")).join("\n").replace(/\n+$/, "");
+}
+
+function tcErrorHint(msg) {
+  const m = String(msg || "");
+  if (/EOFError/.test(m)) return "Code gọi input() nhiều lần hơn số dòng trong ô Input. Kiểm tra lại dữ liệu vào.";
+  if (/ZeroDivisionError/.test(m)) return "Đang chia cho 0.";
+  if (/IndexError/.test(m)) return "Chỉ số vượt ngoài danh sách (nhớ chỉ số bắt đầu từ 0).";
+  if (/ValueError/.test(m) && /int|float/.test(m)) return "Không đổi được chuỗi thành số: kiểm tra cách tách dữ liệu (split) và dữ liệu vào.";
+  if (/ValueError/.test(m) && /unpack/.test(m)) return "Số giá trị đọc được không khớp số biến bên trái dấu =.";
+  if (/NameError/.test(m)) return "Dùng tên biến hoặc hàm chưa được tạo (hoặc gõ sai tên).";
+  if (/TypeError/.test(m)) return "Phép toán dùng sai kiểu dữ liệu (ví dụ cộng số với chuỗi).";
+  if (/IndentationError/.test(m)) return "Thụt lề chưa đúng.";
+  if (/SyntaxError/.test(m)) return "Sai cú pháp: kiểm tra dấu hai chấm, ngoặc, dấu nháy.";
+  if (/RecursionError/.test(m)) return "Hàm đệ quy gọi lại quá sâu, thiếu điều kiện dừng.";
+  return "";
+}
+
+function tcLastErrorLine(text) {
+  const lines = String(text || "").trim().split("\n").filter(Boolean);
+  const last = lines[lines.length - 1] || "";
+  let line = null;
+  for (const l of lines) { const mm = /File "[^"]*", line (\d+)/.exec(l); if (mm) line = Number(mm[1]); }
+  return { msg: last, line };
+}
+
+async function tcRunTest(code, test) {
+  const input = String(test.input ?? "").replace(/\r/g, "");
+  const result = await judgeOneTest({ sourceCode: code, languageId: JUDGE0_LANGUAGE_IDS.python, input: input.endsWith("\n") || input === "" ? input : input + "\n", expectedOutput: String(test.expected ?? "") });
+  const verdict = getJudgeVerdict(result);
+  const out = String(result.stdout || "");
+  const diag = `${result.compile_output || ""}\n${result.stderr || ""}`.trim();
+  let v = verdict;
+  if (verdict === "AC" || verdict === "WA") v = tcNormalize(out) === tcNormalize(test.expected) ? "AC" : "WA";
+  const e = diag ? tcLastErrorLine(diag) : { msg: "", line: null };
+  return { verdict: v, output: out, error: v === "AC" || v === "WA" ? "" : (e.msg || result.message || result.status?.description || ""), errorLine: e.line, time: result.time };
+}
+
+async function tcRunTrace(code, test) {
+  const harness = TC_TRACE_HARNESS.replace("__B64__", encodeBase64Utf8(code));
+  const input = String(test.input ?? "").replace(/\r/g, "");
+  const result = await judgeOneTest({ sourceCode: harness, languageId: JUDGE0_LANGUAGE_IDS.python, input: input.endsWith("\n") || input === "" ? input : input + "\n", expectedOutput: "" });
+  const stdout = String(result.stdout || "");
+  const k = stdout.lastIndexOf("@@TRACE@@");
+  if (k < 0) {
+    const diag = `${result.compile_output || ""}\n${result.stderr || ""}`.trim();
+    throw new Error(result.status?.id === 5 ? "Chương trình chạy quá lâu (có thể bị lặp vô hạn)." : (tcLastErrorLine(diag).msg || result.message || "Không ghi lại được quá trình chạy."));
+  }
+  let data;
+  try { data = JSON.parse(stdout.slice(k + 9)); } catch (e) { throw new Error("Kết quả mô phỏng quá dài hoặc bị lỗi, thử với dữ liệu nhỏ hơn."); }
+  return data;
+}
+
+function TcVerdict({ v }) {
+  const map = { AC: ["ok", "Đúng"], WA: ["bad", "Sai kết quả"], RE: ["bad", "Lỗi khi chạy"], CE: ["bad", "Lỗi cú pháp"], TLE: ["warn", "Chạy quá lâu"], SE: ["warn", "Lỗi hệ thống"] };
+  const [c, t] = map[v] || ["warn", v];
+  return <span className={`nb-tc-badge ${c}`}>{t}</span>;
+}
+
+function TcSimulation({ code, trace, test }) {
+  const lines = useMemo(() => code.replace(/\r/g, "").split("\n"), [code]);
+  const steps = useMemo(() => {
+    const s = trace.s.map((x) => ({ line: x[0], vars: x[1], off: x[2], fn: x[3] }));
+    s.push({ end: true, line: trace.err?.line || null, vars: s.length ? s[s.length - 1].vars : {}, off: trace.out.length, fn: "" });
+    return s;
+  }, [trace]);
+  const [idx, setIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(700);
+  const last = steps.length - 1;
+  const step = steps[Math.min(idx, last)];
+  const prev = idx > 0 ? steps[idx - 1] : null;
+  useEffect(() => { setIdx(0); setPlaying(false); }, [trace]);
+  useEffect(() => {
+    if (!playing) return undefined;
+    if (idx >= last) { setPlaying(false); return undefined; }
+    const t = setTimeout(() => setIdx((i) => Math.min(i + 1, last)), speed);
+    return () => clearTimeout(t);
+  }, [playing, idx, speed, last]);
+  const go = (n) => { setPlaying(false); setIdx(Math.max(0, Math.min(last, n))); };
+  const atEnd = idx >= last;
+  const entries = Object.entries(step.vars || {});
+  const changed = (k, v) => !prev || prev.fn !== step.fn || prev.vars[k] !== v;
+  const outSoFar = trace.out.slice(0, step.off);
+  const pass = !trace.err && !trace.trunc ? tcNormalize(trace.out) === tcNormalize(test.expected) : null;
+  let note;
+  if (step.end) note = trace.err ? `Chương trình dừng vì lỗi: ${trace.err.msg.replace(/\s*\(<hs>, line \d+\)/, "")}${trace.err.line ? ` (dòng ${trace.err.line})` : ""}. ${tcErrorHint(trace.err.msg)}` : trace.trunc ? `Đã ghi lại ${trace.s.length} bước đầu tiên (chương trình còn chạy tiếp, có thể là vòng lặp rất dài).` : "Chương trình đã chạy xong.";
+  else note = `Sắp chạy dòng ${step.line}${step.fn && step.fn !== "<module>" ? ` (trong hàm ${step.fn})` : ""}. Bảng bên phải là giá trị các biến ngay lúc này.`;
+  return (
+    <section className="nb-av-card nb-tc-sim">
+      <div className="nb-tc-sim-head"><h3>Mô phỏng chạy code</h3><span>Input: <code>{String(test.input).replace(/\n/g, " ⏎ ") || "(trống)"}</code></span></div>
+      <div className="nb-tc-sim-grid">
+        <div>
+          <pre className="nb-av-code" aria-label="Code của em">
+            {lines.map((ln, i) => (
+              <div key={i} className={`nb-av-line ${step.line === i + 1 ? "on" : ""} ${step.end && trace.err?.line === i + 1 ? "err" : ""}`}>
+                <span>{i + 1}</span><code>{ln === "" ? " " : highlightCodeLine(ln, "python")}</code>
+              </div>
+            ))}
+          </pre>
+        </div>
+        <div className="nb-tc-side">
+          <div className="nb-tc-box"><h4>Các biến</h4>
+            {entries.length === 0 ? <em>(chưa có biến nào)</em> : (
+              <table className="nb-tc-vars"><tbody>{entries.map(([k, v]) => <tr key={k} className={changed(k, v) ? "chg" : ""}><th>{k}</th><td>{v}</td></tr>)}</tbody></table>
+            )}
+          </div>
+          <div className="nb-tc-box"><h4>Output đã in ra</h4><pre className="nb-tc-out">{outSoFar === "" ? <em>(chưa in gì)</em> : outSoFar}</pre></div>
+          {step.end && pass !== null && <div className={`nb-av-banner ${pass ? "ok" : "bad"}`}>{pass ? "Output ĐÚNG với kết quả mong đợi" : "Output KHÁC kết quả mong đợi"}</div>}
+        </div>
+      </div>
+      <div className={`nb-av-note ${step.end ? "done" : ""}`} aria-live="polite"><span>Bước {Math.min(idx, last) + 1}/{steps.length}</span><p>{note}</p></div>
+      <div className="nb-av-controls">
+        <button type="button" className="nb-av-ctl" onClick={() => go(0)} disabled={idx === 0} aria-label="Về đầu"><SkipBack size={16} /></button>
+        <button type="button" className="nb-av-ctl" onClick={() => go(idx - 1)} disabled={idx === 0} aria-label="Lùi một bước"><ChevronLeft size={18} /></button>
+        <button type="button" className="nb-av-ctl play" onClick={() => { if (atEnd) { setIdx(0); setPlaying(true); } else setPlaying((v) => !v); }} aria-label={playing ? "Tạm dừng" : "Tự chạy"}>{playing ? <Pause size={18} /> : atEnd ? <RefreshCw size={17} /> : <Play size={18} />}</button>
+        <button type="button" className="nb-av-ctl" onClick={() => go(idx + 1)} disabled={atEnd} aria-label="Tiến một bước"><ChevronRight size={18} /></button>
+        <button type="button" className="nb-av-ctl" onClick={() => go(last)} disabled={atEnd} aria-label="Đến cuối"><SkipForward size={16} /></button>
+        <input className="nb-av-range" type="range" min={0} max={last} value={Math.min(idx, last)} onChange={(e) => go(Number(e.target.value))} aria-label="Tiến độ" />
+        <select className="nb-av-speed" value={speed} onChange={(e) => setSpeed(Number(e.target.value))} aria-label="Tốc độ">{ALGO_SPEEDS.map(([l, v]) => <option key={v} value={v}>{l}</option>)}</select>
+      </div>
+    </section>
+  );
+}
+
+function CodeTryView({ currentUser }) {
+  const storeKey = `try-code-${currentUser?.id || "guest"}`;
+  const saved = useMemo(() => { const v = lsGet(storeKey); return v && typeof v.code === "string" && Array.isArray(v.tests) ? v : null; }, [storeKey]);
+  const [code, setCode] = useState(saved ? saved.code : TC_TEMPLATES[0].code);
+  const [tests, setTests] = useState(saved && saved.tests.length ? saved.tests : TC_TEMPLATES[0].tests);
+  const [results, setResults] = useState(null);
+  const [running, setRunning] = useState("");
+  const [error, setError] = useState("");
+  const [sim, setSim] = useState(null);
+  const alive = useRef(true);
+  const taRef = useRef(null);
+  useEffect(() => () => { alive.current = false; }, []);
+  useEffect(() => { lsSet(storeKey, { code, tests }); }, [storeKey, code, tests]);
+
+  const busy = !!running;
+  const clean = () => String(code || "").replace(/\r/g, "");
+  const validate = () => {
+    if (clean().trim().length < 3) return "Em chưa gõ code.";
+    if (clean().length > TC_MAX_CODE) return `Code dài quá ${TC_MAX_CODE} ký tự.`;
+    return "";
+  };
+  const setTest = (i, k, v) => { setTests((t) => t.map((x, j) => (j === i ? { ...x, [k]: String(v).slice(0, TC_MAX_IO) } : x))); setResults(null); };
+  const addTest = () => { if (tests.length < TC_MAX_TESTS) { setTests((t) => [...t, { input: "", expected: "" }]); setResults(null); } };
+  const delTest = (i) => { setTests((t) => t.filter((_, j) => j !== i)); setResults(null); setSim(null); };
+  const loadTemplate = (key) => {
+    const t = TC_TEMPLATES.find((x) => x.key === key); if (!t) return;
+    if (code.trim() && code.trim() !== TC_TEMPLATES.find((x) => x.code.trim() === code.trim())?.code.trim() && !window.confirm("Thay code hiện tại bằng code mẫu?")) return;
+    setCode(t.code); setTests(t.tests.map((x) => ({ ...x }))); setResults(null); setSim(null); setError("");
+  };
+
+  async function runAll() {
+    const v = validate(); if (v) { setError(v); return; }
+    const usable = tests.map((t, i) => ({ t, i })).filter(({ t }) => String(t.expected).trim() !== "");
+    if (usable.length === 0) { setError("Hãy nhập ít nhất một test có Output mong đợi."); return; }
+    setError(""); setSim(null); setResults(tests.map(() => null));
+    try {
+      const res = tests.map(() => null);
+      for (const { t, i } of usable) {
+        setRunning(`Đang chạy test ${i + 1}/${tests.length}…`);
+        res[i] = await tcRunTest(clean(), t);
+        if (!alive.current) return;
+        setResults([...res]);
+      }
+    } catch (e) { if (alive.current) setError(e.message || "Không chạy được. Em thử lại sau ít giây."); }
+    if (alive.current) setRunning("");
+  }
+
+  async function runSim(i) {
+    const v = validate(); if (v) { setError(v); return; }
+    setError(""); setRunning(`Đang ghi lại quá trình chạy test ${i + 1}…`);
+    try {
+      const trace = await tcRunTrace(clean(), tests[i]);
+      if (!alive.current) return;
+      setSim({ trace, test: tests[i], code: clean(), i });
+    } catch (e) { if (alive.current) { setSim(null); setError(e.message || "Không mô phỏng được."); } }
+    if (alive.current) setRunning("");
+  }
+
+  function onKeyDown(e) {
+    const ta = e.target;
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const s = ta.selectionStart; const en = ta.selectionEnd;
+      const next = ta.value.slice(0, s) + "    " + ta.value.slice(en);
+      setCode(next); requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = s + 4; });
+    } else if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      const s = ta.selectionStart;
+      const lineStart = ta.value.lastIndexOf("\n", s - 1) + 1;
+      const cur = ta.value.slice(lineStart, s);
+      const indent = /^ */.exec(cur)[0] + (/:\s*$/.test(cur) ? "    " : "");
+      e.preventDefault();
+      const next = ta.value.slice(0, s) + "\n" + indent + ta.value.slice(ta.selectionEnd);
+      setCode(next); requestAnimationFrame(() => { ta.selectionStart = ta.selectionEnd = s + 1 + indent.length; });
+    }
+  }
+
+  const passed = results ? results.filter((r) => r && r.verdict === "AC").length : 0;
+  const finished = results && results.every((r, i) => r || String(tests[i].expected).trim() === "");
+  const total = tests.filter((t) => String(t.expected).trim() !== "").length;
+
+  return (
+    <div className="nb-av nb-tc">
+      <header className="nb-av-hero">
+        <div>
+          <span className="nb-tg-hero-tag"><Code2 size={14} /> Giải trí · Thử code của em</span>
+          <h2>Tự gõ code, tự đặt test, xem code chạy</h2>
+          <p>Gõ chương trình Python, nhập dữ liệu vào (Input) và kết quả em mong đợi (Output). Bấm chạy để biết đúng hay sai, hoặc bấm “Mô phỏng” để xem từng dòng code chạy và giá trị các biến thay đổi.</p>
+        </div>
+      </header>
+
+      <section className="nb-av-card nb-tc-editor">
+        <div className="nb-tc-toolbar">
+          <h3>Code Python của em</h3>
+          <label className="nb-tc-tpl"><span>Mẫu để thử</span>
+            <select value="" onChange={(e) => loadTemplate(e.target.value)}><option value="">Chọn một bài mẫu…</option>{TC_TEMPLATES.map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}</select>
+          </label>
+        </div>
+        <textarea ref={taRef} className="nb-tc-code" value={code} onChange={(e) => { setCode(e.target.value.slice(0, TC_MAX_CODE + 200)); setResults(null); }} onKeyDown={onKeyDown} spellCheck={false} autoCapitalize="off" autoCorrect="off" rows={Math.min(22, Math.max(10, code.split("\n").length + 2))} aria-label="Code Python" placeholder="Gõ code Python ở đây…" />
+        <p className="nb-av-hint">Phím Tab thụt lề 4 dấu cách, Enter tự giữ thụt lề. Bộ chấm dùng Python 3.8. Em đọc dữ liệu bằng <code>input()</code> và in kết quả bằng <code>print()</code> như khi nộp bài.</p>
+      </section>
+
+      <section className="nb-av-card nb-tc-tests">
+        <div className="nb-tc-toolbar"><h3>Bộ test của em</h3><span>{tests.length}/{TC_MAX_TESTS} test</span></div>
+        <div className="nb-tc-testlist">
+          {tests.map((t, i) => {
+            const r = results ? results[i] : null;
+            return (
+              <div key={i} className={`nb-tc-test ${r ? (r.verdict === "AC" ? "ok" : "bad") : ""}`}>
+                <div className="nb-tc-test-head">
+                  <strong>Test {i + 1}</strong>
+                  {r && <TcVerdict v={r.verdict} />}
+                  <span className="nb-tc-sp" />
+                  <button type="button" className="nb-btn" onClick={() => runSim(i)} disabled={busy}><Eye size={14} /> Mô phỏng</button>
+                  <button type="button" className="nb-tc-del" onClick={() => delTest(i)} disabled={busy || tests.length <= 1} aria-label={`Xóa test ${i + 1}`}><Trash2 size={14} /></button>
+                </div>
+                <div className="nb-tc-io">
+                  <label><span>Input (dữ liệu vào)</span><textarea value={t.input} onChange={(e) => setTest(i, "input", e.target.value)} rows={3} spellCheck={false} placeholder="Để trống nếu không có dữ liệu vào" /></label>
+                  <label><span>Output mong đợi</span><textarea value={t.expected} onChange={(e) => setTest(i, "expected", e.target.value)} rows={3} spellCheck={false} placeholder="Kết quả đúng mà chương trình phải in ra" /></label>
+                </div>
+                {r && r.verdict !== "AC" && (
+                  <div className="nb-tc-diff">
+                    {(r.verdict === "WA") && <div className="nb-tc-cmp"><div><b>Mong đợi</b><pre>{t.expected || " "}</pre></div><div><b>Code của em in ra</b><pre>{r.output === "" ? "(không in gì)" : r.output}</pre></div></div>}
+                    {r.verdict !== "WA" && <div className="nb-tc-err"><b>{r.error || "Có lỗi khi chạy."}</b>{r.errorLine ? <span> · dòng {r.errorLine}</span> : null}{tcErrorHint(r.error) && <p>{tcErrorHint(r.error)}</p>}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="nb-av-input-actions">
+          <button type="button" className="nb-btn nb-btn-primary" onClick={runAll} disabled={busy}>{busy ? <Loader2 size={15} className="nb-spin" /> : <Play size={15} />} Chạy tất cả test</button>
+          <button type="button" className="nb-btn" onClick={addTest} disabled={busy || tests.length >= TC_MAX_TESTS}><Plus size={15} /> Thêm test</button>
+        </div>
+        {busy && <div className="nb-tc-run" aria-live="polite"><Loader2 size={14} className="nb-spin" /> {running}</div>}
+        {error && <div className="nb-login-error" role="alert"><AlertCircle size={14} /> {error}</div>}
+        {finished && total > 0 && !busy && <div className={`nb-av-banner ${passed === total ? "ok" : "bad"}`}>{passed === total ? `Tuyệt vời! Đạt ${passed}/${total} test` : `Đạt ${passed}/${total} test, xem các test màu đỏ để sửa code`}</div>}
+      </section>
+
+      {sim && <TcSimulation code={sim.code} trace={sim.trace} test={sim.test} />}
+    </div>
+  );
+}
+
 function EntertainmentView({ currentUser }) {
-  const [sub, setSub] = useState(() => (lsGet("fun-tab") === "algo" ? "algo" : "typing"));
+  const [sub, setSub] = useState(() => (["algo", "code"].includes(lsGet("fun-tab")) ? lsGet("fun-tab") : "typing"));
   const pick = (k) => { setSub(k); lsSet("fun-tab", k); };
   return (
     <div className={`nb-fun ${sub}`}>
       <div className="nb-fun-tabs" role="tablist" aria-label="Mục giải trí">
         <button type="button" role="tab" aria-selected={sub === "typing"} className={sub === "typing" ? "on" : ""} onClick={() => pick("typing")}><Keyboard size={16} /> Gõ lệnh Python</button>
-        <button type="button" role="tab" aria-selected={sub === "algo"} className={sub === "algo" ? "on" : ""} onClick={() => pick("algo")}><Code2 size={16} /> Mô phỏng thuật toán <i>Mới</i></button>
+        <button type="button" role="tab" aria-selected={sub === "algo"} className={sub === "algo" ? "on" : ""} onClick={() => pick("algo")}><Code2 size={16} /> Mô phỏng thuật toán</button>
+        <button type="button" role="tab" aria-selected={sub === "code"} className={sub === "code" ? "on" : ""} onClick={() => pick("code")}><Pencil size={16} /> Thử code của em <i>Mới</i></button>
       </div>
-      {sub === "typing" ? <TypingGameView currentUser={currentUser} /> : <AlgoVisualizerView />}
+      {sub === "typing" ? <TypingGameView currentUser={currentUser} /> : sub === "code" ? <CodeTryView currentUser={currentUser} /> : <AlgoVisualizerView />}
     </div>
   );
 }
@@ -10419,7 +10752,7 @@ function App() {
         }
                 /* ===== Giải trí: mô phỏng thuật toán ===== */
         .nb-fun-tabs { display: flex; gap: 6px; max-width: 960px; margin: 0 auto 14px; padding: 4px; background: #eef2f8; border-radius: 12px; width: fit-content; }
-        .nb-fun.algo .nb-fun-tabs { max-width: 1240px; margin-left: 0; }
+        .nb-fun.algo .nb-fun-tabs, .nb-fun.code .nb-fun-tabs { max-width: 1240px; margin-left: 0; }
         .nb-fun-tabs button { display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px; border: 0; border-radius: 9px; background: transparent; font: inherit; font-weight: 700; font-size: 14px; color: #52627a; cursor: pointer; }
         .nb-fun-tabs button.on { background: #fff; color: #1b4fc4; box-shadow: 0 1px 4px rgba(15,42,82,.12); }
         .nb-fun-tabs i { font-style: normal; font-size: 10.5px; font-weight: 800; padding: 1px 7px; border-radius: 999px; background: #e5603c; color: #fff; }
@@ -10538,6 +10871,30 @@ function App() {
         .nb-av-stack { position: relative; z-index: 1; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px; padding-bottom: 2px; }
         .nb-av-stack b { height: 24px; display: grid; place-items: center; border-radius: 12px; color: #fff; font: 800 12px 'JetBrains Mono', monospace; transition: all .2s; box-shadow: inset 0 -2px 0 rgba(0,0,0,.12); } .nb-av-stack b.hot { outline: 3px solid var(--av-cmp); }
         .nb-av-hcount { grid-column: 1 / -1; text-align: center; font-size: 13px; color: #52627a; } .nb-av-hcount b { font-family: 'JetBrains Mono', monospace; color: #1b4fc4; }
+        /* ---- Giải trí: thử code của em ---- */
+        .nb-tc-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; } .nb-tc-toolbar h3 { margin: 0; font-size: 17px; color: #102a43; } .nb-tc-toolbar > span { font-size: 12.5px; color: #7b8aa0; font-weight: 600; }
+        .nb-tc-tpl { display: flex; align-items: center; gap: 8px; } .nb-tc-tpl span { font-size: 12px; font-weight: 700; color: #627d98; } .nb-tc-tpl select { padding: 7px 10px; border: 1.5px solid #d9e1ec; border-radius: 10px; font: inherit; font-size: 13px; background: #fff; }
+        .nb-tc-code { width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1.5px solid #d9e1ec; border-radius: 12px; background: #fbfcfe; font: 14px/1.65 'JetBrains Mono', Consolas, monospace; color: #102a43; resize: vertical; tab-size: 4; white-space: pre; overflow: auto; } .nb-tc-code:focus { outline: none; border-color: #2f6fed; background: #fff; }
+        .nb-tc-editor .nb-av-hint code, .nb-tc-editor code { font-family: 'JetBrains Mono', monospace; background: #eef2f8; padding: 0 4px; border-radius: 4px; }
+        .nb-tc-testlist { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+        .nb-tc-test { border: 1.5px solid #e3e9f3; border-radius: 14px; padding: 10px 12px; background: #fcfdff; } .nb-tc-test.ok { border-color: #9ad8b9; background: #f4fbf7; } .nb-tc-test.bad { border-color: #f0b4a5; background: #fff8f6; }
+        .nb-tc-test-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; } .nb-tc-sp { flex: 1; }
+        .nb-tc-del { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #e3b8b0; border-radius: 10px; background: #fff; color: #c0432a; cursor: pointer; } .nb-tc-del:disabled { opacity: .35; cursor: default; }
+        .nb-tc-badge { font-size: 12px; font-weight: 800; padding: 3px 10px; border-radius: 999px; } .nb-tc-badge.ok { background: #dff5e7; color: #137a52; } .nb-tc-badge.bad { background: #fde3dc; color: #a2341a; } .nb-tc-badge.warn { background: #fff0cc; color: #8a5a00; }
+        .nb-tc-io { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .nb-tc-io label { display: flex; flex-direction: column; gap: 4px; min-width: 0; } .nb-tc-io span { font-size: 12px; font-weight: 700; color: #627d98; }
+        .nb-tc-io textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1.5px solid #d9e1ec; border-radius: 10px; font: 13.5px/1.55 'JetBrains Mono', monospace; background: #fff; color: #102a43; resize: vertical; } .nb-tc-io textarea:focus { outline: none; border-color: #2f6fed; }
+        .nb-tc-diff { margin-top: 8px; } .nb-tc-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .nb-tc-cmp b, .nb-tc-err b { font-size: 12px; color: #627d98; } .nb-tc-err b { color: #a2341a; font: 700 13px 'JetBrains Mono', monospace; }
+        .nb-tc-cmp pre { margin: 4px 0 0; padding: 8px 10px; border-radius: 10px; background: #fff; border: 1px solid #e3e9f3; font: 13px/1.5 'JetBrains Mono', monospace; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; } .nb-tc-cmp > div:last-child pre { background: #fff1ee; border-color: #f0c4b9; }
+        .nb-tc-err { font-size: 13px; color: #7a3a2a; } .nb-tc-err p { margin: 4px 0 0; color: #5f4710; background: #fff8e6; padding: 6px 10px; border-radius: 8px; }
+        .nb-tc-run { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: #1b4fc4; font-weight: 600; }
+        .nb-tc-sim-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; } .nb-tc-sim-head h3 { margin: 0; font-size: 17px; color: #102a43; } .nb-tc-sim-head span { font-size: 12.5px; color: #627d98; } .nb-tc-sim-head code { font-family: 'JetBrains Mono', monospace; background: #eef2f8; padding: 1px 6px; border-radius: 5px; }
+        .nb-tc-sim { display: flex; flex-direction: column; gap: 12px; }
+        .nb-tc-sim-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(240px, 1fr); gap: 12px; align-items: start; }
+        .nb-av-line.err { background: #fde3dc; border-left-color: var(--av-swap); }
+        .nb-tc-side { display: flex; flex-direction: column; gap: 10px; } .nb-tc-box { border: 1px solid #e3e9f3; border-radius: 12px; padding: 10px 12px; background: #fdfdfe; } .nb-tc-box h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #7b8aa0; } .nb-tc-box em { font-size: 12.5px; color: #a0abbb; }
+        .nb-tc-vars { width: 100%; border-collapse: collapse; font: 13px 'JetBrains Mono', monospace; } .nb-tc-vars th { text-align: left; padding: 3px 8px 3px 0; color: #1b4fc4; font-weight: 700; width: 1%; white-space: nowrap; } .nb-tc-vars td { padding: 3px 6px; color: #102a43; word-break: break-all; } .nb-tc-vars tr.chg td { background: #fff3c7; border-radius: 6px; font-weight: 700; }
+        .nb-tc-out { margin: 0; min-height: 40px; max-height: 180px; overflow: auto; font: 13px/1.5 'JetBrains Mono', monospace; white-space: pre-wrap; word-break: break-word; color: #102a43; }
+        @media (max-width: 900px) { .nb-tc-sim-grid, .nb-tc-io, .nb-tc-cmp { grid-template-columns: minmax(0, 1fr); } }
         /* ---- Giải trí: giao diện nâng cấp ---- */
         .nb-tg-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 26px 28px; margin-bottom: 20px; border-radius: 18px; color: #fff; background: radial-gradient(120% 140% at 0% 0%, #1b4fc4 0%, #0f2a52 45%, #0b1b33 100%); position: relative; overflow: hidden; }
         .nb-tg-hero::after { content: "</>"; position: absolute; right: 22px; bottom: -22px; font: 800 120px/1 'JetBrains Mono', monospace; color: rgba(255,255,255,.05); pointer-events: none; }
