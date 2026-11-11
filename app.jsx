@@ -184,9 +184,12 @@ async function fetchAllRows(table, { order, pageSize = 1000, columns = "*", gte 
     if (order) query = query.order(order.column, { ascending: order.ascending });
     const { data, error } = await query;
     if (error) return { data: null, error };
-    allRows = allRows.concat(data || []);
-    if (!data || data.length < pageSize) break;
-    from += pageSize;
+    // Không dựa vào "data.length < pageSize": nếu Max Rows của Supabase nhỏ hơn pageSize
+    // (vd. đặt 500) thì trang đầu đã bị cắt ngắn và vòng lặp sẽ dừng sớm, mất dữ liệu.
+    // Nên cứ đọc tiếp theo số dòng thực nhận cho đến khi gặp trang rỗng.
+    if (!data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    from += data.length;
   }
   return { data: allRows, error: null };
 }
@@ -474,16 +477,17 @@ function mapExamSubmission(row) {
 // Lấy bài nộp đề thi: không kèm code (nhẹ), trừ khi withCode (chỉ dùng cho bài của chính học sinh)
 async function dbExamFetchSubmissions({ examId, studentId, withCode = false } = {}) {
   const rows = [];
-  for (let from = 0; ; from += 1000) {
+  for (let from = 0; ;) {
     const columns = EXAM_SUB_LIGHT_COLUMNS + (examLanguageColumn ? ",language" : "") + (withCode ? ",source_code" : "");
     let q = supabase.from("exam_submissions").select(columns).order("created_at", { ascending: true }).range(from, from + 999);
     if (examId) q = q.eq("exam_id", examId);
     if (studentId) q = q.eq("student_id", studentId);
     const { data, error } = await q;
-    if (error && examLanguageColumn && isMissingColumnError(error, "language")) { examLanguageColumn = false; from -= 1000; continue; }
+    if (error && examLanguageColumn && isMissingColumnError(error, "language")) { examLanguageColumn = false; continue; }
     if (error) throw error;
-    rows.push(...(data || []));
-    if (!data || data.length < 1000) break;
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    from += data.length;
   }
   return rows.map(mapExamSubmission);
 }
@@ -560,7 +564,8 @@ async function dbAddSubmission(sub) {
     problem_title: sub.problemTitle, problem_points: sub.problemPoints,
     source_code: sub.sourceCode || null,
   });
-  if (error) throw error;
+  // 23505 = bài này đã có trên máy chủ (gửi lại sau khi mạng chập chờn): coi như đã lưu
+  if (error && error.code !== "23505") throw error;
 }
 /* ---------- Nhận xét của giáo viên cho bài nộp (bảng submission_feedback, xem schema-feedback.sql) ---------- */
 const isMissingTableError = (error) => !!error && (error.code === "42P01" || error.code === "PGRST205" || error.status === 404 || /submission_feedback/i.test(String(error.message || "")) && /(does not exist|schema cache|could not find)/i.test(String(error.message || "")));
@@ -662,6 +667,15 @@ function lsSet(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* ignore */ }
 }
 
+// Hàng đợi bài nộp chưa lưu được lên máy chủ (mạng chập chờn, Supabase quá tải…).
+// Bài nộp được ghi vào đây TRƯỚC khi gửi, chỉ xóa khi máy chủ đã nhận, và tự gửi lại.
+const PENDING_SUBS_KEY = "pending-subs-v1";
+function getPendingSubs() { const v = lsGet(PENDING_SUBS_KEY); return Array.isArray(v) ? v : []; }
+function setPendingSubs(list) { lsSet(PENDING_SUBS_KEY, list); }
+function errDetail(e) {
+  const t = (e && (e.code || e.status || e.message)) || "không rõ";
+  return String(t).slice(0, 60);
+}
 const PENDING_PROBLEM_WRITES_KEY = "pending-problem-writes-v1";
 
 function getPendingProblemWrites() {
@@ -8087,12 +8101,40 @@ function App() {
     if (data.topics) setTopics(data.topics);
     if (data.problems) setProblems(data.problems);
     setExams(data.exams); setExamsMissing(data.examsMissing);
-    setSubmissions((prev) => (data.partial ? mergeIncremental(prev, data.submissions) : mergeLocalCode(prev, data.submissions)));
+    setSubmissions((prev) => {
+      if (data.partial) return mergeIncremental(prev, data.submissions);
+      const merged = mergeLocalCode(prev, data.submissions);
+      // Bài nộp chưa lưu được lên máy chủ vẫn phải hiện (không bị tải đầy đủ ghi đè làm "tụt số bài")
+      const have = new Set(merged.map((x) => x.id));
+      const extra = getPendingSubs().filter((x) => !have.has(x.id));
+      return extra.length ? [...merged, ...extra] : merged;
+    });
     if (data.discussions) setDiscussions(data.discussions);
     if (data.accounts) setAccounts(data.accounts);
     if (data.assignments) setAssignments(data.assignments);
     if (data.cursor) subCursor.current = data.cursor;
   }
+  const savingSubs = useRef(false);
+  const subErr = useRef("");
+  async function flushPendingSubs() {
+    if (savingSubs.current) return getPendingSubs().length;
+    savingSubs.current = true;
+    try {
+      for (const sub of getPendingSubs()) {
+        try {
+          await dbAddSubmission(sub);
+          setPendingSubs(getPendingSubs().filter((x) => x.id !== sub.id));
+        } catch (e) { subErr.current = errDetail(e); break; }
+      }
+    } finally { savingSubs.current = false; }
+    const left = getPendingSubs().length;
+    if (left === 0) {
+      subErr.current = "";
+      setStorageError((cur) => (typeof cur === "string" && cur.includes("bài nộp chưa lưu") ? false : cur));
+    }
+    return left;
+  }
+  const pendingSubsMessage = () => `Có ${getPendingSubs().length} bài nộp chưa lưu được lên máy chủ — em đừng đóng trang, hệ thống sẽ tự gửi lại${subErr.current ? ` (mã lỗi: ${subErr.current})` : ""}.`;
   function sinceCursor() {
     return subCursor.current ? new Date(new Date(subCursor.current).getTime() - 3 * 60 * 1000).toISOString() : null;
   }
@@ -8227,8 +8269,9 @@ function App() {
       tick += 1;
       const scope = tick % 5 === 0 ? "full" : tick % 2 === 0 ? "medium" : "fast";
       try {
+        const left = await flushPendingSubs();
         applyData(await fetchAll({ scope, since: sinceCursor() }));
-        setStorageError(false);
+        setStorageError(left > 0 ? pendingSubsMessage() : false);
         lastRun = Date.now();
       } catch (e) { /* mạng chập chờn: bỏ qua, lượt sau thử lại */ }
       running = false;
@@ -8255,12 +8298,22 @@ function App() {
     };
   }, [authUserId]);
 
+  useEffect(() => {
+    if (!authUserId) return undefined;
+    const go = () => { flushPendingSubs().then((left) => { if (left > 0) setStorageError(pendingSubsMessage()); }); };
+    go();
+    window.addEventListener("online", go);
+    return () => window.removeEventListener("online", go);
+  }, [authUserId]);
+
   async function refreshNow() {
     setRefreshing(true);
     try {
+      const left = await flushPendingSubs();
       applyData(await fetchAll());
       const retryResult = await retryPendingProblemWrites();
-      if (retryResult.failed === 0) setStorageError(false);
+      if (left > 0) setStorageError(pendingSubsMessage());
+      else if (retryResult.failed === 0) setStorageError(false);
     } catch (e) {
       setStorageError("Không thể tải dữ liệu lớp học lúc này. Hãy kiểm tra kết nối rồi thử đồng bộ lại.");
     }
@@ -8338,8 +8391,15 @@ function App() {
       sourceCode: String(sourceCode || ""),
       createdAt: new Date().toISOString(),
     };
+    setPendingSubs([...getPendingSubs(), sub]);
     setSubmissions((prev) => [...prev, sub]);
-    dbAddSubmission(sub).catch(() => setStorageError(true));
+    (async () => {
+      for (const wait of [0, 2000, 6000]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        if ((await flushPendingSubs()) === 0) return;
+      }
+      setStorageError(pendingSubsMessage());
+    })();
   }
 
   function handleLessonProgress(topicId, progress) {
