@@ -6447,11 +6447,239 @@ function buildWindow({ nums, x: s }) {
   return S;
 }
 
+function buildMax({ nums }) {
+  const a = [...nums]; const n = a.length; const S = [];
+  let bi = 0;
+  const push = (line, note, x2 = {}) => {
+    const roles = { [bi]: "keep", ...(x2.roles || {}) };
+    const tags = { [bi]: ["lon"] }; if (x2.i !== undefined && x2.i !== bi) tags[x2.i] = ["i"]; else if (x2.i === bi) tags[bi] = ["lon", "i"];
+    S.push({ line, note, arr: a, roles, tags, vars: { lon: a[bi], ...(x2.i !== undefined ? { i: x2.i } : {}) }, ...x2 });
+  };
+  push(1, `Tạm coi số đầu tiên mang[0] = ${a[0]} là số lớn nhất (lon = ${a[0]}).`);
+  for (let i = 1; i < n; i++) {
+    const bigger = a[i] > a[bi];
+    push(3, `i = ${i}: so sánh mang[${i}] = ${a[i]} với lon = ${a[bi]}: ${bigger ? "lớn hơn, cần ghi nhớ số mới." : "không lớn hơn, giữ nguyên."}`, { i, roles: { [i]: bigger ? "new" : "cur" } });
+    if (bigger) { bi = i; push(4, `Cập nhật lon = ${a[bi]}.`, { i, roles: { [i]: "keep" } }); }
+  }
+  push(5, `Duyệt hết mảng: số lớn nhất là ${a[bi]}, nằm ở vị trí ${bi}. Chỉ cần duyệt 1 lần qua mảng.`, { roles: { [bi]: "found" }, done: true, result: a[bi] });
+  return S;
+}
+
+function buildCount({ nums }) {
+  const a = [...nums]; const S = []; const dem = {};
+  const items = () => Object.keys(dem).sort((x, y) => x - y).map((k) => `${k} : ${dem[k]}`);
+  const push = (line, note, x2 = {}) => S.push({ line, note, arr: a, tags: {}, extra: [{ label: "dem (số : số lần)", items: items() }], ...x2 });
+  push(1, "dem là từ điển lưu số lần xuất hiện của từng số, ban đầu rỗng.");
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i];
+    push(2, `x = mang[${i}] = ${x}.`, { roles: { [i]: "cur" }, vars: { i, x } });
+    if (x in dem) {
+      push(3, `${x} đã có trong dem (đã gặp ${dem[x]} lần).`, { roles: { [i]: "cur" }, vars: { i, x } });
+      dem[x] += 1;
+      push(4, `Tăng số lần: dem[${x}] = ${dem[x]}.`, { roles: { [i]: "found" }, vars: { i, x } });
+    } else {
+      push(3, `${x} chưa có trong dem, đây là lần đầu gặp.`, { roles: { [i]: "cur" }, vars: { i, x } });
+      dem[x] = 1;
+      push(6, `Thêm mới: dem[${x}] = 1.`, { roles: { [i]: "new" }, vars: { i, x } });
+    }
+  }
+  const best = Object.keys(dem).reduce((p, k) => (dem[k] > (dem[p] || 0) ? k : p), Object.keys(dem)[0]);
+  push(7, `Xong. Số xuất hiện nhiều nhất là ${best} (${dem[best]} lần). Duyệt 1 lần, mỗi số chỉ tra từ điển một lần.`, { done: true, result: { ...dem } });
+  return S;
+}
+
+function buildReverse({ nums }) {
+  const a = [...nums]; const n = a.length; const S = [];
+  let trai = 0; let phai = n - 1; const okIdx = [];
+  const push = (line, note, x2 = {}) => {
+    const roles = {}; okIdx.forEach((k) => { roles[k] = "found"; }); Object.assign(roles, x2.roles || {});
+    const tags = {}; if (trai < n) (tags[trai] = tags[trai] || []).push("trai"); if (phai >= 0) (tags[phai] = tags[phai] || []).push("phai");
+    S.push({ line, note, arr: [...a], roles, tags, vars: { trai, phai }, ...x2 });
+  };
+  push(1, "Đặt trai ở đầu mảng, phai ở cuối mảng. Đổi chỗ hai số rồi cho hai con trỏ tiến vào giữa.");
+  while (trai < phai) {
+    push(2, `trai = ${trai} < phai = ${phai}: còn một cặp cần đổi chỗ.`, { roles: { [trai]: "cur", [phai]: "cur" } });
+    [a[trai], a[phai]] = [a[phai], a[trai]];
+    push(3, `Đổi chỗ mang[${trai}] và mang[${phai}]: nay hai ô này là ${a[trai]} và ${a[phai]}.`, { roles: { [trai]: "new", [phai]: "new" } });
+    okIdx.push(trai, phai);
+    trai++;
+    push(4, `Tăng trai lên ${trai}.`);
+    phai--;
+    push(5, `Giảm phai xuống ${phai}.`);
+  }
+  push(2, `trai = ${trai} ≥ phai = ${phai}: hai con trỏ đã gặp nhau.`);
+  push(6, `Mảng đã được đảo ngược, chỉ cần ${Math.floor(n / 2)} lần đổi chỗ và không cần mảng phụ.`, { done: true, roles: Object.fromEntries(a.map((_, k) => [k, "found"])) });
+  return S;
+}
+
+function buildPrefix({ nums, l, r }) {
+  const a = [...nums]; const n = a.length; const S = [];
+  const tt = Array(n + 1).fill(null); tt[0] = 0;
+  const push = (line, note, ra = {}, rt = {}, x2 = {}) => S.push({
+    line, note,
+    rows: [{ label: "mảng", arr: a, roles: ra, tags: {} }, { label: "tt", arr: [...tt], roles: rt, tags: {} }],
+    ...x2,
+  });
+  push(1, `Tạo bảng tt có ${n + 1} ô. tt[k] sẽ là tổng của k số đầu tiên. Ban đầu tt[0] = 0 (chưa cộng số nào).`, {}, { 0: "src" });
+  for (let i = 0; i < n; i++) {
+    push(2, `i = ${i}: chuẩn bị cộng thêm mang[${i}] = ${a[i]} vào tổng tích lũy.`, { [i]: "cur" }, { [i]: "src" }, { vars: { i } });
+    tt[i + 1] = tt[i] + a[i];
+    push(3, `tt[${i + 1}] = tt[${i}] + mang[${i}] = ${tt[i]} + ${a[i]} = ${tt[i + 1]}.`, { [i]: "cur" }, { [i]: "src", [i + 1]: "new" }, { vars: { i } });
+  }
+  push(4, `Đã có bảng tổng tiền tố: mỗi ô là tổng của các số đứng trước nó.`, {}, {});
+  push(6, `Câu hỏi: tổng các số từ vị trí ${l} đến ${r} là bao nhiêu? Hàm tong_doan dùng bảng tt để trả lời ngay.`, Object.fromEntries(Array.from({ length: r - l + 1 }, (_, k) => [l + k, "win"])), {}, { vars: { l, r } });
+  const ans = tt[r + 1] - tt[l];
+  push(7, `tong_doan = tt[${r + 1}] - tt[${l}] = ${tt[r + 1]} - ${tt[l]} = ${ans}. Chỉ một phép trừ, không cần cộng lại ${r - l + 1} số.`, Object.fromEntries(Array.from({ length: r - l + 1 }, (_, k) => [l + k, "found"])), { [r + 1]: "found", [l]: "found" }, { vars: { l, r }, done: true, result: ans });
+  return S;
+}
+
+function buildPrime({ n }) {
+  const S = []; const tried = [];
+  let d = 2;
+  const push = (line, note, x2 = {}) => S.push({
+    line, note,
+    boxes: [{ label: "n", value: n }, { label: "d", value: d }, { label: "d × d", value: d * d }, ...(x2.mod !== undefined ? [{ label: "n mod d", value: x2.mod, cls: x2.mod === 0 ? "bad" : "" }] : [])],
+    chips: { label: "Các số d đã thử (không phải ước)", items: tried.map((t) => ({ t, cls: "no" })) },
+    ...x2,
+  });
+  push(0, `Kiểm tra ${n} có phải số nguyên tố không: thử chia n cho 2, 3, 4, … Nếu có số chia hết thì n không phải số nguyên tố.`);
+  push(3, "Bắt đầu thử với d = 2.");
+  while (d * d <= n) {
+    push(4, `d × d = ${d * d} ≤ ${n}: vẫn còn phải thử d = ${d}.`);
+    if (n % d === 0) {
+      push(5, `${n} mod ${d} = 0: ${d} là ước của ${n}.`, { mod: 0 });
+      push(6, `${n} = ${d} × ${n / d} nên không phải số nguyên tố: trả về False.`, { mod: 0, done: true, result: false, banner: { text: `${n} không phải số nguyên tố (chia hết cho ${d})`, ok: false } });
+      return S;
+    }
+    push(5, `${n} mod ${d} = ${n % d} ≠ 0: ${d} không phải ước của ${n}.`, { mod: n % d });
+    tried.push(d); d++;
+    push(7, `Tăng d lên ${d}.`);
+  }
+  push(4, `d × d = ${d * d} > ${n}: dừng. Chỉ cần thử đến căn bậc hai của n, vì nếu n có ước lớn hơn √n thì nó cũng có ước nhỏ hơn √n.`);
+  push(8, `Không có ước nào: ${n} là số nguyên tố, trả về True.`, { done: true, result: true, banner: { text: `${n} là số nguyên tố`, ok: true } });
+  return S;
+}
+
+function buildFactor({ n: n0 }) {
+  const S = []; const kq = [];
+  let n = n0; let d = 2;
+  const push = (line, note, x2 = {}) => S.push({
+    line, note,
+    boxes: [{ label: "n", value: n }, { label: "d", value: d }],
+    chips: { label: "kq (các thừa số đã tìm)", items: kq.map((t) => ({ t, cls: "ok" })) },
+    ...x2,
+  });
+  push(1, `Phân tích ${n0} thành tích các số nguyên tố: lần lượt chia n cho d = 2, 3, 4, … và chia liên tục khi còn chia hết.`);
+  push(2, "Bắt đầu với d = 2.");
+  while (d * d <= n) {
+    push(3, `d × d = ${d * d} ≤ n = ${n}: thử d = ${d}.`);
+    while (n % d === 0) {
+      push(4, `${n} mod ${d} = 0: ${d} là ước của n.`);
+      kq.push(d);
+      push(5, `Ghi ${d} vào kq.`);
+      n = n / d;
+      push(6, `n = n // d = ${n}.`);
+    }
+    push(4, `${n} mod ${d} = ${n % d} ≠ 0: đã hết ước ${d}.`);
+    d++;
+    push(7, `Tăng d lên ${d}.`);
+  }
+  push(3, `d × d = ${d * d} > n = ${n}: dừng vòng lặp.`);
+  if (n > 1) {
+    push(8, `n = ${n} > 1: phần còn lại không chia hết cho số nào nhỏ hơn nó nên là một số nguyên tố.`);
+    kq.push(n);
+    push(9, `Ghi ${n} vào kq.`);
+  } else push(8, "n = 1: không còn thừa số nào nữa.");
+  push(10, `Kết quả: ${n0} = ${kq.join(" × ")}.`, { done: true, result: [...kq], banner: { text: `${n0} = ${kq.join(" × ")}`, ok: true } });
+  return S;
+}
+
+function buildToBinary({ n: n0 }) {
+  const S = []; let n = n0; let kq = "";
+  const push = (line, note, x2 = {}) => S.push({
+    line, note,
+    boxes: [{ label: "n", value: n }, { label: "kq", value: kq === "" ? '""' : kq, cls: "wide" }],
+    chips: { label: "Các số dư theo thứ tự tính (đọc ngược lại sẽ ra kết quả)", items: [...n0.toString(2)].reverse().slice(0, S.filter((s) => s.line === 3).length).map((t) => ({ t, cls: "ok" })) },
+    ...x2,
+  });
+  push(1, `Đổi ${n0} sang hệ nhị phân: chia n cho 2 liên tục, các số dư chính là các chữ số nhị phân (chữ số tính sau nằm bên trái).`);
+  while (n > 0) {
+    push(2, `n = ${n} > 0: còn phải chia tiếp.`);
+    const r = n % 2;
+    kq = String(r) + kq;
+    push(3, `n mod 2 = ${n} mod 2 = ${r}. Viết ${r} vào bên trái kq, nay kq = "${kq}".`);
+    n = Math.floor(n / 2);
+    push(4, `n = n // 2 = ${n}.`);
+  }
+  push(2, "n = 0: dừng vòng lặp.");
+  push(5, `${n0} = (${kq})₂. Trong Python có sẵn bin(${n0}) = '${bin(n0)}'.`, { done: true, result: kq, banner: { text: `${n0} = (${kq})₂`, ok: true } });
+  return S;
+}
+function bin(n) { return "0b" + n.toString(2); }
+
+function buildBrackets({ xau }) {
+  const c = [...xau]; const n = c.length; const S = [];
+  const cap = { ")": "(", "]": "[", "}": "{" };
+  const stack = []; const idxStack = []; const okIdx = [];
+  const push = (line, note, x2 = {}) => {
+    const roles = {}; okIdx.forEach((k) => { roles[k] = "found"; }); Object.assign(roles, x2.roles || {});
+    S.push({ line, note, arr: c, roles, tags: {}, extra: [{ label: "ngan_xep (đáy bên trái, đỉnh bên phải)", items: [...stack] }], vars: x2.i !== undefined ? { i: x2.i } : {}, ...x2 });
+  };
+  push(1, "cap cho biết mỗi ngoặc đóng cần khớp với ngoặc mở nào.");
+  push(2, "ngan_xep là ngăn xếp (vào sau, ra trước), ban đầu rỗng. Gặp ngoặc mở thì đẩy vào, gặp ngoặc đóng thì lấy ngoặc mở ở đỉnh ra để khớp.");
+  for (let i = 0; i < n; i++) {
+    push(3, `c = '${c[i]}' (vị trí ${i}).`, { i, roles: { [i]: "cur" } });
+    if ("([{".includes(c[i])) {
+      stack.push(c[i]); idxStack.push(i);
+      push(5, `'${c[i]}' là ngoặc mở: đẩy vào ngăn xếp.`, { i, roles: { [i]: "new" } });
+    } else {
+      if (stack.length === 0) {
+        push(7, `'${c[i]}' là ngoặc đóng nhưng ngăn xếp rỗng: không có ngoặc mở nào để khớp.`, { i, roles: { [i]: "bad" } });
+        push(8, "Trả về False.", { i, roles: { [i]: "bad" }, done: true, result: false, banner: { text: "Dãy ngoặc SAI: ngoặc đóng thừa", ok: false } });
+        return S;
+      }
+      const top = stack.pop(); const ti = idxStack.pop();
+      if (top !== cap[c[i]]) {
+        push(7, `Lấy '${top}' ở đỉnh ngăn xếp ra, nhưng '${c[i]}' cần khớp với '${cap[c[i]]}': không khớp.`, { i, roles: { [i]: "bad", [ti]: "bad" } });
+        push(8, "Trả về False.", { i, roles: { [i]: "bad", [ti]: "bad" }, done: true, result: false, banner: { text: "Dãy ngoặc SAI: ngoặc không khớp loại", ok: false } });
+        return S;
+      }
+      okIdx.push(i, ti);
+      push(7, `Lấy '${top}' ở đỉnh ngăn xếp ra: khớp với '${c[i]}'.`, { i, roles: { [i]: "found", [ti]: "found" } });
+    }
+  }
+  if (stack.length === 0) push(9, "Duyệt hết xâu và ngăn xếp rỗng: mọi ngoặc mở đều đã được đóng. Trả về True.", { done: true, result: true, banner: { text: "Dãy ngoặc ĐÚNG", ok: true } });
+  else push(9, `Duyệt hết xâu nhưng ngăn xếp còn ${stack.length} ngoặc mở chưa được đóng. len(ngan_xep) == 0 là False.`, { done: true, result: false, banner: { text: "Dãy ngoặc SAI: còn ngoặc mở chưa đóng", ok: false } });
+  return S;
+}
+
+function buildHanoi({ n }) {
+  const S = []; const pegs = { A: Array.from({ length: n }, (_, k) => n - k), B: [], C: [] }; let moves = 0;
+  const snap = () => ({ A: [...pegs.A], B: [...pegs.B], C: [...pegs.C] });
+  const push = (line, note, x2 = {}) => S.push({ line, note, pegs: snap(), moves, vars: { n: x2.k !== undefined ? x2.k : n, moves }, ...x2 });
+  push(0, `Có ${n} đĩa xếp trên cột A, cần chuyển hết sang cột C (dùng cột B làm trung gian). Quy tắc: mỗi lần chuyển 1 đĩa, không đặt đĩa to lên đĩa nhỏ.`);
+  const hn = (k, tu, den, phu) => {
+    if (k === 0) return;
+    if (k > 1) push(3, `Muốn chuyển ${k} đĩa từ ${tu} sang ${den}: trước hết chuyển ${k - 1} đĩa trên cùng từ ${tu} sang ${phu}.`, { k, depth: true });
+    hn(k - 1, tu, phu, den);
+    pegs[tu].pop(); pegs[den].push(k); moves++;
+    push(4, `Chuyển đĩa ${k} từ cột ${tu} sang cột ${den} (lần chuyển thứ ${moves}).`, { k, moved: { disk: k, to: den } });
+    if (k > 1) push(5, `Rồi chuyển ${k - 1} đĩa từ ${phu} sang ${den}, đặt lên trên đĩa ${k}.`, { k });
+    hn(k - 1, phu, den, tu);
+  };
+  hn(n, "A", "C", "B");
+  push(5, `Hoàn thành sau ${moves} lần chuyển = 2^${n} − 1. Thêm 1 đĩa thì số lần chuyển gấp đôi cộng 1.`, { done: true, result: moves });
+  return S;
+}
+
 const ALGO_GROUPS = [
+  { key: "basic", label: "Cơ bản", hint: "Duyệt, đếm, cộng dồn" },
   { key: "sort", label: "Sắp xếp", hint: "Xếp dãy số tăng dần" },
   { key: "search", label: "Tìm kiếm", hint: "Tìm một số trong mảng" },
   { key: "two", label: "Hai con trỏ", hint: "Duyệt bằng hai chỉ số" },
-  { key: "math", label: "Số học", hint: "Số nguyên tố, ƯCLN" },
+  { key: "math", label: "Số học", hint: "Nguyên tố, ƯCLN, nhị phân" },
+  { key: "ds", label: "Ngăn xếp", hint: "Vào sau, ra trước" },
+  { key: "rec", label: "Đệ quy", hint: "Hàm gọi lại chính nó" },
   { key: "dp", label: "Quy hoạch động", hint: "Nhớ kết quả đã tính" },
   { key: "graph", label: "Đồ thị", hint: "Duyệt các đỉnh" },
 ];
@@ -6585,6 +6813,78 @@ const ALGOS = [
     tip: "Hay dùng để đếm số thành phần liên thông, kiểm tra chu trình, giải mê cung bằng quay lui.",
     code: ["def dfs(do_thi, u, da_tham):", "    da_tham.add(u)", "    for v in do_thi[u]:", "        if v not in da_tham:", "            dfs(do_thi, v, da_tham)  # đi sâu vào v"],
   },
+  {
+    key: "max", group: "basic", name: "Tìm số lớn nhất", en: "Find Maximum", viz: "cells", input: "array", build: buildMax,
+    defaults: { arr: "17, 5, 42, 8, 31, 42, 9" }, time: "O(n)", space: "O(1)",
+    desc: "Duyệt qua từng số của mảng, luôn nhớ số lớn nhất đã gặp. Đây là mẫu duyệt cơ bản nhất, cũng dùng để tìm số nhỏ nhất, đếm, cộng tổng.",
+    idea: ["Tạm coi số đầu tiên là số lớn nhất (lon).", "Xét lần lượt các số còn lại.", "Gặp số lớn hơn lon thì cập nhật lon bằng số đó.", "Hết mảng thì lon là số lớn nhất."],
+    tip: "Chỉ duyệt một lần nên rất nhanh. Muốn tìm số nhỏ nhất thì đổi dấu so sánh thành <.",
+    code: ["def lon_nhat(mang):", "    lon = mang[0]                       # tạm coi số đầu là lớn nhất", "    for i in range(1, len(mang)):", "        if mang[i] > lon:", "            lon = mang[i]               # gặp số lớn hơn thì ghi nhớ", "    return lon"],
+  },
+  {
+    key: "count", group: "basic", name: "Đếm số lần xuất hiện", en: "Frequency Count", viz: "cells", input: "count", build: buildCount,
+    defaults: { arr: "3, 1, 3, 2, 1, 3, 5, 2, 3" }, time: "O(n)", space: "O(k)",
+    desc: "Dùng từ điển (dict) để đếm mỗi số xuất hiện bao nhiêu lần. Rất hay gặp trong các bài tìm số xuất hiện nhiều nhất, kiểm tra trùng lặp.",
+    idea: ["Tạo từ điển dem rỗng: khóa là số, giá trị là số lần xuất hiện.", "Với mỗi số x của mảng: nếu x đã có trong dem thì tăng dem[x] lên 1.", "Nếu chưa có thì tạo mới dem[x] = 1.", "Cuối cùng dem cho biết số lần của mọi số."],
+    tip: "Chỉ duyệt một lần. Cách vét cạn (đếm riêng cho từng số) mất n² bước.",
+    code: ["def dem_tan_suat(mang):", "    dem = {}                            # dem[x]: số lần x xuất hiện", "    for x in mang:", "        if x in dem:", "            dem[x] += 1", "        else:", "            dem[x] = 1", "    return dem"],
+  },
+  {
+    key: "prefix", group: "basic", name: "Mảng cộng dồn (tổng tiền tố)", en: "Prefix Sum", viz: "rows", input: "prefix", build: buildPrefix,
+    defaults: { arr: "3, 1, 4, 1, 5, 9, 2, 6", l: "2", r: "5" }, time: "O(n) tạo, O(1) mỗi câu hỏi", space: "O(n)",
+    desc: "Tính trước tổng của các số đầu mảng, để trả lời “tổng đoạn từ l đến r” chỉ bằng một phép trừ, thay vì cộng lại cả đoạn mỗi lần hỏi.",
+    idea: ["Tạo bảng tt, tt[k] là tổng của k số đầu tiên (tt[0] = 0).", "Tính tt[i + 1] = tt[i] + mang[i], mỗi ô dùng lại kết quả của ô trước.", "Tổng các số từ vị trí l đến r bằng tt[r + 1] − tt[l].", "Hỏi bao nhiêu lần cũng chỉ mất một phép trừ."],
+    tip: "Rất hữu ích khi có nhiều câu hỏi về tổng đoạn. Ý tưởng “tính trước, dùng nhiều lần” còn xuất hiện ở quy hoạch động.",
+    code: ["def tien_to(mang):", "    tt = [0] * (len(mang) + 1)", "    for i in range(len(mang)):", "        tt[i + 1] = tt[i] + mang[i]     # cộng dồn", "    return tt", "", "def tong_doan(tt, l, r):               # tổng mang[l..r]", "    return tt[r + 1] - tt[l]"],
+  },
+  {
+    key: "reverse", group: "two", name: "Đảo ngược mảng", en: "Reverse Array", viz: "cells", input: "array", build: buildReverse,
+    defaults: { arr: "1, 2, 3, 4, 5, 6, 7" }, time: "O(n)", space: "O(1)",
+    desc: "Đổi chỗ số đầu với số cuối, số thứ hai với số thứ hai từ cuối, … cho đến khi hai con trỏ gặp nhau ở giữa.",
+    idea: ["trai ở đầu mảng, phai ở cuối mảng.", "Đổi chỗ mang[trai] và mang[phai].", "Tăng trai, giảm phai.", "Dừng khi trai không còn nhỏ hơn phai."],
+    tip: "Làm tại chỗ, không cần mảng phụ. Trong Python có sẵn mang[::-1] hoặc mang.reverse().",
+    code: ["def dao_nguoc(mang):", "    trai, phai = 0, len(mang) - 1", "    while trai < phai:", "        mang[trai], mang[phai] = mang[phai], mang[trai]", "        trai += 1", "        phai -= 1", "    return mang"],
+  },
+  {
+    key: "prime", group: "math", name: "Kiểm tra số nguyên tố", en: "Primality Test", viz: "calc", input: "num", range: [2, 2000], build: buildPrime,
+    defaults: { n: "97" }, time: "O(√n)", space: "O(1)",
+    desc: "Số nguyên tố là số lớn hơn 1 chỉ chia hết cho 1 và chính nó. Thử chia n cho các số d từ 2 trở đi, chỉ cần thử đến khi d × d vượt quá n.",
+    idea: ["Thử chia n cho d = 2, 3, 4, …", "Nếu n chia hết cho d thì n không phải số nguyên tố, dừng ngay.", "Chỉ cần thử khi d × d ≤ n, vì ước lớn hơn √n luôn đi cùng một ước nhỏ hơn √n.", "Thử hết mà không có ước nào thì n là số nguyên tố."],
+    tip: "Thử đến √n nhanh hơn rất nhiều so với thử đến n. Với n = 1 000 000 chỉ cần tối đa 1000 phép chia.",
+    code: ["def la_nguyen_to(n):", "    if n < 2:", "        return False", "    d = 2", "    while d * d <= n:", "        if n % d == 0:", "            return False                # có ước khác 1 và n", "        d += 1", "    return True"],
+  },
+  {
+    key: "factor", group: "math", name: "Phân tích ra thừa số nguyên tố", en: "Prime Factorization", viz: "calc", input: "num", range: [2, 1000], build: buildFactor,
+    defaults: { n: "360" }, time: "O(√n)", space: "O(log n)",
+    desc: "Viết một số thành tích các số nguyên tố, ví dụ 360 = 2 × 2 × 2 × 3 × 3 × 5. Chia n cho d liên tục khi còn chia hết rồi mới tăng d.",
+    idea: ["Bắt đầu với d = 2.", "Khi n chia hết cho d: ghi d vào kq và chia n cho d, lặp lại.", "Hết chia được thì tăng d lên 1.", "Dừng khi d × d > n. Nếu n còn lớn hơn 1 thì n chính là thừa số nguyên tố cuối cùng."],
+    tip: "Không cần kiểm tra d có nguyên tố hay không: các ước nhỏ đã bị chia hết trước nên d chia hết được thì chắc chắn là số nguyên tố.",
+    code: ["def phan_tich(n):", "    kq = []", "    d = 2", "    while d * d <= n:", "        while n % d == 0:               # còn chia hết cho d", "            kq.append(d)", "            n //= d", "        d += 1", "    if n > 1:                           # phần còn lại là số nguyên tố", "        kq.append(n)", "    return kq"],
+  },
+  {
+    key: "binary2", group: "math", name: "Đổi sang hệ nhị phân", en: "Decimal to Binary", viz: "calc", input: "num", range: [1, 1000], build: buildToBinary,
+    defaults: { n: "37" }, time: "O(log n)", space: "O(log n)",
+    desc: "Chia số cho 2 liên tục, các số dư (0 hoặc 1) chính là các chữ số nhị phân. Số dư tính sau cùng nằm ở bên trái kết quả.",
+    idea: ["Lấy số dư n mod 2: đó là chữ số nhị phân thấp nhất hiện tại.", "Viết chữ số đó vào bên trái chuỗi kq.", "Gán n = n // 2.", "Lặp đến khi n = 0."],
+    tip: "Đổi sang hệ khác (8, 16) làm tương tự, chỉ đổi số 2 thành cơ số mới.",
+    code: ["def sang_nhi_phan(n):", "    kq = \"\"", "    while n > 0:", "        kq = str(n % 2) + kq            # số dư viết vào bên trái", "        n //= 2", "    return kq"],
+  },
+  {
+    key: "brackets", group: "ds", name: "Kiểm tra dãy ngoặc đúng", en: "Balanced Brackets (Stack)", viz: "cells", input: "brackets", build: buildBrackets,
+    defaults: { xau: "{[()()]}" }, time: "O(n)", space: "O(n)",
+    desc: "Dùng ngăn xếp (vào sau, ra trước) để kiểm tra các ngoặc ( ), [ ], { } có mở đóng đúng cặp và đúng thứ tự hay không.",
+    idea: ["Duyệt từng ký tự của xâu.", "Gặp ngoặc mở thì đẩy vào ngăn xếp.", "Gặp ngoặc đóng thì lấy ngoặc ở đỉnh ngăn xếp ra, nó phải đúng loại; nếu ngăn xếp rỗng hoặc sai loại thì dãy sai.", "Hết xâu mà ngăn xếp rỗng thì dãy đúng."],
+    tip: "Ngăn xếp luôn lưu những ngoặc mở chưa được đóng, ngoặc mở sau cùng phải được đóng trước. Trong Python dùng list với append và pop.",
+    code: ["def ngoac_dung(xau):", "    cap = {')': '(', ']': '[', '}': '{'}", "    ngan_xep = []", "    for c in xau:", "        if c in '([{':", "            ngan_xep.append(c)          # ngoặc mở: đẩy vào", "        else:", "            if not ngan_xep or ngan_xep.pop() != cap[c]:", "                return False            # thừa hoặc sai loại", "    return len(ngan_xep) == 0           # còn ngoặc mở thì sai"],
+  },
+  {
+    key: "hanoi", group: "rec", name: "Tháp Hà Nội", en: "Tower of Hanoi", viz: "hanoi", input: "hanoi", build: buildHanoi,
+    defaults: { hn: "3" }, time: "O(2ⁿ)", space: "O(n)",
+    desc: "Chuyển n đĩa từ cột A sang cột C qua cột B, mỗi lần một đĩa, không được đặt đĩa to lên đĩa nhỏ. Bài toán kinh điển để học đệ quy.",
+    idea: ["Muốn chuyển n đĩa từ A sang C: chuyển n − 1 đĩa trên cùng từ A sang B.", "Chuyển đĩa to nhất từ A sang C.", "Chuyển n − 1 đĩa từ B sang C.", "Mỗi bước nhỏ là chính bài toán này với ít đĩa hơn. Đĩa 0 thì không làm gì (điều kiện dừng)."],
+    tip: "Số lần chuyển là 2ⁿ − 1: 3 đĩa cần 7 lần, 10 đĩa cần 1023 lần, 64 đĩa cần hơn 18 tỷ tỷ lần.",
+    code: ["def thap_ha_noi(n, tu, den, phu):", "    if n == 0:                          # hết đĩa thì dừng", "        return", "    thap_ha_noi(n - 1, tu, phu, den)    # dời n-1 đĩa sang cột phụ", "    print(tu, \"->\", den)                # chuyển đĩa n sang cột đích", "    thap_ha_noi(n - 1, phu, den, tu)    # dời n-1 đĩa từ cột phụ sang"],
+  },
 ];
 
 function algoPrepare(algo, p) {
@@ -6621,6 +6921,20 @@ function algoPrepare(algo, p) {
       if (t.length < 2 || t.length > 14 || /\s/.test(t)) return { error: "Nhập xâu từ 2 đến 14 ký tự, không có dấu cách." };
       return { args: { xau: t } };
     }
+    case "count": { const r = algoParseNumbers(p.arr, { min: 2, max: 14, lo: 1, hi: 9 }); return r.error ? r : { args: { nums: r.value } }; }
+    case "prefix": {
+      const r = algoParseNumbers(p.arr, { min: 2, max: 10 }); if (r.error) return r;
+      const l = int(p.l); const rr = int(p.r);
+      if (!(l >= 0 && rr >= l && rr < r.value.length)) return { error: `l và r là vị trí trong mảng (từ 0 đến ${r.value.length - 1}), l ≤ r.` };
+      return { args: { nums: r.value, l, r: rr } };
+    }
+    case "num": { const n = int(p.n); const [lo, hi] = algo.range; if (!(n >= lo && n <= hi)) return { error: `Nhập n là số nguyên từ ${lo} đến ${hi}.` }; return { args: { n } }; }
+    case "brackets": {
+      const t = String(p.xau || "").trim();
+      if (t.length < 1 || t.length > 16 || /[^()\[\]{}]/.test(t)) return { error: "Nhập từ 1 đến 16 ký tự, chỉ gồm các ngoặc ( ) [ ] { }." };
+      return { args: { xau: t } };
+    }
+    case "hanoi": { const n = int(p.hn); if (!(n >= 1 && n <= 5)) return { error: "Số đĩa là số nguyên từ 1 đến 5." }; return { args: { n } }; }
     case "sieve": { const n = int(p.n); if (!(n >= 10 && n <= 100)) return { error: "Nhập n là số nguyên từ 10 đến 100." }; return { args: { n } }; }
     case "gcd": {
       const a = int(p.a); const b = int(p.b);
@@ -6656,6 +6970,11 @@ function algoRandomParams(algo, current) {
     case "dups": return { arr: Array.from({ length: 10 }, () => rnd(1, 6)).sort((a, b) => a - b).join(", ") };
     case "two": return { arr: uniq(rnd(4, 6), 1, 30).sort((a, b) => a - b).join(", "), arr2: uniq(rnd(3, 5), 1, 30).sort((a, b) => a - b).join(", ") };
     case "text": { const w = ["level", "radar", "abcba", "noon", "hello", "python", "civic", "12321", "kayak", "abcd", "tenet", "robot"]; return { xau: w[rnd(0, w.length - 1)] }; }
+    case "count": return { arr: Array.from({ length: 11 }, () => rnd(1, 6)).join(", ") };
+    case "prefix": { const arr = Array.from({ length: 8 }, () => rnd(1, 9)); const l = rnd(0, 5); const r = rnd(l, 7); return { arr: arr.join(", "), l: String(l), r: String(r) }; }
+    case "num": return { n: String(algo.key === "prime" ? [97, 91, 53, 221, 1009 > 2000 ? 7 : 143, 199, 361, 29, 87][rnd(0, 8)] : algo.key === "binary2" ? rnd(5, 255) : rnd(12, 999)) };
+    case "brackets": { const w = ["{[()()]}", "([)]", "((()))", "(()", "[{()}]", "())(", "{[}]", "()[]{}"]; return { xau: w[rnd(0, w.length - 1)] }; }
+    case "hanoi": return { hn: String(rnd(2, 5)) };
     case "sieve": return { n: String([30, 40, 50, 60, 70, 100][rnd(0, 5)]) };
     case "gcd": { const g = rnd(2, 12); return { a: String(g * rnd(3, 20)), b: String(g * rnd(3, 20)) }; }
     case "fib": return { fn: String(rnd(8, 16)) };
@@ -6725,14 +7044,66 @@ function AlgoCells({ step }) {
   const tagsOf = (i) => step.tags?.[i] || [];
   const maxTags = Math.max(1, ...arr.map((_, i) => tagsOf(i).length));
   return (
-    <div className="nb-av-cells" role="img" aria-label="Các ô của mảng">
-      {arr.map((v, i) => (
-        <div key={i} className={`nb-av-cellcol ${cls(i)}`}>
-          <div className="nb-av-ptr" style={{ minHeight: maxTags * 13 + 3 }}>{tagsOf(i).map((t) => <span key={t}>{t}</span>)}</div>
-          <div className={`nb-av-cell ${v === null ? "empty" : ""}`}>{v === null ? "·" : v}</div>
-          <small>{i}</small>
+    <>
+      <div className="nb-av-cells" role="img" aria-label="Các ô của mảng">
+        {arr.map((v, i) => (
+          <div key={i} className={`nb-av-cellcol ${cls(i)}`}>
+            <div className="nb-av-ptr" style={{ minHeight: maxTags * 13 + 3 }}>{tagsOf(i).map((t) => <span key={t}>{t}</span>)}</div>
+            <div className={`nb-av-cell ${v === null ? "empty" : ""}`}>{v === null ? "·" : v}</div>
+            <small>{i}</small>
+          </div>
+        ))}
+      </div>
+      {step.extra && step.extra.map((ex) => (
+        <div key={ex.label} className="nb-av-extra">
+          <span>{ex.label}</span>
+          <div>{ex.items.length === 0 ? <em>(rỗng)</em> : ex.items.map((t, k) => <i key={k} className={k === ex.items.length - 1 ? "top" : ""}>{t}</i>)}</div>
         </div>
       ))}
+      {step.banner && <div className={`nb-av-banner ${step.banner.ok ? "ok" : "bad"}`}>{step.banner.text}</div>}
+    </>
+  );
+}
+
+function AlgoCalc({ step }) {
+  return (
+    <div className="nb-av-calc">
+      <div className="nb-av-boxes">
+        {step.boxes.map((b) => (
+          <div key={b.label} className={`nb-av-gbox ${b.cls || ""}`}><small>{b.label}</small><b>{b.value}</b></div>
+        ))}
+      </div>
+      {step.chips && (
+        <div className="nb-av-extra">
+          <span>{step.chips.label}</span>
+          <div>{step.chips.items.length === 0 ? <em>(chưa có)</em> : step.chips.items.map((c, k) => <i key={k} className={c.cls}>{c.t}</i>)}</div>
+        </div>
+      )}
+      {step.banner && <div className={`nb-av-banner ${step.banner.ok ? "ok" : "bad"}`}>{step.banner.text}</div>}
+    </div>
+  );
+}
+
+function AlgoHanoi({ step }) {
+  const N = Math.max(1, ...["A", "B", "C"].map((k) => Math.max(0, ...step.pegs[k])));
+  const total = Math.max(N, step.pegs.A.length + step.pegs.B.length + step.pegs.C.length);
+  const hue = (d) => `hsl(${210 - d * 28}, 70%, ${52 + d * 2}%)`;
+  return (
+    <div className="nb-av-hanoi" role="img" aria-label="Ba cột và các đĩa">
+      {["A", "B", "C"].map((k) => (
+        <div key={k} className="nb-av-peg">
+          <div className="nb-av-pegbody">
+            <i className="nb-av-pole" />
+            <div className="nb-av-stack">
+              {[...step.pegs[k]].reverse().map((d) => (
+                <b key={d} className={step.moved && step.moved.disk === d ? "hot" : ""} style={{ width: `${26 + (d / Math.max(total, 3)) * 70}%`, background: hue(d) }}>{d}</b>
+              ))}
+            </div>
+          </div>
+          <small>Cột {k}</small>
+        </div>
+      ))}
+      <div className="nb-av-hcount">Số lần chuyển: <b>{step.moves}</b></div>
     </div>
   );
 }
@@ -6824,6 +7195,7 @@ const ALGO_SPEEDS = [["Chậm", 1200], ["Vừa", 700], ["Nhanh", 330], ["Rất n
 function AlgoVisualizerView() {
   const initKey = (() => { const k = lsGet("algo-last"); return ALGOS.some((a) => a.key === k) ? k : "bubble"; })();
   const [algoKey, setAlgoKey] = useState(initKey);
+  const [shut, setShut] = useState({});
   const algo = ALGOS.find((a) => a.key === algoKey) || ALGOS[0];
   const [params, setParams] = useState(algo.defaults);
   const [applied, setApplied] = useState(() => algoPrepare(algo, algo.defaults));
@@ -6884,6 +7256,11 @@ function AlgoVisualizerView() {
       case "sieve": return [f("n", "n (10 đến 100)", 160)];
       case "gcd": return [f("a", "a (1–9999)", 150), f("b", "b (1–9999)", 150)];
       case "fib": return [f("fn", "n (2 đến 20)", 160)];
+      case "count": return [f("arr", "Dãy số (số từ 1 đến 9, tối đa 14 số)")];
+      case "prefix": return [f("arr", "Dãy số (tối đa 10 số)"), f("l", "Vị trí l", 110), f("r", "Vị trí r", 110)];
+      case "num": return [f("n", `n (${algo.range[0]} đến ${algo.range[1]})`, 200)];
+      case "brackets": return [f("xau", "Xâu ngoặc (tối đa 16 ký tự, chỉ gồm ( ) [ ] { })", 360)];
+      case "hanoi": return [f("hn", "Số đĩa (1 đến 5)", 160)];
       case "graph": return [(
         <label className="nb-av-field" key="start" style={{ maxWidth: 170 }}><span>Đỉnh xuất phát</span>
           <select value={params.start} onChange={(e) => loadParams(algo, { ...params, start: e.target.value })}>{Object.keys(ALGO_GRAPH).map((n) => <option key={n} value={n}>{n}</option>)}</select>
@@ -6905,16 +7282,20 @@ function AlgoVisualizerView() {
 
       <div className="nb-av-layout">
         <nav className="nb-av-side" aria-label="Danh sách thuật toán">
-          {ALGO_GROUPS.map((g) => (
-            <div key={g.key} className="nb-av-group">
-              <h4>{g.label}<small>{g.hint}</small></h4>
-              {ALGOS.filter((a) => a.group === g.key).map((a) => (
+          {ALGO_GROUPS.map((g) => {
+            const list = ALGOS.filter((a) => a.group === g.key);
+            const closed = !!shut[g.key] && !list.some((a) => a.key === algoKey);
+            return (
+            <div key={g.key} className={`nb-av-group ${closed ? "closed" : ""}`}>
+              <h4><button type="button" className="nb-av-ghead" aria-expanded={!closed} onClick={() => setShut((o) => ({ ...o, [g.key]: !closed }))}><ChevronRight size={14} className="nb-av-chev" /><span>{g.label}</span><em>{list.length}</em><small>{g.hint}</small></button></h4>
+              {!closed && list.map((a) => (
                 <button key={a.key} type="button" className={a.key === algoKey ? "on" : ""} onClick={() => pickAlgo(a.key)}>
                   <strong>{a.name}</strong><small>{a.time}</small>
                 </button>
               ))}
             </div>
-          ))}
+            );
+          })}
         </nav>
 
         <div className="nb-av-main">
@@ -6950,6 +7331,8 @@ function AlgoVisualizerView() {
                   {algo.viz === "sieve" && <AlgoSieve step={step} />}
                   {algo.viz === "gcd" && <AlgoGcd step={step} />}
                   {algo.viz === "graph" && <AlgoGraph step={step} label={algo.frontierLabel} />}
+                  {algo.viz === "calc" && <AlgoCalc step={step} />}
+                  {algo.viz === "hanoi" && <AlgoHanoi step={step} />}
                 </div>
                 <div className={`nb-av-note ${done ? "done" : ""}`} aria-live="polite">
                   <span>Bước {Math.min(idx, last) + 1}/{steps.length}</span>
@@ -10133,6 +10516,28 @@ function App() {
         .nb-av-info .nb-av-tip { margin: 12px 0 0; padding: 12px 14px; border-radius: 12px; background: #fff8e6; color: #5f4710; } .nb-av-tip > b { font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; color: #9a6b00; }
         .nb-av-tip ol { margin: 8px 0 8px 20px; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; line-height: 1.55; } .nb-av-info .nb-av-tip p { margin: 6px 0 0; font-size: 13.5px; color: #5f4710; }
 
+        /* ---- bổ sung: thuật toán cơ bản ---- */
+        .nb-av-group h4 { margin: 2px 0 4px; display: block; }
+        .nb-av-group h4 button.nb-av-ghead { width: 100%; display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; font: inherit; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #7b8aa0; cursor: pointer; text-align: left; }
+        .nb-av-group h4 button.nb-av-ghead:hover { background: #f3f6fb; }
+        .nb-av-ghead .nb-av-chev { flex: none; transition: transform .15s; transform: rotate(90deg); } .nb-av-group.closed .nb-av-chev { transform: rotate(0deg); }
+        .nb-av-ghead em { font-style: normal; font: 700 10.5px 'JetBrains Mono', monospace; padding: 0 6px; border-radius: 999px; background: #eef2f8; color: #6b7c93; }
+        .nb-av-ghead small { margin-left: auto; font-size: 10.5px; text-transform: none; letter-spacing: 0; font-weight: 500; color: #a0abbb; }
+        .nb-av-extra { display: flex; align-items: center; gap: 10px; padding: 4px 8px; flex-wrap: wrap; }
+        .nb-av-extra > span { flex: none; max-width: 170px; font-size: 12px; font-weight: 700; color: #627d98; }
+        .nb-av-extra > div { display: flex; flex-wrap: wrap; gap: 4px; min-height: 28px; align-items: center; } .nb-av-extra em { font-size: 12px; color: #a0abbb; }
+        .nb-av-extra i { font: 700 12.5px 'JetBrains Mono', monospace; font-style: normal; min-width: 30px; text-align: center; padding: 4px 9px; border-radius: 8px; background: #e6edf8; color: #243b53; }
+        .nb-av-extra i.top { background: var(--av-blue); color: #fff; } .nb-av-extra i.ok { background: #dff5e7; color: #137a52; } .nb-av-extra i.no { background: #fde3dc; color: #a2341a; }
+        .nb-av-banner { margin: 4px 8px; padding: 9px 14px; border-radius: 12px; text-align: center; font: 700 15px 'JetBrains Mono', monospace; } .nb-av-banner.ok { background: #dff5e7; color: #137a52; } .nb-av-banner.bad { background: #fde3dc; color: #a2341a; }
+        .nb-av-calc { display: flex; flex-direction: column; gap: 10px; padding: 6px 0; } .nb-av-boxes { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+        .nb-av-boxes .nb-av-gbox { min-width: 96px; width: auto; } .nb-av-boxes .nb-av-gbox.bad { background: #fde3dc; border-color: var(--av-swap); } .nb-av-boxes .nb-av-gbox.bad b { color: #a2341a; } .nb-av-boxes .nb-av-gbox.wide b { font-size: 26px; letter-spacing: .08em; }
+        .nb-av-hanoi { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; padding: 8px 6px 4px; }
+        .nb-av-peg { display: flex; flex-direction: column; align-items: center; gap: 4px; } .nb-av-peg small { font-weight: 800; font-size: 12px; color: #627d98; }
+        .nb-av-pegbody { position: relative; width: 100%; height: 190px; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; border-bottom: 6px solid #b9c6da; border-radius: 0 0 4px 4px; }
+        .nb-av-pole { position: absolute; bottom: 0; left: 50%; width: 8px; height: 100%; margin-left: -4px; border-radius: 4px 4px 0 0; background: #d3deee; }
+        .nb-av-stack { position: relative; z-index: 1; width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px; padding-bottom: 2px; }
+        .nb-av-stack b { height: 24px; display: grid; place-items: center; border-radius: 12px; color: #fff; font: 800 12px 'JetBrains Mono', monospace; transition: all .2s; box-shadow: inset 0 -2px 0 rgba(0,0,0,.12); } .nb-av-stack b.hot { outline: 3px solid var(--av-cmp); }
+        .nb-av-hcount { grid-column: 1 / -1; text-align: center; font-size: 13px; color: #52627a; } .nb-av-hcount b { font-family: 'JetBrains Mono', monospace; color: #1b4fc4; }
         /* ---- Giải trí: giao diện nâng cấp ---- */
         .nb-tg-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 26px 28px; margin-bottom: 20px; border-radius: 18px; color: #fff; background: radial-gradient(120% 140% at 0% 0%, #1b4fc4 0%, #0f2a52 45%, #0b1b33 100%); position: relative; overflow: hidden; }
         .nb-tg-hero::after { content: "</>"; position: absolute; right: 22px; bottom: -22px; font: 800 120px/1 'JetBrains Mono', monospace; color: rgba(255,255,255,.05); pointer-events: none; }
