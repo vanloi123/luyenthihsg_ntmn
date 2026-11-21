@@ -2699,7 +2699,7 @@ function ProblemClassModal({ problem, students, submissions, onClose }) {
   );
 }
 
-const PRACTICE_DL_MAX = 60;
+const PRACTICE_DL_MAX = 100;
 function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics, students }) {
   const [languageFilter, setLanguageFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState("all");
@@ -2707,6 +2707,9 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
   const [pointMin, setPointMin] = useState("");
   const [pointMax, setPointMax] = useState("");
   const [query, setQuery] = useState("");
+  const [pickMode, setPickMode] = useState(false);
+  const [picked, setPicked] = useState(() => new Set());
+  const togglePick = (id) => setPicked((cur) => { const n = new Set(cur); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const [active, setActive] = useState(null);
   const fbList = useContext(FeedbackContext).list;
   const [reviewProblem, setReviewProblem] = useState(null);
@@ -2888,8 +2891,10 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
     const state = progressState(problem);
     const language = LANGUAGE_META[problemLanguage(problem)] || LANGUAGE_META.cpp;
     return (
-      <div key={problem.id} className={`nb-practice-problem ${state.className} ${isTeacher ? "teacher" : ""}`} role="button" tabIndex={0} onClick={() => setActive(problem)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActive(problem); } }}>
-        <div className="nb-practice-problem-index">{String(index + 1).padStart(2, "0")}</div>
+      <div key={problem.id} className={`nb-practice-problem ${state.className} ${isTeacher ? "teacher" : ""}`} role="button" tabIndex={0} onClick={() => (pickMode ? togglePick(problem.id) : setActive(problem))} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (pickMode) togglePick(problem.id); else setActive(problem); } }}>
+        {pickMode
+          ? <div className="nb-practice-problem-index"><input type="checkbox" className="nb-pick-box" checked={picked.has(problem.id)} onChange={() => togglePick(problem.id)} onClick={(e) => e.stopPropagation()} aria-label={`Chọn bài ${problem.title}`} /></div>
+          : <div className="nb-practice-problem-index">{String(index + 1).padStart(2, "0")}</div>}
         <div className="nb-practice-problem-main">
           <div className="nb-practice-problem-titleline">
             <h4>{problem.title}</h4>
@@ -3070,9 +3075,22 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
         <div className="nb-practice-filter-stack"><span>Sắp xếp</span><select className="nb-input nb-practice-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp bài"><option value="default">Mặc định</option><option value="diff-asc">Dễ → khó</option><option value="diff-desc">Khó → dễ</option><option value="pts-desc">Điểm cao → thấp</option><option value="pts-asc">Điểm thấp → cao</option><option value="most">Nhiều {isTeacher ? "em" : "bạn"} AC nhất</option><option value="least">Ít {isTeacher ? "em" : "bạn"} AC nhất</option></select></div>
         {!isTeacher && <div className="nb-practice-filter-stack"><span>Tiến độ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['todo', 'Chưa mở'], ['in-progress', 'Đang luyện'], ['done', 'Đã xong']].map(([key, label]) => <button key={key} className={`nb-chip ${progressFilter === key ? "active" : ""}`} onClick={() => setProgressFilter(key)}>{label}</button>)}</div></div>}
         {filtersActive && <button type="button" className="nb-btn nb-btn-ghost nb-practice-clear" onClick={clearAllFilters}><X size={13} /> Xóa lọc</button>}
-        {filtered.length > 0 && (
+        {problems.length > 0 && (
           <div className="nb-practice-filter-stack nb-practice-dl"><span>Tải đề</span>
-            <ExamDownloadMenu className="nb-btn nb-btn-ghost" label={`${filtersActive ? "Các bài đang lọc" : "Tất cả bài"} (${Math.min(filtered.length, PRACTICE_DL_MAX)})`} exam={{ id: "practice", title: "Phiếu bài tập luyện tập", description: filtersActive ? "Các bài đã lọc theo điều kiện đang chọn" : "", duration: 0 }} problems={filtered.slice(0, PRACTICE_DL_MAX)} />
+            {!pickMode ? (
+              <div className="nb-filter-row" style={{ margin: 0 }}>
+                {filtered.length > 0 && <ExamDownloadMenu className="nb-btn nb-btn-ghost" label={`${filtersActive ? "Các bài đang lọc" : "Tất cả bài"} (${Math.min(filtered.length, PRACTICE_DL_MAX)})`} exam={{ id: "practice", title: "Phiếu bài tập luyện tập", description: filtersActive ? "Các bài đã lọc theo điều kiện đang chọn" : "", duration: 0 }} problems={filtered.slice(0, PRACTICE_DL_MAX)} />}
+                <button type="button" className="nb-btn nb-btn-ghost" onClick={() => setPickMode(true)}><ListChecks size={15} /> Tự chọn bài</button>
+              </div>
+            ) : (
+              <div className="nb-filter-row nb-pick-bar" style={{ margin: 0 }}>
+                <ExamDownloadMenu className="nb-btn nb-btn-primary" label={`Tải các bài đã chọn (${picked.size})`} disabled={picked.size === 0} exam={{ id: "practice", title: "Phiếu bài tập luyện tập", description: "", duration: 0 }} problems={problems.filter((x) => picked.has(x.id)).slice(0, PRACTICE_DL_MAX)} />
+                <button type="button" className="nb-btn nb-btn-ghost" onClick={() => setPicked((cur) => { const n = new Set(cur); filtered.forEach((x) => { if (n.size < PRACTICE_DL_MAX) n.add(x.id); }); return n; })}>Chọn các bài đang hiện</button>
+                <button type="button" className="nb-btn nb-btn-ghost" onClick={() => setPicked(new Set())} disabled={picked.size === 0}>Bỏ chọn</button>
+                <button type="button" className="nb-btn nb-btn-ghost" onClick={() => { setPickMode(false); setPicked(new Set()); }}><X size={14} /> Xong</button>
+              </div>
+            )}
+            {pickMode && <small className="nb-pick-hint">Bấm vào từng bài để chọn (tối đa {PRACTICE_DL_MAX} bài). Việc chọn được giữ nguyên khi đổi bộ lọc.</small>}
           </div>
         )}
       </div>
@@ -4955,7 +4973,7 @@ function downloadExamPdf(exam, problems) {
 }
 
 // Nút "Tải đề": Word (.doc) hoặc PDF. getProblems: hàm tải danh sách bài nếu chưa có sẵn.
-function ExamDownloadMenu({ exam, problems, className = "nb-btn nb-btn-ghost", label = "Tải đề" }) {
+function ExamDownloadMenu({ exam, problems, className = "nb-btn nb-btn-ghost", label = "Tải đề", disabled = false }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -4981,7 +4999,7 @@ function ExamDownloadMenu({ exam, problems, className = "nb-btn nb-btn-ghost", l
   }
   return (
     <span className="nb-xdl" ref={boxRef}>
-      <button type="button" className={className} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open}><Download size={15} /> {label}</button>
+      <button type="button" className={className} onClick={() => setOpen((v) => !v)} disabled={disabled} aria-haspopup="menu" aria-expanded={open}><Download size={15} /> {label}</button>
       {open && (
         <div className="nb-xdl-menu" role="menu">
           <button type="button" role="menuitem" onClick={() => run("word")} disabled={!!busy}>{busy === "word" ? <Loader2 size={15} className="nb-spin" /> : <FileText size={15} />}<div className="nb-xdl-txt"><b>Word (.docx)</b><small>Mở và chỉnh sửa trong Word</small></div></button>
@@ -11284,6 +11302,9 @@ function App() {
         .nb-practice-dl .nb-xdl-menu, .nb-modal-head .nb-xdl-menu { left: auto; right: 0; } .nb-modal-head .nb-xdl { margin-left: auto; margin-right: 8px; align-self: center; }
         .nb-xdl-err { margin: 4px 6px 2px; padding: 7px 9px; border-radius: 8px; background: #fde3dc; color: #a2341a; font-size: 12px; }
         @media (max-width: 640px) { .nb-xdl-menu { left: auto; right: 0; min-width: 240px; } }
+        .nb-pick-box { width: 18px; height: 18px; accent-color: #2563eb; cursor: pointer; margin: 0; }
+        .nb-pick-bar { flex-wrap: wrap; gap: 6px; } .nb-pick-hint { display: block; margin-top: 4px; font-size: 11.5px; color: #627d98; font-family: inherit; text-transform: none; letter-spacing: 0; }
+        .nb-practice-dl { flex: 1 1 100%; }
         /* ---- Giải trí: giao diện nâng cấp ---- */
         .nb-tg-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 26px 28px; margin-bottom: 20px; border-radius: 18px; color: #fff; background: radial-gradient(120% 140% at 0% 0%, #1b4fc4 0%, #0f2a52 45%, #0b1b33 100%); position: relative; overflow: hidden; }
         .nb-tg-hero::after { content: "</>"; position: absolute; right: 22px; bottom: -22px; font: 800 120px/1 'JetBrains Mono', monospace; color: rgba(255,255,255,.05); pointer-events: none; }
