@@ -4,7 +4,7 @@ import {
   Home, BookOpen, Code2, Trophy, MessageSquare, Clock, Users, Plus,
   Send, CheckCircle2, XCircle, Loader2, Flame, ChevronRight, ChevronLeft, Search,
   Award, TrendingUp, AlertCircle, X, Play, Lock, GraduationCap, ListChecks,
-  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink, Keyboard, Target, Copy, Pause, SkipBack, SkipForward,
+  RefreshCw, Eye, EyeOff, LogOut, Pencil, Trash2, Save, UploadCloud, ExternalLink, Keyboard, Target, Copy, Pause, SkipBack, SkipForward, Download, FileText,
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, SISTER_SITE_URL, SISTER_SITE_LABEL } from "./config.js";
@@ -1496,7 +1496,7 @@ function examConfirm(message) {
   return ok;
 }
 
-function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0, submissionHistory = [], chooseLanguage = false, defaultLanguage = "", onLanguageChange }) {
+function ProblemSolverModal({ problem, allowDownload = false, onClose, onVerdict, readOnly, disabledLabel, alreadySolved, bestScore = 0, attemptCount = 0, submissionHistory = [], chooseLanguage = false, defaultLanguage = "", onLanguageChange }) {
   // Trong đề thi: học sinh tự chọn ngôn ngữ trước khi gõ code (chooseLanguage). Luyện tập: theo cấu hình bài.
   const [chosenLanguage, setChosenLanguage] = useState(() => (chooseLanguage && LANGUAGE_META[defaultLanguage] ? defaultLanguage : ""));
   const needsLanguage = chooseLanguage && !chosenLanguage;
@@ -1558,6 +1558,7 @@ function ProblemSolverModal({ problem, onClose, onVerdict, readOnly, disabledLab
             <div className="nb-eyebrow">{problem.id} · {needsLanguage ? "Chọn ngôn ngữ" : editorMeta.label} · {problem.points} điểm</div>
             <h3 className="nb-h3">{problem.title}</h3>
           </div>
+          {allowDownload && <ExamDownloadMenu exam={{ id: problem.id, title: `${problem.id} ${problem.title}`, description: "", duration: 0 }} problems={[problem]} />}
           <button className="nb-icon-btn" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
         </div>
 
@@ -2698,6 +2699,7 @@ function ProblemClassModal({ problem, students, submissions, onClose }) {
   );
 }
 
+const PRACTICE_DL_MAX = 60;
 function ProblemsView({ isTeacher, currentUser, problems, submissions, points, addProblem, updateProblem, removeProblem, solvedByCurrent, onVerdict, topics, students }) {
   const [languageFilter, setLanguageFilter] = useState("all");
   const [progressFilter, setProgressFilter] = useState("all");
@@ -3068,6 +3070,11 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
         <div className="nb-practice-filter-stack"><span>Sắp xếp</span><select className="nb-input nb-practice-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sắp xếp bài"><option value="default">Mặc định</option><option value="diff-asc">Dễ → khó</option><option value="diff-desc">Khó → dễ</option><option value="pts-desc">Điểm cao → thấp</option><option value="pts-asc">Điểm thấp → cao</option><option value="most">Nhiều {isTeacher ? "em" : "bạn"} AC nhất</option><option value="least">Ít {isTeacher ? "em" : "bạn"} AC nhất</option></select></div>
         {!isTeacher && <div className="nb-practice-filter-stack"><span>Tiến độ</span><div className="nb-filter-row" style={{ margin: 0 }}>{[['all', 'Tất cả'], ['todo', 'Chưa mở'], ['in-progress', 'Đang luyện'], ['done', 'Đã xong']].map(([key, label]) => <button key={key} className={`nb-chip ${progressFilter === key ? "active" : ""}`} onClick={() => setProgressFilter(key)}>{label}</button>)}</div></div>}
         {filtersActive && <button type="button" className="nb-btn nb-btn-ghost nb-practice-clear" onClick={clearAllFilters}><X size={13} /> Xóa lọc</button>}
+        {filtered.length > 0 && (
+          <div className="nb-practice-filter-stack nb-practice-dl"><span>Tải đề</span>
+            <ExamDownloadMenu className="nb-btn nb-btn-ghost" label={`${filtersActive ? "Các bài đang lọc" : "Tất cả bài"} (${Math.min(filtered.length, PRACTICE_DL_MAX)})`} exam={{ id: "practice", title: "Phiếu bài tập luyện tập", description: filtersActive ? "Các bài đã lọc theo điều kiện đang chọn" : "", duration: 0 }} problems={filtered.slice(0, PRACTICE_DL_MAX)} />
+          </div>
+        )}
       </div>
 
       {isTeacher && (
@@ -3195,6 +3202,7 @@ function ProblemsView({ isTeacher, currentUser, problems, submissions, points, a
       {active && (
         <ProblemSolverModal
           problem={active}
+          allowDownload
           onClose={() => setActive(null)}
           readOnly={isTeacher}
           disabledLabel={isTeacher ? "Chỉ xem trước (GV)" : undefined}
@@ -4018,6 +4026,7 @@ function AssignedView({ isTeacher, currentUser, problems, students, assignments,
         {active && (
           <ProblemSolverModal
             problem={active}
+            allowDownload
             onClose={() => setActive(null)}
             alreadySolved={solvedByCurrent(active.id)}
             bestScore={problemStatsFor(active.id).bestScore}
@@ -4682,6 +4691,308 @@ function ExamBuilder({ exam, students, practiceProblems, currentUser, onClose, o
 }
 
 /* ---------- Phòng thi (học sinh làm bài / giáo viên xem trước) ---------- */
+/* ---------- Tải đề thi: Word (.docx) và PDF ---------- */
+const examEsc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const examSlug = (s) => String(s || "de-thi").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase().slice(0, 60) || "de-thi";
+
+// Tách chuỗi đề bài thành các đoạn chữ có định dạng (đậm, mũ, chỉ số, code) — giống renderStatementInline
+function examInlineRuns(text) {
+  const source = String(text ?? "");
+  const pattern = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\^\{[^}\n]+\})|(\^-?(?:\d+|[A-Za-z]))|(_\{[^}\n]+\})|(_[A-Za-z0-9]{1,2}(?![A-Za-z0-9_]))/g;
+  const out = []; let cursor = 0; let m;
+  const add = (t, o = {}) => { if (t) out.push({ t: prettyMath(t), ...o }); };
+  while ((m = pattern.exec(source))) {
+    const token = m[0];
+    const prev = m.index > 0 ? source[m.index - 1] : "";
+    const isScript = token[0] === "^" || token[0] === "_";
+    if (isScript && (!prev || /\s/.test(prev))) continue;
+    if (token[0] === "_" && !/[A-Za-z0-9)\]}]/.test(prev)) continue;
+    add(source.slice(cursor, m.index));
+    cursor = m.index + token.length;
+    const inner = token[1] === "{" ? token.slice(2, -1) : token.slice(1);
+    if (token[0] === "`") out.push({ t: token.slice(1, -1), code: true });
+    else if (token.startsWith("**")) add(token.slice(2, -2), { b: true });
+    else if (token[0] === "^") add(inner, { sup: true });
+    else add(inner, { sub: true });
+  }
+  add(source.slice(cursor));
+  return out;
+}
+function examInlineHtml(text) {
+  return examInlineRuns(text).map((r) => {
+    const h = examEsc(r.t).replace(/\n/g, "<br>");
+    return r.code ? `<code>${h}</code>` : r.b ? `<b>${h}</b>` : r.sup ? `<sup>${h}</sup>` : r.sub ? `<sub>${h}</sub>` : h;
+  }).join("");
+}
+
+function examBlocksHtml(statement) {
+  return parseStatementBlocks(statement).map((b) => {
+    if (b.type === "heading") return `<h4>${examInlineHtml(b.text)}</h4>`;
+    if (b.type === "label") return `<p class="lb">${examEsc(b.text)}</p>`;
+    if (b.type === "code") return `<pre>${examEsc(b.text)}</pre>`;
+    if (b.type === "ul") return `<ul>${b.items.map((it) => `<li>${examInlineHtml(it)}</li>`).join("")}</ul>`;
+    if (b.type === "ol") return `<ol>${b.items.map((it) => `<li>${examInlineHtml(it)}</li>`).join("")}</ol>`;
+    if (b.type === "table") return `<table class="tb" border="1" cellspacing="0" cellpadding="4"><thead><tr>${b.head.map((c) => `<th>${examInlineHtml(c)}</th>`).join("")}</tr></thead><tbody>${b.rows.map((r) => `<tr>${r.map((c) => `<td>${examInlineHtml(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    const inline = b.text.match(STATEMENT_INLINE_LABELS);
+    if (inline && !b.text.includes("\n")) return `<p><b>${examEsc(inline[1])}:</b> ${examInlineHtml(inline[2])}</p>`;
+    return `<p>${examInlineHtml(b.text)}</p>`;
+  }).join("\n");
+}
+
+function examDocHtml(exam, problems, images = new Map(), forWord = false) { // dùng cho bản in PDF
+  const total = problems.reduce((s, p) => s + (Number(p.points) || 0), 0);
+  const img = (url, alt) => {
+    if (!url) return "";
+    const r = images.get(url);
+    if (r) return `<p class="im"><img src="${examEsc(r.src)}" width="${r.w}" height="${r.h}" alt="${examEsc(alt)}"></p>`;
+    return `<p class="im"><img src="${examEsc(url)}" ${forWord ? 'width="480"' : ""} alt="${examEsc(alt)}"></p>`;
+  };
+  const body = problems.map((p, i) => {
+    const sIn = String(p.sample?.input ?? "").trim(); const sOut = String(p.sample?.output ?? "").trim();
+    const hasSample = (sIn && sIn !== "—") || (sOut && sOut !== "—");
+    return `<div class="pb">
+<h2>Bài ${i + 1}. ${examEsc(p.title)} <span class="pt">(${p.points} điểm)</span></h2>
+${examBlocksHtml(p.statement)}
+${img(p.imageUrl, `Hình minh họa bài ${i + 1}`)}
+${hasSample ? `<p class="lb">Ví dụ</p><table class="tb" border="1" cellspacing="0" cellpadding="6"><tr><th width="50%">Input</th><th width="50%">Output</th></tr><tr><td><pre>${examEsc(sIn)}</pre></td><td><pre>${examEsc(sOut)}</pre></td></tr></table>` : ""}
+</div>`;
+  }).join("\n");
+  const meta = [...(exam.duration ? [`Thời gian: ${exam.duration} phút`] : []), `Số bài: ${problems.length}`, `Tổng điểm: ${total}`].join(" &nbsp;·&nbsp; ");
+  return `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8"><title>${examEsc(examSlug(exam.title))}</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->
+<style>
+@page { size: 21cm 29.7cm; margin: 2cm 2cm 2cm 2.2cm; }
+body { font-family: "Times New Roman", Times, serif; font-size: 13pt; line-height: 1.4; color: #000; }
+h1 { font-size: 20pt; text-align: center; margin: 0 0 6pt; }
+h2 { font-size: 14.5pt; margin: 18pt 0 6pt; page-break-after: avoid; }
+h4 { font-size: 13pt; margin: 10pt 0 4pt; }
+.pt { font-weight: normal; font-size: 12pt; }
+.mt { text-align: center; margin: 0 0 6pt; font-size: 12pt; }
+.ds { text-align: center; font-style: italic; margin: 0 0 8pt; }
+.nm { margin: 12pt 0 4pt; }
+hr { border: 0; border-top: 1.5pt solid #000; margin: 8pt 0 0; }
+p { margin: 4pt 0; }
+.lb { font-weight: bold; margin-top: 8pt; page-break-after: avoid; }
+ul, ol { margin: 4pt 0 4pt 18pt; padding: 0; }
+pre, code { font-family: Consolas, "Courier New", monospace; font-size: 11.5pt; }
+pre { margin: 0; white-space: pre-wrap; }
+table.tb { border-collapse: collapse; margin: 6pt 0; width: 100%; }
+table.tb th, table.tb td { border: 1pt solid #000; vertical-align: top; text-align: left; }
+.im { text-align: center; }
+img { max-width: 100%; height: auto; }
+.pb { page-break-inside: auto; }
+</style></head>
+<body>
+<h1>${examEsc(exam.title)}</h1>
+<p class="mt">${meta}</p>
+${exam.description ? `<p class="ds">${examEsc(exam.description)}</p>` : ""}
+<p class="nm">Họ và tên: ................................................................ &nbsp; Lớp: ................</p>
+<hr>
+${body}
+</body></html>`;
+}
+
+function examTriggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// Tải ảnh đề về và đổi sang PNG để nhúng thẳng vào file Word (không tải được thì bỏ qua ảnh đó)
+async function examFetchImages(problems) {
+  const map = new Map();
+  const urls = [...new Set(problems.map((p) => p.imageUrl).filter(Boolean))];
+  await Promise.all(urls.map(async (url) => {
+    try {
+      const res = await fetch(url, { mode: "cors" });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const im = await new Promise((resolve, reject) => { const x = new Image(); x.onload = () => resolve(x); x.onerror = () => reject(new Error("img")); x.src = objUrl; });
+      const canvas = document.createElement("canvas");
+      canvas.width = im.naturalWidth; canvas.height = im.naturalHeight;
+      const ctx = canvas.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(im, 0, 0);
+      URL.revokeObjectURL(objUrl);
+      const png = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!png) return;
+      const scale = Math.min(1, 480 / (canvas.width || 480));
+      map.set(url, { bytes: new Uint8Array(await png.arrayBuffer()), w: Math.max(1, Math.round(canvas.width * scale)), h: Math.max(1, Math.round(canvas.height * scale)) });
+    } catch (e) { /* bỏ qua ảnh này */ }
+  }));
+  return map;
+}
+
+/* --- Tạo file .docx (zip không nén + OOXML tối thiểu), không cần thư viện ngoài --- */
+const EXAM_CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function examCrc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = EXAM_CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+function examZip(files) {
+  const enc = new TextEncoder(); const chunks = []; const central = []; let offset = 0;
+  const u16 = (v) => [v & 255, (v >>> 8) & 255];
+  const u32 = (v) => [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255];
+  files.forEach((f) => {
+    const name = enc.encode(f.name); const crc = examCrc32(f.data); const size = f.data.length;
+    const local = new Uint8Array([0x50, 0x4b, 3, 4, ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(size), ...u32(size), ...u16(name.length), ...u16(0)]);
+    chunks.push(local, name, f.data); central.push({ name, crc, size, offset });
+    offset += local.length + name.length + size;
+  });
+  const cdStart = offset;
+  central.forEach((c) => {
+    const h = new Uint8Array([0x50, 0x4b, 1, 2, ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(c.crc), ...u32(c.size), ...u32(c.size), ...u16(c.name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(c.offset)]);
+    chunks.push(h, c.name); offset += h.length + c.name.length;
+  });
+  chunks.push(new Uint8Array([0x50, 0x4b, 5, 6, 0, 0, 0, 0, ...u16(central.length), ...u16(central.length), ...u32(offset - cdStart), ...u32(cdStart), 0, 0]));
+  return new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+const wx = (s) => String(s ?? "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function wRuns(runs, base = {}) {
+  return runs.map((r) => {
+    const o = { ...base, ...r }; const code = o.code;
+    const pr = `${code ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>' : ""}${o.b ? "<w:b/>" : ""}${o.i ? "<w:i/>" : ""}${o.sz ? `<w:sz w:val="${o.sz}"/>` : code ? '<w:sz w:val="23"/>' : ""}${o.sup ? '<w:vertAlign w:val="superscript"/>' : o.sub ? '<w:vertAlign w:val="subscript"/>' : ""}`;
+    const parts = String(o.t).split("\n");
+    return `<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ""}${parts.map((t, k) => `${k ? "<w:br/>" : ""}<w:t xml:space="preserve">${wx(t)}</w:t>`).join("")}</w:r>`;
+  }).join("");
+}
+function wPara(inner, o = {}) {
+  const pr = `${o.keep ? "<w:keepNext/>" : ""}${o.border ? '<w:pBdr><w:bottom w:val="single" w:sz="8" w:space="1" w:color="000000"/></w:pBdr>' : ""}<w:spacing w:before="${o.before ?? 0}" w:after="${o.after ?? 80}"/>${o.left ? `<w:ind w:left="${o.left}"${o.hang ? ` w:hanging="${o.hang}"` : ""}/>` : ""}${o.jc ? `<w:jc w:val="${o.jc}"/>` : ""}`;
+  return `<w:p><w:pPr>${pr}</w:pPr>${inner}</w:p>`;
+}
+function wTable(rows, widths, headRow = true) {
+  const border = ["top", "left", "bottom", "right", "insideH", "insideV"].map((k) => `<w:${k} w:val="single" w:sz="4" w:space="0" w:color="000000"/>`).join("");
+  const total = widths.reduce((a, b) => a + b, 0);
+  return `<w:tbl><w:tblPr><w:tblW w:w="${total}" w:type="dxa"/><w:tblBorders>${border}</w:tblBorders><w:tblLayout w:type="fixed"/><w:tblCellMar><w:left w:w="100" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${widths.map((w) => `<w:gridCol w:w="${w}"/>`).join("")}</w:tblGrid>${rows.map((cells, ri) => `<w:tr>${cells.map((c, ci) => `<w:tc><w:tcPr><w:tcW w:w="${widths[ci]}" w:type="dxa"/>${headRow && ri === 0 ? '<w:shd w:val="clear" w:color="auto" w:fill="EDEDED"/>' : ""}</w:tcPr>${c}</w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>${wPara("", { after: 60 })}`;
+}
+function wBlocks(statement) {
+  return parseStatementBlocks(statement).map((b) => {
+    if (b.type === "heading") return wPara(wRuns(examInlineRuns(b.text), { b: true }), { before: 120, keep: true });
+    if (b.type === "label") return wPara(wRuns([{ t: b.text }], { b: true }), { before: 100, keep: true });
+    if (b.type === "code") return wPara(wRuns([{ t: b.text, code: true }]), { left: 240 });
+    if (b.type === "ul" || b.type === "ol") return b.items.map((it, k) => wPara(wRuns([{ t: b.type === "ul" ? "•\t" : `${k + 1}.\t` }, ...examInlineRuns(it)]), { left: 540, hang: 300, after: 40 })).join("");
+    if (b.type === "table") {
+      const n = Math.max(1, b.head.length); const w = Math.floor(9300 / n);
+      const cell = (txt, bold) => wPara(wRuns(examInlineRuns(txt), bold ? { b: true } : {}), { after: 20 });
+      return wTable([b.head.map((c) => cell(c, true)), ...b.rows.map((r) => b.head.map((_, k) => cell(r[k] ?? "", false)))], Array(n).fill(w));
+    }
+    const inline = b.text.match(STATEMENT_INLINE_LABELS);
+    if (inline && !b.text.includes("\n")) return wPara(wRuns([{ t: `${inline[1]}: `, b: true }, ...examInlineRuns(inline[2])]));
+    return wPara(wRuns(examInlineRuns(b.text)));
+  }).join("");
+}
+function wImage(rid, n, w, h) {
+  const cx = w * 9525; const cy = h * 9525;
+  return `<w:p><w:pPr><w:spacing w:before="60" w:after="100"/><w:jc w:val="center"/></w:pPr><w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${n}" name="Hinh ${n}"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${n}" name="anh${n}.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+function examDocxBlob(exam, problems, images) {
+  const enc = new TextEncoder();
+  const total = problems.reduce((s, p) => s + (Number(p.points) || 0), 0);
+  const media = []; const rels = [];
+  let body = wPara(wRuns([{ t: exam.title }], { b: true, sz: 40 }), { jc: "center", after: 100 });
+  body += wPara(wRuns([{ t: `${exam.duration ? `Thời gian: ${exam.duration} phút   ·   ` : ""}Số bài: ${problems.length}   ·   Tổng điểm: ${total}` }], { sz: 24 }), { jc: "center", after: 100 });
+  if (exam.description) body += wPara(wRuns([{ t: exam.description }], { i: true }), { jc: "center", after: 120 });
+  body += wPara(wRuns([{ t: "Họ và tên: ................................................................    Lớp: ................" }]), { before: 160, after: 60, border: true });
+  problems.forEach((p, i) => {
+    body += wPara(wRuns([{ t: `Bài ${i + 1}. ${p.title} ` }, { t: `(${p.points} điểm)`, b: false, sz: 24 }], { b: true, sz: 29 }), { before: 320, after: 100, keep: true });
+    body += wBlocks(p.statement);
+    const im = p.imageUrl ? images.get(p.imageUrl) : null;
+    if (im) {
+      const n = media.length + 1; media.push({ name: `word/media/anh${n}.png`, data: im.bytes }); rels.push(`<Relationship Id="rIdImg${n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/anh${n}.png"/>`);
+      body += wImage(`rIdImg${n}`, n, im.w, im.h);
+    }
+    const sIn = String(p.sample?.input ?? "").trim(); const sOut = String(p.sample?.output ?? "").trim();
+    if ((sIn && sIn !== "—") || (sOut && sOut !== "—")) {
+      body += wPara(wRuns([{ t: "Ví dụ" }], { b: true }), { before: 100, keep: true });
+      const cell = (t, bold) => wPara(wRuns([{ t, code: !bold, b: bold }]), { after: 20 });
+      body += wTable([[cell("Input", true), cell("Output", true)], [cell(sIn, false), cell(sOut, false)]], [4650, 4650]);
+    }
+  });
+  const sect = '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1247" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>';
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body>${body}${sect}</w:body></w:document>`;
+  const stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:eastAsia="Times New Roman"/><w:sz w:val="26"/><w:szCs w:val="26"/><w:lang w:val="vi-VN"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>';
+  const files = [
+    { name: "[Content_Types].xml", data: enc.encode('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>') },
+    { name: "_rels/.rels", data: enc.encode('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>') },
+    { name: "word/document.xml", data: enc.encode(documentXml) },
+    { name: "word/styles.xml", data: enc.encode(stylesXml) },
+    { name: "word/_rels/document.xml.rels", data: enc.encode(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdSt" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>${rels.join("")}</Relationships>`) },
+    ...media,
+  ];
+  return examZip(files);
+}
+
+async function downloadExamWord(exam, problems) {
+  const images = await examFetchImages(problems);
+  examTriggerDownload(examDocxBlob(exam, problems, images), `de-thi-${examSlug(exam.title)}.docx`);
+}
+
+function downloadExamPdf(exam, problems) {
+  return new Promise((resolve) => {
+    const html = examDocHtml(exam, problems, new Map(), false);
+    const frame = document.createElement("iframe");
+    frame.setAttribute("aria-hidden", "true");
+    frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none";
+    document.body.appendChild(frame);
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(html); doc.close();
+    let fired = false;
+    const go = () => {
+      if (fired) return; fired = true;
+      try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (e) { /* trình duyệt chặn in */ }
+      setTimeout(() => frame.remove(), 90000);
+      resolve();
+    };
+    const waiting = [...doc.images].filter((im) => !im.complete);
+    if (!waiting.length) setTimeout(go, 200);
+    else {
+      let left = waiting.length;
+      const one = () => { left -= 1; if (left <= 0) setTimeout(go, 200); };
+      waiting.forEach((im) => { im.onload = one; im.onerror = one; });
+      setTimeout(go, 8000);
+    }
+  });
+}
+
+// Nút "Tải đề": Word (.doc) hoặc PDF. getProblems: hàm tải danh sách bài nếu chưa có sẵn.
+function ExamDownloadMenu({ exam, problems, className = "nb-btn nb-btn-ghost", label = "Tải đề" }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const boxRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (e) => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("pointerdown", close); document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+  async function run(kind) {
+    setErr(""); setBusy(kind);
+    try {
+      const list = problems && problems.length ? problems : await dbExamGetProblems(exam.id);
+      if (!list.length) throw new Error("empty");
+      if (kind === "word") await downloadExamWord(exam, list); else await downloadExamPdf(exam, list);
+      setOpen(false);
+    } catch (e) {
+      setErr(e && e.message === "empty" ? "Đề này chưa có bài nào để tải." : "Không tải được đề lúc này. Hãy kiểm tra kết nối rồi thử lại.");
+    }
+    setBusy("");
+  }
+  return (
+    <span className="nb-xdl" ref={boxRef}>
+      <button type="button" className={className} onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open}><Download size={15} /> {label}</button>
+      {open && (
+        <div className="nb-xdl-menu" role="menu">
+          <button type="button" role="menuitem" onClick={() => run("word")} disabled={!!busy}>{busy === "word" ? <Loader2 size={15} className="nb-spin" /> : <FileText size={15} />}<div className="nb-xdl-txt"><b>Word (.docx)</b><small>Mở và chỉnh sửa trong Word</small></div></button>
+          <button type="button" role="menuitem" onClick={() => run("pdf")} disabled={!!busy}>{busy === "pdf" ? <Loader2 size={15} className="nb-spin" /> : <Download size={15} />}<div className="nb-xdl-txt"><b>PDF</b><small>Chọn “Lưu dưới dạng PDF” trong hộp thoại in</small></div></button>
+          {err && <div className="nb-xdl-err" role="alert">{err}</div>}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function ExamRunner({ exam, currentUser, isTeacher, onExit, students = [] }) {
   const [problems, setProblems] = useState(null);
   const [attempt, setAttempt] = useState(null);
@@ -4863,6 +5174,7 @@ function ExamRunner({ exam, currentUser, isTeacher, onExit, students = [] }) {
         : phase === "running" ? <div className={`nb-exam-timer ${remaining < 300000 ? "warning" : ""}`}><Clock size={15} /> {formatClock(remaining)}</div>
         : phase !== "none" ? <div className="nb-contest-timer" style={{ color: "var(--slate)" }}>{ATTEMPT_PHASE_LABEL[phase]}</div> : null}
       {problems && !isTeacher && phase !== "none" && <div className="nb-sub">{total}/{maxScore} điểm</div>}
+      {problems && (isTeacher || (!canWork && !!attempt)) && <ExamDownloadMenu exam={exam} problems={problems} />}
       {!isTeacher && attempt && phase === "running" && <div className={`nb-xm-viol-chip ${attempt.violations > 0 ? "has" : ""}`} title="Mỗi lần rời màn hình thi được ghi 1 lỗi. Lỗi này không trừ điểm."><Eye size={13} /> Rời màn hình: {attempt.violations || 0} lần</div>}
     </div>
   );
@@ -5282,6 +5594,7 @@ function ExamsView({ exams, examsMissing, isTeacher, currentUser, students, prac
                 {isTeacher && <>
                   {exam.status !== "draft" && <button className="nb-btn nb-btn-primary" onClick={() => setMode({ type: "results", examId: exam.id })}><TrendingUp size={15} /> Bài làm & kết quả</button>}
                   <button className="nb-btn nb-btn-ghost" onClick={() => setMode({ type: "run", examId: exam.id, preview: true })}><Eye size={15} /> Xem trước</button>
+                  <ExamDownloadMenu exam={exam} />
                   <button className="nb-btn nb-btn-ghost" onClick={() => setMode({ type: "builder", exam })}><Pencil size={15} /> Sửa</button>
                   <button className="nb-btn nb-btn-ghost" onClick={() => cloneExam(exam)}><RefreshCw size={15} /> Nhân bản</button>
                   {exam.status === "draft" && <button className="nb-btn nb-btn-ghost" onClick={() => changeStatus(exam, "upcoming")}><Send size={15} /> Công bố</button>}
@@ -8114,6 +8427,8 @@ function App() {
     if (data.assignments) setAssignments(data.assignments);
     if (data.cursor) subCursor.current = data.cursor;
   }
+  // Báo lỗi ghi dữ liệu kèm tên thao tác và mã lỗi, để biết chính xác cái gì không lưu được
+  const storeFail = (what) => (e) => setStorageError(`Không đồng bộ được ${what} lúc này — thay đổi có thể chưa được lưu cho cả lớp (mã lỗi: ${errDetail(e)}).`);
   const savingSubs = useRef(false);
   const subErr = useRef("");
   async function flushPendingSubs() {
@@ -8405,20 +8720,25 @@ function App() {
   function handleLessonProgress(topicId, progress) {
     if (!currentUser || isTeacher) return;
     setLessonProgress((prev) => ({ ...prev, [topicId]: progress }));
-    dbSetLessonProgress(currentUser.id, topicId, progress).catch(() => setStorageError(true));
+    (async () => {
+      for (const wait of [0, 3000, 9000]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        try { await dbSetLessonProgress(currentUser.id, topicId, progress); return; } catch (e) { if (wait === 9000) storeFail("tiến độ bài giảng")(e); }
+      }
+    })();
   }
 
   function addTopic(t) {
     setTopics((prev) => [...prev, t]);
-    dbAddTopic(t).catch(() => setStorageError(true));
+    dbAddTopic(t).catch(storeFail("bài giảng mới"));
   }
   function updateTopic(t) {
     setTopics((prev) => prev.map((item) => item.id === t.id ? t : item));
-    dbUpdateTopic(t).catch(() => setStorageError(true));
+    dbUpdateTopic(t).catch(storeFail("bài giảng"));
   }
   function removeTopic(id) {
     setTopics((prev) => prev.filter((item) => item.id !== id));
-    dbRemoveTopic(id).catch(() => setStorageError(true));
+    dbRemoveTopic(id).catch(storeFail("việc xóa bài giảng"));
   }
   async function retryPendingProblemWrites() {
     if (pendingProblemWrites.length === 0) return { saved: 0, failed: 0 };
@@ -8479,7 +8799,7 @@ function App() {
   }
   function removeProblem(id) {
     setProblems((prev) => prev.filter((item) => item.id !== id));
-    dbRemoveProblem(id).catch(() => setStorageError(true));
+    dbRemoveProblem(id).catch(storeFail("việc xóa bài tập"));
   }
   const refreshExams = useCallback(async () => {
     try {
@@ -8494,11 +8814,11 @@ function App() {
   );
   function addThread(t) {
     setDiscussions((prev) => [t, ...prev]);
-    dbAddThread(t).catch(() => setStorageError(true));
+    dbAddThread(t).catch(storeFail("chủ đề thảo luận"));
   }
   function addReply(threadId, reply) {
     setDiscussions((prev) => prev.map((d) => (d.id === threadId ? { ...d, replies: [...d.replies, reply] } : d)));
-    dbAddReply(threadId, reply).catch(() => setStorageError(true));
+    dbAddReply(threadId, reply).catch(storeFail("câu trả lời thảo luận"));
   }
   function addAssignments(pairs) {
     if (!isTeacher || pairs.length === 0) return;
@@ -8511,12 +8831,12 @@ function App() {
       }));
     if (newRows.length === 0) return;
     setAssignments((prev) => [...prev, ...newRows]);
-    dbAddAssignments(newRows).catch(() => setStorageError(true));
+    dbAddAssignments(newRows).catch(storeFail("bài được giao"));
   }
   function removeAssignment(id) {
     if (!isTeacher) return;
     setAssignments((prev) => prev.filter((a) => a.id !== id));
-    dbRemoveAssignment(id).catch(() => setStorageError(true));
+    dbRemoveAssignment(id).catch(storeFail("việc xóa bài giao"));
   }
   function resetPassword(id, newPassword) {
     if (!isTeacher) return;
@@ -8524,7 +8844,7 @@ function App() {
     if (!target || target.role === "admin" || (!isAdmin && target.role !== "student")) return;
     const hash = hashPassword(newPassword);
     setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, passwordHash: hash, passwordChanged: true, plainInitial: undefined } : a)));
-    dbUpdatePassword(id, hash).catch(() => setStorageError(true));
+    dbUpdatePassword(id, hash).catch(storeFail("mật khẩu"));
   }
   function addAccount({ name, username, password, role = "student" }) {
     if (!isTeacher) return;
@@ -8536,20 +8856,20 @@ function App() {
       className: normalizedRole === "student" ? "11 Tin" : null, streak: 0,
     };
     setAccounts((prev) => [...prev, acc]);
-    dbAddAccount(acc).catch(() => setStorageError(true));
+    dbAddAccount(acc).catch(storeFail("tài khoản"));
   }
   function removeAccount(id) {
     if (!isTeacher) return;
     const target = accounts.find((account) => account.id === id);
     if (!target || target.role === "admin" || (!isAdmin && target.role !== "student")) return;
     setAccounts((prev) => prev.filter((a) => a.id !== id));
-    dbRemoveAccount(id).catch(() => setStorageError(true));
+    dbRemoveAccount(id).catch(storeFail("việc xóa tài khoản"));
   }
   function selfChangePassword(newPassword) {
     if (!currentUser) return;
     const hash = hashPassword(newPassword);
     setAccounts((prev) => prev.map((a) => (a.id === currentUser.id ? { ...a, passwordHash: hash, passwordChanged: true, plainInitial: undefined } : a)));
-    dbUpdatePassword(currentUser.id, hash).catch(() => setStorageError(true));
+    dbUpdatePassword(currentUser.id, hash).catch(storeFail("mật khẩu"));
   }
 
   const navItems = (isTeacher ? [...BASE_NAV, ACCOUNTS_NAV] : BASE_NAV).map((item) =>
@@ -10955,6 +11275,15 @@ function App() {
         .nb-tc-vars { width: 100%; border-collapse: collapse; font: 13px 'JetBrains Mono', monospace; } .nb-tc-vars th { text-align: left; padding: 3px 8px 3px 0; color: #1b4fc4; font-weight: 700; width: 1%; white-space: nowrap; } .nb-tc-vars td { padding: 3px 6px; color: #102a43; word-break: break-all; } .nb-tc-vars tr.chg td { background: #fff3c7; border-radius: 6px; font-weight: 700; }
         .nb-tc-out { margin: 0; min-height: 40px; max-height: 180px; overflow: auto; font: 13px/1.5 'JetBrains Mono', monospace; white-space: pre-wrap; word-break: break-word; color: #102a43; }
         @media (max-width: 900px) { .nb-tc-sim-grid, .nb-tc-io, .nb-tc-cmp { grid-template-columns: minmax(0, 1fr); } }
+        /* ---- Tải đề thi (Word / PDF) ---- */
+        .nb-xdl { position: relative; display: inline-block; }
+        .nb-xdl-menu { position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; min-width: 270px; padding: 6px; background: #fff; border: 1px solid #dbe3ee; border-radius: 14px; box-shadow: 0 14px 34px rgba(16, 42, 67, .18); display: flex; flex-direction: column; gap: 2px; }
+        .nb-xdl-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; cursor: pointer; font: inherit; color: #102a43; }
+        .nb-xdl-menu button:hover:not(:disabled) { background: #eef4ff; } .nb-xdl-menu button:disabled { opacity: .6; cursor: default; }
+        .nb-xdl-menu button .nb-xdl-txt { display: flex; flex-direction: column; gap: 1px; font-family: inherit; text-transform: none; letter-spacing: 0; } .nb-xdl-menu button b { font-size: 13.5px; } .nb-xdl-menu button small { font-size: 11.5px; color: #627d98; font-family: inherit; text-transform: none; letter-spacing: 0; }
+        .nb-practice-dl .nb-xdl-menu, .nb-modal-head .nb-xdl-menu { left: auto; right: 0; } .nb-modal-head .nb-xdl { margin-left: auto; margin-right: 8px; align-self: center; }
+        .nb-xdl-err { margin: 4px 6px 2px; padding: 7px 9px; border-radius: 8px; background: #fde3dc; color: #a2341a; font-size: 12px; }
+        @media (max-width: 640px) { .nb-xdl-menu { left: auto; right: 0; min-width: 240px; } }
         /* ---- Giải trí: giao diện nâng cấp ---- */
         .nb-tg-hero { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 26px 28px; margin-bottom: 20px; border-radius: 18px; color: #fff; background: radial-gradient(120% 140% at 0% 0%, #1b4fc4 0%, #0f2a52 45%, #0b1b33 100%); position: relative; overflow: hidden; }
         .nb-tg-hero::after { content: "</>"; position: absolute; right: 22px; bottom: -22px; font: 800 120px/1 'JetBrains Mono', monospace; color: rgba(255,255,255,.05); pointer-events: none; }
